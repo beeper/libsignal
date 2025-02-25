@@ -1,0 +1,149 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+    - '*'
+
+defaults:
+  run:
+    shell: 'bash'
+
+env:
+  RUSTFLAGS: '-Awarnings -Ctarget-feature=-crt-static --cfg aes_armv8 --cfg polyval_armv8 --cfg curve25519_dalek_bits="64"'
+  IPHONEOS_DEPLOYMENT_TARGET: 17.0
+
+jobs:
+  libsignal-ffi:
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+        - target: aarch64-apple-ios
+          runs-on: macos-latest
+        - target: aarch64-apple-ios-sim
+          runs-on: macos-latest
+        - target: x86_64-apple-ios
+          runs-on: macos-latest
+
+        - target: x86_64-apple-darwin
+          runs-on: macos-latest
+        - target: aarch64-apple-darwin
+          runs-on: macos-latest
+        - target: x86_64-unknown-linux-gnu
+          runs-on: ubuntu-latest
+        - target: aarch64-unknown-linux-gnu
+          runs-on: ubuntu-arm64
+        - target: x86_64-pc-windows-gnu
+          runs-on: windows-latest
+        # This is missing bash? https://github.com/actions/partner-runner-images/issues/55
+        #- target: aarch64-pc-windows-gnu
+        #  runs-on: windows-arm64
+
+        - target: aarch64-linux-android
+          android-prefix: aarch64-linux-android
+          android-env: aarch64_linux_android
+          runs-on: ubuntu-latest
+        - target: armv7-linux-androideabi
+          android-prefix: armv7a-linux-androideabi  # same as target, but has "a" after v7
+          android-env: armv7_linux_androideabi  # same as target, but with underscores
+          runs-on: ubuntu-latest
+        - target: i686-linux-android
+          android-prefix: i686-linux-android
+          android-env: i686_linux_android
+          runs-on: ubuntu-latest
+        - target: x86_64-linux-android
+          android-prefix: x86_64-linux-android
+          android-env: x86_64_linux_android
+          runs-on: ubuntu-latest
+    name: libsignal-ffi (${{ matrix.target }})
+
+    steps:
+    - name: Clone repository
+      uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - name: Install Protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up JDK 17
+      if: contains(matrix.target, 'android')
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        cache: 'gradle'
+
+    - name: Setup Android SDK
+      if: contains(matrix.target, 'android')
+      uses: android-actions/setup-android@v3
+      with:
+        packages: 'tools platform-tools ndk;26.1.10909125'
+
+    - name: Install winget for Windows
+      if: runner.os == 'Windows'
+      uses: Cyberboss/install-winget@v1
+
+    - name: Install NASM for Windows
+      if: runner.os == 'Windows'
+      run: |
+        winget install nasm --accept-package-agreements --accept-source-agreements --disable-interactivity --silent
+
+    - uses: maxim-lobanov/setup-xcode@v1
+      if: runner.os == 'macOS'
+      with:
+        xcode-version: 'latest-stable'
+
+    - name: build libsignal
+      run: |
+        if [[ "${{matrix.target}}" = *"android"* ]]; then
+          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125
+          export API_LEVEL=26
+          export HOST_PREFIX=linux-x86_64
+          export AR_${{ matrix.android-env }}=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$HOST_PREFIX/bin/llvm-ar
+          export CC_${{ matrix.android-env }}=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$HOST_PREFIX/bin/${{ matrix.android-prefix }}${API_LEVEL}-clang
+          declare -u ANDROID_ENV_UPPER=${{ matrix.android-env }}
+          export CARGO_TARGET_${ANDROID_ENV_UPPER}_LINKER=$CC_${{ matrix.android-env }}
+
+          # TODO should these be enabled for all platforms? They're copied from the old android build
+          export CLFAGS="-DOPENSSL_SMALL -flto=full"
+          export CARGO_PROFILE_RELEASE_LTO=fat
+          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+          export CARGO_PROFILE_RELEASE_DEBUG=1
+          export CARGO_PROFILE_RELEASE_OPT_LEVEL=1
+        fi
+        if [ "${{ runner.os }}" = "Windows" ]; then
+            rustup set default-host ${{ matrix.target }}
+        fi
+        rustup target add ${{ matrix.target }}
+        cargo build --locked --target ${{ matrix.target }} -p libsignal-ffi --profile=release
+        mv target/${{ matrix.target }}/release/libsignal_ffi.a libsignal_ffi_${{ matrix.target }}.a
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libsignal_ffi_${{ matrix.target }}
+        path: libsignal_ffi_${{ matrix.target }}.a
+
+  release:
+    runs-on: ubuntu-latest
+    needs: libsignal-ffi
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+    - name: Clone repository
+      uses: actions/checkout@v4
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+    - name: Move artifacts to top level
+      run: mv libsignal_ffi_*/libsignal_ffi_*.a .
+    - name: Create release
+      uses: softprops/action-gh-release@v2
+      with:
+        body_path: RELEASE_NOTES.md
+        files: libsignal_ffi_*.a
