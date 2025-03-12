@@ -5,8 +5,6 @@
 
 use std::fmt;
 
-use libsignal_net::chat::ChatServiceError;
-use libsignal_net::svr3::Error as Svr3Error;
 use signal_media::sanitize::mp4::{Error as Mp4Error, ParseError as Mp4ParseError};
 use signal_media::sanitize::webp::{Error as WebpError, ParseError as WebpParseError};
 
@@ -143,10 +141,6 @@ pub trait SignalNodeError: Sized + fmt::Display {
 const INVALID_MEDIA_INPUT: &str = "InvalidMediaInput";
 const IO_ERROR: &str = "IoError";
 const RATE_LIMITED_ERROR: &str = "RateLimitedError";
-const SVR3_DATA_MISSING: &str = "SvrDataMissing";
-const SVR3_ROTATION_MACHINE_STEPS: &str = "SvrRotationMachineTooManySteps";
-const SVR3_REQUEST_FAILED: &str = "SvrRequestFailed";
-const SVR3_RESTORE_FAILED: &str = "SvrRestoreFailed";
 const UNSUPPORTED_MEDIA_INPUT: &str = "UnsupportedMediaInput";
 
 impl SignalNodeError for SignalProtocolError {
@@ -404,7 +398,7 @@ impl SignalNodeError for std::io::Error {
     }
 }
 
-impl SignalNodeError for libsignal_net::chat::ChatServiceError {
+impl SignalNodeError for libsignal_net::chat::ConnectError {
     fn into_throwable<'a, C: Context<'a>>(
         self,
         cx: &mut C,
@@ -412,21 +406,15 @@ impl SignalNodeError for libsignal_net::chat::ChatServiceError {
         operation_name: &str,
     ) -> Handle<'a, JsError> {
         let (name, properties) = match self {
-            ChatServiceError::Disconnected => (Some("ChatServiceInactive"), None),
-            ChatServiceError::AppExpired => (Some("AppExpired"), None),
-            ChatServiceError::DeviceDeregistered => (Some("DeviceDelinked"), None),
-            ChatServiceError::RetryLater {
+            Self::AppExpired => (Some("AppExpired"), None),
+            Self::DeviceDeregistered => (Some("DeviceDelinked"), None),
+            Self::RetryLater {
                 retry_after_seconds,
             } => rate_limited_error(retry_after_seconds),
-            ChatServiceError::WebSocket(_)
-            | ChatServiceError::UnexpectedFrameReceived
-            | ChatServiceError::ServerRequestMissingId
-            | ChatServiceError::IncomingDataInvalid
-            | ChatServiceError::RequestHasInvalidHeader
-            | ChatServiceError::RequestSendTimedOut
-            | ChatServiceError::TimeoutEstablishingConnection
-            | ChatServiceError::AllConnectionRoutesFailed
-            | ChatServiceError::InvalidConnectionConfiguration =>
+            Self::WebSocket(_)
+            | Self::Timeout
+            | Self::AllAttemptsFailed
+            | Self::InvalidConnectionConfiguration =>
             // TODO: Distinguish retryable errors from proper failures?
             {
                 (Some(IO_ERROR), None)
@@ -440,6 +428,36 @@ impl SignalNodeError for libsignal_net::chat::ChatServiceError {
             &message,
             operation_name,
             optional_extra_properties(properties),
+        )
+    }
+}
+
+impl SignalNodeError for libsignal_net::chat::SendError {
+    fn into_throwable<'a, C: Context<'a>>(
+        self,
+        cx: &mut C,
+        module: Handle<'a, JsObject>,
+        operation_name: &str,
+    ) -> Handle<'a, JsError> {
+        let name = match self {
+            Self::Disconnected => Some("ChatServiceInactive"),
+            Self::WebSocket(_)
+            | Self::IncomingDataInvalid
+            | Self::RequestHasInvalidHeader
+            | Self::RequestTimedOut =>
+            // TODO: Distinguish retryable errors from proper failures?
+            {
+                Some(IO_ERROR)
+            }
+        };
+        let message = self.to_string();
+        new_js_error(
+            cx,
+            module,
+            name,
+            &message,
+            operation_name,
+            no_extra_properties,
         )
     }
 }
@@ -514,47 +532,6 @@ fn rate_limited_error<'a, C: Context<'a>>(
             Ok(props.upcast())
         }),
     )
-}
-
-impl SignalNodeError for libsignal_net::svr3::Error {
-    fn into_throwable<'a, C: Context<'a>>(
-        self,
-        cx: &mut C,
-        module: Handle<'a, JsObject>,
-        operation_name: &str,
-    ) -> Handle<'a, JsError> {
-        let (name, make_props) = match self {
-            Svr3Error::Service(_) | Svr3Error::ConnectionTimedOut | Svr3Error::Connect(_) => {
-                (Some(IO_ERROR), None)
-            }
-            Svr3Error::AttestationError(inner) => {
-                return inner.into_throwable(cx, module, operation_name);
-            }
-            Svr3Error::RequestFailed(_) => (Some(SVR3_REQUEST_FAILED), None),
-            Svr3Error::RestoreFailed(tries_remaining) => (
-                Some(SVR3_RESTORE_FAILED),
-                Some(move |cx: &mut C| {
-                    let props = cx.empty_object();
-                    let tries_remaining = tries_remaining.convert_into(cx)?;
-                    props.set(cx, "triesRemaining", tries_remaining)?;
-                    Ok(props.upcast())
-                }),
-            ),
-            Svr3Error::DataMissing => (Some(SVR3_DATA_MISSING), None),
-            Svr3Error::Protocol(_) => (None, None),
-            Svr3Error::RotationMachineTooManySteps => (Some(SVR3_ROTATION_MACHINE_STEPS), None),
-        };
-
-        let message = self.to_string();
-        new_js_error(
-            cx,
-            module,
-            name,
-            &message,
-            operation_name,
-            optional_extra_properties(make_props),
-        )
-    }
 }
 
 impl SignalNodeError for CancellationError {

@@ -49,18 +49,15 @@ describe('Net class', () => {
 });
 
 describe('chat service api', () => {
-  it('converts errors to native', () => {
+  it('converts connect errors to native', () => {
     const cases: Array<[string, ErrorCode | object]> = [
       ['AppExpired', ErrorCode.AppExpired],
       ['DeviceDeregistered', ErrorCode.DeviceDelinked],
-      ['Disconnected', ErrorCode.ChatServiceInactive],
 
-      ['WebSocket', ErrorCode.IoError],
-      ['UnexpectedFrameReceived', ErrorCode.IoError],
-      ['ServerRequestMissingId', ErrorCode.IoError],
-      ['IncomingDataInvalid', ErrorCode.IoError],
-      ['RequestSendTimedOut', ErrorCode.IoError],
-      ['TimeoutEstablishingConnection', ErrorCode.IoError],
+      ['WebSocketConnectionFailed', ErrorCode.IoError],
+      ['Timeout', ErrorCode.IoError],
+      ['AllAttemptsFailed', ErrorCode.IoError],
+      ['InvalidConnectionConfiguration', ErrorCode.IoError],
       [
         'RetryAfter42Seconds',
         {
@@ -68,12 +65,30 @@ describe('chat service api', () => {
           retryAfterSecs: 42,
         },
       ],
+    ];
+    cases.forEach((testCase) => {
+      const [name, expectation] = testCase;
+      expect(() => Native.TESTING_ChatConnectErrorConvert(name))
+        .throws(LibSignalErrorBase)
+        .to.include(
+          expectation instanceof Object ? expectation : { code: expectation }
+        );
+    });
+  });
+
+  it('converts send errors to native', () => {
+    const cases: Array<[string, ErrorCode | object]> = [
+      ['Disconnected', ErrorCode.ChatServiceInactive],
+
+      ['WebSocketConnectionReset', ErrorCode.IoError],
+      ['IncomingDataInvalid', ErrorCode.IoError],
+      ['RequestTimedOut', ErrorCode.IoError],
 
       ['RequestHasInvalidHeader', ErrorCode.IoError],
     ];
     cases.forEach((testCase) => {
       const [name, expectation] = testCase;
-      expect(() => Native.TESTING_ChatServiceErrorConvert(name))
+      expect(() => Native.TESTING_ChatSendErrorConvert(name))
         .throws(LibSignalErrorBase)
         .to.include(
           expectation instanceof Object ? expectation : { code: expectation }
@@ -315,6 +330,35 @@ describe('chat service api', () => {
       await connectChatUnauthenticated(net);
     }).timeout(10000);
 
+    it('can preconnect and then connect authenticated (partly)', async function () {
+      if (!process.env.LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS) {
+        this.skip();
+      }
+      const net = new Net({
+        env: Environment.Production,
+        userAgent: userAgent,
+      });
+      await net.preconnectChat();
+
+      try {
+        // While we get no direct feedback here whether the preconnect was used,
+        // you can check the log lines for: "[authenticated] using preconnection".
+        // We have to use an authenticated connection because that's the only one that's allowed to
+        // use preconnects.
+        await net.connectAuthenticatedChat('', '', true, {
+          onIncomingMessage: sinon.stub(),
+          onConnectionInterrupted: sinon.stub(),
+          onQueueEmpty: sinon.stub(),
+        });
+        assert.fail('should not have managed to authenticate');
+      } catch (e) {
+        assert.instanceOf(e, LibSignalErrorBase);
+        assert.include(e, {
+          code: ErrorCode.DeviceDelinked,
+        });
+      }
+    }).timeout(10000);
+
     it('can connect through a proxy server', async function () {
       const PROXY_SERVER = process.env.LIBSIGNAL_TESTING_PROXY_SERVER;
       if (!PROXY_SERVER) {
@@ -421,12 +465,25 @@ describe('chat service api', () => {
       const listener = {
         onIncomingMessage: sinon.stub(),
         onQueueEmpty: sinon.stub(),
+        onReceivedAlerts: sinon.stub(),
         onConnectionInterrupted: sinon.stub(),
       };
+
+      // We have to set this up ahead of time because the callback is scheduled as part of the
+      // connect action.
+      const receivedAlerts = new CompletablePromise();
+      listener.onReceivedAlerts.callsFake(receivedAlerts.resolve);
+
       const tokio = new TokioAsyncContext(Native.TokioAsyncContext_new());
       const [_chat, fakeRemote] = AuthenticatedChatConnection.fakeConnect(
         tokio,
-        listener
+        listener,
+        ['UPPERcase', 'lowercase']
+      );
+
+      await receivedAlerts.done();
+      expect(listener.onReceivedAlerts).to.have.been.calledOnceWith(
+        sinon.match.array.deepEquals(['UPPERcase', 'lowercase'])
       );
 
       // a helper function to check that the message has been passed to the listener
@@ -475,6 +532,9 @@ describe('chat service api', () => {
         onQueueEmpty(): void {
           recordCall('_queue_empty');
         },
+        onReceivedAlerts(alerts: string[]): void {
+          recordCall('_received_alerts', alerts);
+        },
         onConnectionInterrupted(cause: object | null): void {
           recordCall('_connection_interrupted', cause);
         },
@@ -499,6 +559,10 @@ describe('chat service api', () => {
       ];
       const callsReceived: [string, (object | null)[]][] = [];
       const callsExpected: [string, ((value: object | null) => void)[]][] = [
+        [
+          '_received_alerts',
+          [(value: object | null) => expect(value).deep.equals([])],
+        ],
         ['_incoming_message', []],
         ['_queue_empty', []],
         ['_incoming_message', []],
@@ -550,6 +614,9 @@ describe('chat service api', () => {
         onQueueEmpty(): void {
           fail('unexpected call');
         },
+        onReceivedAlerts(_alerts: string[]): void {
+          fail('unexpected call');
+        },
         onConnectionInterrupted(cause: object | null): void {
           connectionInterruptedReasons.push(cause);
           completable.complete();
@@ -571,6 +638,7 @@ describe('chat service api', () => {
     const [chat, fakeRemote] = AuthenticatedChatConnection.fakeConnect(tokio, {
       onIncomingMessage: () => {},
       onQueueEmpty: () => {},
+      onReceivedAlerts() {},
       onConnectionInterrupted: () => {},
     });
 

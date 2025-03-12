@@ -172,6 +172,7 @@ public final class Native {
   public static native CompletableFuture<Long> AuthenticatedChatConnection_connect(long asyncRuntime, long connectionManager, String username, String password, boolean receiveStories);
   public static native CompletableFuture AuthenticatedChatConnection_disconnect(long asyncRuntime, long chat);
   public static native void AuthenticatedChatConnection_init_listener(long chat, BridgeChatListener listener);
+  public static native CompletableFuture<Void> AuthenticatedChatConnection_preconnect(long asyncRuntime, long connectionManager);
   public static native CompletableFuture<Object> AuthenticatedChatConnection_send(long asyncRuntime, long chat, long httpRequest, int timeoutMillis);
 
   public static native void BackupAuthCredentialPresentation_CheckValidContents(byte[] presentationBytes) throws Exception;
@@ -615,6 +616,7 @@ public final class Native {
   public static native byte[] ServerPublicParams_CreateReceiptCredentialRequestContextDeterministic(long serverPublicParams, byte[] randomness, byte[] receiptSerial);
   public static native long ServerPublicParams_Deserialize(byte[] buffer) throws Exception;
   public static native void ServerPublicParams_Destroy(long handle);
+  public static native byte[] ServerPublicParams_GetEndorsementPublicKey(long params);
   public static native byte[] ServerPublicParams_ReceiveAuthCredentialWithPniAsServiceId(long params, byte[] aci, byte[] pni, long redemptionTime, byte[] authCredentialWithPniResponseBytes) throws Exception;
   public static native byte[] ServerPublicParams_ReceiveExpiringProfileKeyCredential(long serverPublicParams, byte[] requestContext, byte[] response, long currentTimeInSeconds) throws Exception;
   public static native byte[] ServerPublicParams_ReceiveReceiptCredential(long serverPublicParams, byte[] requestContext, byte[] response) throws Exception;

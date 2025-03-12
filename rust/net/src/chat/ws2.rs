@@ -25,9 +25,8 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
 
-use crate::chat::{
-    ChatMessageType, ChatServiceError, MessageProto, Request, RequestProto, Response, ResponseProto,
-};
+use crate::chat::{ChatMessageType, MessageProto, Request, RequestProto, Response, ResponseProto};
+use crate::env::ALERT_HEADER_NAME;
 use crate::infra::ws::TextOrBinary;
 use crate::infra::ws2::{MessageEvent, NextEventError, TungsteniteSendError};
 
@@ -72,6 +71,12 @@ pub struct Config {
 
 #[derive(Debug)]
 pub enum ListenerEvent {
+    /// Zero or more alerts were received from the server.
+    ///
+    /// These are more lightweight than the full requests of [`Self::ReceivedMessage`].
+    /// They're also not stateful, so "zero alerts" means "clear any previous alerts".
+    ReceivedAlerts(Vec<String>),
+
     /// A request was received from the server.
     ///
     /// The accompanying [`Responder`] can be used to send a response for the
@@ -149,9 +154,10 @@ impl Chat {
     pub fn new<T>(
         tokio_runtime: tokio::runtime::Handle,
         transport: T,
+        connect_response_headers: http::HeaderMap,
         config: Config,
         log_tag: Arc<str>,
-        listener: EventListener,
+        mut listener: EventListener,
     ) -> Self
     where
         T: WebSocketStreamLike + Send + 'static,
@@ -161,6 +167,8 @@ impl Chat {
             local_idle_timeout,
             remote_idle_timeout,
         } = config;
+
+        Self::report_alerts(connect_response_headers, &mut listener);
 
         // Enable access to tokio types like Sleep, but only for the duration of this call.
         let _enable_tokio_types = tokio_runtime.enter();
@@ -178,6 +186,21 @@ impl Chat {
             listener,
             tokio_runtime,
         )
+    }
+
+    fn report_alerts(connect_response_headers: http::HeaderMap, listener: &mut EventListener) {
+        let alerts = connect_response_headers
+            .get_all(ALERT_HEADER_NAME)
+            .iter()
+            .flat_map(|value| {
+                value
+                    .to_str()
+                    .unwrap_or("[non-ASCII alert]")
+                    .split_terminator(',')
+                    .map(|individual_value| individual_value.trim_ascii().to_owned())
+            })
+            .collect_vec();
+        listener(ListenerEvent::ReceivedAlerts(alerts))
     }
 
     /// Sends a request to the server and waits for the response.
@@ -1124,9 +1147,9 @@ impl From<&TungsteniteSendError> for SendError {
     }
 }
 
-impl From<TaskExitError> for ChatServiceError {
+impl From<TaskExitError> for crate::chat::SendError {
     fn from(value: TaskExitError) -> Self {
-        ChatServiceError::WebSocket(match value {
+        crate::chat::SendError::WebSocket(match value {
             TaskExitError::WebsocketError(err) => match err {
                 NextEventError::PingFailed(tungstenite_error)
                 | NextEventError::CloseFailed(tungstenite_error) => tungstenite_error.into(),
@@ -1154,26 +1177,26 @@ impl From<TaskExitError> for ChatServiceError {
     }
 }
 
-impl From<SendError> for ChatServiceError {
+impl From<SendError> for super::SendError {
     fn from(value: SendError) -> Self {
         match value {
-            SendError::Disconnected { .. } => ChatServiceError::Disconnected,
+            SendError::Disconnected { .. } => Self::Disconnected,
             SendError::Io(error_kind) => {
-                ChatServiceError::WebSocket(WebSocketServiceError::Io(error_kind.into()))
+                Self::WebSocket(WebSocketServiceError::Io(error_kind.into()))
             }
             SendError::MessageTooLarge { size, max_size } => {
-                ChatServiceError::WebSocket(WebSocketServiceError::Capacity(
+                Self::WebSocket(WebSocketServiceError::Capacity(
                     libsignal_net_infra::ws::error::SpaceError::Capacity(
                         tungstenite::error::CapacityError::MessageTooLong { size, max_size },
                     ),
                 ))
             }
             SendError::Protocol(protocol_error) => {
-                ChatServiceError::WebSocket(WebSocketServiceError::Protocol(protocol_error.into()))
+                Self::WebSocket(WebSocketServiceError::Protocol(protocol_error.into()))
             }
-            SendError::InvalidResponse => ChatServiceError::IncomingDataInvalid,
+            SendError::InvalidResponse => Self::IncomingDataInvalid,
             SendError::InvalidRequest(InvalidRequestError::InvalidHeader) => {
-                ChatServiceError::RequestHasInvalidHeader
+                Self::RequestHasInvalidHeader
             }
         }
     }
@@ -1188,6 +1211,7 @@ mod test {
     use http::HeaderMap;
     use test_case::test_case;
     use tokio::select;
+    use tokio::sync::mpsc::error::TryRecvError;
 
     use super::*;
 
@@ -2003,5 +2027,44 @@ mod test {
 
         assert_eq!(listener_rx.recv().await, Some(true));
         assert_matches!(listener_rx.recv().await, None);
+    }
+
+    #[test]
+    fn reports_alerts() {
+        let (listener_tx, mut listener_rx) = mpsc::unbounded_channel();
+        let mut listener_tx: EventListener =
+            Box::new(move |evt| listener_tx.send(evt).expect("can send"));
+
+        Chat::report_alerts(http::HeaderMap::default(), &mut listener_tx);
+        assert_matches!(
+            listener_rx.try_recv().expect("present"),
+            ListenerEvent::ReceivedAlerts(alerts) if alerts.is_empty()
+        );
+        assert_matches!(listener_rx.try_recv(), Err(TryRecvError::Empty));
+
+        Chat::report_alerts(
+            http::HeaderMap::from_iter(
+                [
+                    ("unrelated", "other"),
+                    (ALERT_HEADER_NAME, "first"),
+                    ("yet-another", "something"),
+                    (ALERT_HEADER_NAME, "second,third, fourth"),
+                    ("last-one", "x"),
+                ]
+                .map(|(name, val)| {
+                    (
+                        http::HeaderName::from_static(name),
+                        http::HeaderValue::from_static(val),
+                    )
+                }),
+            ),
+            &mut listener_tx,
+        );
+
+        assert_matches!(
+            listener_rx.try_recv().expect("present"),
+            ListenerEvent::ReceivedAlerts(alerts) if alerts == ["first", "second", "third", "fourth"]
+        );
+        assert_matches!(listener_rx.try_recv(), Err(TryRecvError::Empty));
     }
 }

@@ -77,7 +77,11 @@ impl std::fmt::Display for IpType {
 
 /// Whether or not to enable domain fronting.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-pub struct EnableDomainFronting(pub bool);
+pub enum EnableDomainFronting {
+    No,
+    OneDomainPerProxy,
+    AllDomains,
+}
 
 /// A collection of commonly used decorators for HTTP requests.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -399,7 +403,7 @@ pub fn extract_retry_after_seconds(headers: &http::header::HeaderMap) -> Option<
 pub mod testutil {
     use std::fmt::Debug;
     use std::io;
-    use std::io::{Error as IoError, ErrorKind as IoErrorKind};
+    use std::io::Error as IoError;
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
@@ -610,30 +614,31 @@ pub mod testutil {
         type Error = E;
 
         fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            self.get_mut().tx.poll_ready_unpin(cx).map_err(|_| {
-                IoError::new(IoErrorKind::Other, "poll_reserve for send failed").into()
-            })
+            self.get_mut()
+                .tx
+                .poll_ready_unpin(cx)
+                .map_err(|_| IoError::other("poll_reserve for send failed").into())
         }
 
         fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
             self.get_mut()
                 .tx
                 .start_send_unpin(Ok(item))
-                .map_err(|_| IoError::new(IoErrorKind::Other, "send failed").into())
+                .map_err(|_| IoError::other("send failed").into())
         }
 
         fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.get_mut()
                 .tx
                 .poll_flush_unpin(cx)
-                .map_err(|_| IoError::new(IoErrorKind::Other, "flush failed").into())
+                .map_err(|_| IoError::other("flush failed").into())
         }
 
         fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.get_mut()
                 .tx
                 .poll_close_unpin(cx)
-                .map_err(|_| IoError::new(IoErrorKind::Other, "close failed").into())
+                .map_err(|_| IoError::other("close failed").into())
         }
     }
 }
@@ -662,7 +667,7 @@ pub(crate) mod test {
 
         assert_eq!(
             ServiceConnectionInfo {
-                address: Host::Ip(ip_addr!("1.2.3.4")),
+                address: Host::Ip(ip_addr!("192.0.2.4")),
                 ..connection_info
             }
             .description(),

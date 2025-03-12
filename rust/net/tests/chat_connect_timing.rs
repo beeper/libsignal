@@ -8,9 +8,9 @@ use std::future::Future;
 
 use assert_matches::assert_matches;
 use async_trait::async_trait;
-use futures_util::TryFutureExt as _;
+use futures_util::{StreamExt as _, TryFutureExt as _};
 use itertools::Itertools as _;
-use libsignal_net::chat::ChatServiceError;
+use libsignal_net::chat;
 use libsignal_net::env::STAGING;
 use libsignal_net::infra::errors::TransportConnectError;
 use libsignal_net_infra::dns::dns_lookup::{DnsLookup, DnsLookupRequest};
@@ -46,10 +46,7 @@ async fn all_routes_connect_hangs_forever(expected_duration: Duration) {
     let (elapsed, outcome) = timed(deps.connect_chat().map_ok(|_| ())).await;
 
     assert_eq!(elapsed, expected_duration);
-    assert_matches!(
-        outcome,
-        Err(ChatServiceError::TimeoutEstablishingConnection)
-    );
+    assert_matches!(outcome, Err(chat::ConnectError::Timeout));
 }
 
 #[test_case(Duration::from_millis(500))]
@@ -103,16 +100,22 @@ async fn transport_connects_but_websocket_never_responds(expected_duration: Dura
     deps.transport_connector
         .set_behaviors(allow_all_routes(&chat_domain_config, deps.static_ip_map()));
 
-    // Don't do anything with the incoming transport streams, just let them
-    // accumulate in the unbounded stream.
-    let _ignore_incoming_streams = incoming_streams;
-
     let (elapsed, outcome) = timed(deps.connect_chat().map_ok(|_| ())).await;
 
+    // Now that the connect attempt is done, collect (and close) the incoming streams.
+    // (If we did this concurrently, the connection logic would move on to the next route.)
+    // Note that we have to guarantee there won't be any more connection attempts for collect()!
+    drop(deps);
+    let incoming_stream_hosts: Vec<_> =
+        incoming_streams.map(|(host, _stream)| host).collect().await;
+
     assert_eq!(elapsed, expected_duration);
-    assert_matches!(
-        outcome,
-        Err(ChatServiceError::TimeoutEstablishingConnection)
+    assert_matches!(outcome, Err(chat::ConnectError::Timeout));
+
+    assert_eq!(
+        &incoming_stream_hosts,
+        &[Host::Domain(chat_domain_config.connect.hostname.into())],
+        "should only have one websocket connection"
     );
 }
 
@@ -147,7 +150,7 @@ async fn connect_again_skips_timed_out_routes(
 }
 
 #[test_log::test(tokio::test(start_paused = true))]
-async fn runs_multiple_tls_handshakes_in_parallel() {
+async fn runs_one_tls_handshake_at_a_time() {
     let domain_config = STAGING.chat_domain_config;
     let (deps, incoming_streams) = FakeDeps::new(&domain_config);
 
@@ -178,8 +181,8 @@ async fn runs_multiple_tls_handshakes_in_parallel() {
         .recorded_events
         .lock()
         .unwrap()
-        .iter()
-        .map(|(event, when)| (event.clone(), when.duration_since(start)))
+        .drain(..)
+        .map(|(event, when)| (event, when.duration_since(start)))
         .collect_vec();
 
     const FIRST_DELAY: Duration = Duration::from_millis(500);
@@ -190,22 +193,65 @@ async fn runs_multiple_tls_handshakes_in_parallel() {
     assert_matches!(
         &*events,
         [
-            // There are 3 successful TCP connections made and 3 TLS handshakes
-            // attempted. The other connections are abandoned when the first TLS
-            // handshake completes, so we never see their End events.
+            // There are 3 successful TCP connections made but only one TLS
+            // handshake is attempted. The other connections are abandoned when
+            // the first TLS handshake completes, so we never see any TLS
+            // handshake events for them.
             ((TcpConnect(_), Start), Duration::ZERO),
             ((TcpConnect(_), End), Duration::ZERO),
             ((TlsHandshake(Host::Domain(first_sni)), Start), Duration::ZERO),
             ((TcpConnect(_), Start), FIRST_DELAY),
             ((TcpConnect(_), End), FIRST_DELAY),
-            ((TlsHandshake(_), Start), FIRST_DELAY),
             ((TcpConnect(_), Start), SECOND_DELAY),
             ((TcpConnect(_), End), SECOND_DELAY),
-            ((TlsHandshake(_), Start), SECOND_DELAY),
             ((TlsHandshake(_), End), TLS_HANDSHAKE_DELAY),
         ] => assert_eq!(&**first_sni, STAGING.chat_domain_config.connect.hostname)
     );
     assert_eq!(timing, Duration::from_secs(5));
+}
+
+#[test_log::test(tokio::test(start_paused = true))]
+async fn tcp_connects_but_tls_never_responds() {
+    let domain_config = STAGING.chat_domain_config;
+    let (deps, incoming_streams) = FakeDeps::new(&domain_config);
+
+    tokio::spawn(connect_websockets_on_incoming(incoming_streams));
+    deps.transport_connector.set_behaviors(
+        allow_all_routes(&domain_config, deps.static_ip_map()).map(|(target, behavior)| {
+            let new_behavior = match &target {
+                FakeTransportTarget::Tls { .. } => Behavior::DelayForever,
+                FakeTransportTarget::TcpThroughProxy { .. } | FakeTransportTarget::Tcp { .. } => {
+                    behavior
+                }
+            };
+            (target, new_behavior)
+        }),
+    );
+
+    let (timing, outcome) = timed(deps.connect_chat().map_ok(|_| ())).await;
+    assert_matches!(outcome, Err(chat::ConnectError::Timeout));
+    assert_eq!(timing, Duration::from_secs(60));
+
+    use TransportConnectEvent::*;
+    use TransportConnectEventStage::*;
+    let tls_events = deps
+        .transport_connector
+        .recorded_events
+        .lock()
+        .unwrap()
+        .drain(..)
+        .map(|(event, _when)| event)
+        .filter(|event| matches!(event, (TlsHandshake(..), _)))
+        .collect_vec();
+
+    assert_eq!(
+        &tls_events,
+        &[(
+            TlsHandshake(Host::Domain(domain_config.connect.hostname.into())),
+            Start
+        )],
+        "TLS handshake does not complete and no other handshakes start",
+    );
 }
 
 #[derive(Debug)]
@@ -269,7 +315,7 @@ async fn custom_dns_failure(lookup: impl DnsLookup + 'static, expected_duration:
     let (elapsed, outcome) = timed(deps.connect_chat().map_ok(|_| ())).await;
 
     assert_eq!(elapsed, expected_duration);
-    assert_matches!(outcome, Err(ChatServiceError::AllConnectionRoutesFailed));
+    assert_matches!(outcome, Err(chat::ConnectError::AllAttemptsFailed));
 }
 
 #[test_case(false, Duration::from_secs(60))]
@@ -298,9 +344,6 @@ async fn slow_dns(should_accept_connection: bool, expected_duration: Duration) {
     if should_accept_connection {
         outcome.expect("accepted")
     } else {
-        assert_matches!(
-            outcome,
-            Err(ChatServiceError::TimeoutEstablishingConnection)
-        );
+        assert_matches!(outcome, Err(chat::ConnectError::Timeout));
     }
 }

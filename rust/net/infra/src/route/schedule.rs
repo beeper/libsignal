@@ -19,7 +19,7 @@ use tokio::time::{Duration, Instant};
 
 use crate::dns::dns_utils::log_safe_domain;
 use crate::dns::DnsError;
-use crate::route::{ResolveHostnames, ResolvedRoute, Resolver};
+use crate::route::{ResolveHostnames, ResolvedRoute, Resolver, TransportRoute, UsesTransport};
 use crate::utils::binary_heap::{MinKeyValueQueue, Queue};
 use crate::utils::future::SomeOrPending;
 
@@ -27,6 +27,7 @@ use crate::utils::future::SomeOrPending;
 ///
 /// [`RouteResolver::resolve`] is the main entry point; this type exists mostly
 /// to provide some named state that is used as input to that function.
+#[derive(Clone)]
 pub struct RouteResolver {
     pub allow_ipv6: bool,
 }
@@ -71,6 +72,7 @@ pub struct Schedule<S, R, SP> {
 /// Record of recent connection outcomes.
 ///
 /// Implements [`RouteDelayPolicy`].
+#[derive(Clone)]
 pub struct ConnectionOutcomes<R> {
     params: ConnectionOutcomeParams,
     recent_failures: HashMap<R, (Instant, u8)>,
@@ -418,6 +420,18 @@ impl ConnectionOutcomeParams {
     }
 }
 
+/// A [`RouteDelayPolicy`] that acts on a route's [`TransportPart`], ignoring the rest of it.
+pub struct DelayBasedOnTransport<T>(pub T);
+
+impl<T, R: UsesTransport> RouteDelayPolicy<R> for DelayBasedOnTransport<T>
+where
+    T: RouteDelayPolicy<TransportRoute>,
+{
+    fn compute_delay(&self, route: &R, now: Instant) -> Duration {
+        self.0.compute_delay(route.transport_part(), now)
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct IndividualRouteKey {
     time: Instant,
@@ -456,6 +470,17 @@ const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(300);
 #[derive(Clone, Debug, derive_more::IntoIterator)]
 pub struct ResolvedRoutes<R> {
     routes: Vec<R>,
+}
+
+/// Produces a single `(ResolvedRoutes<R>, ResolveMeta)` pair.
+///
+/// Assumes that the provided routes came from the same pre-resolution source.
+pub(crate) fn as_resolved_group<R>(routes: Vec<R>) -> (ResolvedRoutes<R>, ResolveMeta) {
+    let routes = ResolvedRoutes { routes };
+    let meta = ResolveMeta {
+        original_group_index: 0,
+    };
+    (routes, meta)
 }
 
 type EagerResolutionResult<R> = Result<ResolvedRoutes<R>, (Arc<str>, DnsError)>;
@@ -644,8 +669,8 @@ mod test {
 
     use super::*;
     use crate::dns::lookup_result::LookupResult;
-    use crate::route::testutils::{FakeRoute, NoDelay};
-    use crate::route::UnresolvedHost;
+    use crate::route::testutils::FakeRoute;
+    use crate::route::{NoDelay, UnresolvedHost};
     use crate::DnsSource;
 
     impl<S, R, SP> Schedule<S, R, SP>
@@ -667,8 +692,8 @@ mod test {
         let name_resolver = HashMap::from([(
             "domain-name",
             LookupResult {
-                ipv4: vec![ip_addr!(v4, "1.2.3.4")],
-                ipv6: vec![ip_addr!(v6, "::1234")],
+                ipv4: vec![ip_addr!(v4, "192.0.2.1")],
+                ipv6: vec![ip_addr!(v6, "3fff::1234")],
                 source: DnsSource::Static,
             },
         )]);
@@ -689,8 +714,8 @@ mod test {
         assert_eq!(
             schedule,
             vec![
-                (FakeRoute(ip_addr!("::1234")), Duration::ZERO),
-                (FakeRoute(ip_addr!("1.2.3.4")), HAPPY_EYEBALLS_DELAY),
+                (FakeRoute(ip_addr!("3fff::1234")), Duration::ZERO),
+                (FakeRoute(ip_addr!("192.0.2.1")), HAPPY_EYEBALLS_DELAY),
             ]
         );
     }
@@ -703,16 +728,16 @@ mod test {
             (
                 "name-1",
                 LookupResult {
-                    ipv4: vec![ip_addr!(v4, "1.2.3.4")],
-                    ipv6: vec![ip_addr!(v6, "::1234")],
+                    ipv4: vec![ip_addr!(v4, "192.0.2.11")],
+                    ipv6: vec![ip_addr!(v6, "3fff::1234")],
                     source: DnsSource::Static,
                 },
             ),
             (
                 "name-2",
                 LookupResult {
-                    ipv4: vec![ip_addr!(v4, "5.6.7.8")],
-                    ipv6: vec![ip_addr!(v6, "::5678")],
+                    ipv4: vec![ip_addr!(v4, "192.0.2.22")],
+                    ipv6: vec![ip_addr!(v6, "3fff::5678")],
                     source: DnsSource::Static,
                 },
             ),
@@ -743,10 +768,10 @@ mod test {
         assert_eq!(
             HashSet::from_iter(schedule),
             HashSet::from([
-                (FakeRoute(ip_addr!("::1234")), Duration::ZERO),
-                (FakeRoute(ip_addr!("1.2.3.4")), HAPPY_EYEBALLS_DELAY),
-                (FakeRoute(ip_addr!("::5678")), Duration::ZERO),
-                (FakeRoute(ip_addr!("5.6.7.8")), HAPPY_EYEBALLS_DELAY),
+                (FakeRoute(ip_addr!("3fff::1234")), Duration::ZERO),
+                (FakeRoute(ip_addr!("192.0.2.11")), HAPPY_EYEBALLS_DELAY),
+                (FakeRoute(ip_addr!("3fff::5678")), Duration::ZERO),
+                (FakeRoute(ip_addr!("192.0.2.22")), HAPPY_EYEBALLS_DELAY),
             ])
         );
     }
@@ -1030,7 +1055,7 @@ mod test {
         resolver_stream_tx
             .send((
                 ResolvedRoutes {
-                    routes: vec![FakeRoute(ip_addr!("1.1.1.1"))],
+                    routes: vec![FakeRoute(ip_addr!("192.0.2.1"))],
                 },
                 ResolveMeta {
                     original_group_index: 0,
@@ -1050,8 +1075,8 @@ mod test {
 
         let delay_policy = NoDelay;
         let resolver_stream = futures_util::stream::iter((0..ROUTE_GROUP_COUNT).map(|i| {
-            let routes = (100..(100 + ADDRS_PER_ROUTE))
-                .map(|x| FakeRoute(IpAddr::V4(Ipv4Addr::new(i, 0, 0, x))))
+            let routes = (10..(10 + ADDRS_PER_ROUTE))
+                .map(|x| FakeRoute(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10 * i + x))))
                 .collect();
             (
                 ResolvedRoutes { routes },
@@ -1074,9 +1099,9 @@ mod test {
         assert_eq!(
             immediate_route_schedule,
             [
-                FakeRoute(ip_addr!("0.0.0.100")),
-                FakeRoute(ip_addr!("1.0.0.100")),
-                FakeRoute(ip_addr!("2.0.0.100")),
+                FakeRoute(ip_addr!("192.0.2.10")),
+                FakeRoute(ip_addr!("192.0.2.20")),
+                FakeRoute(ip_addr!("192.0.2.30")),
             ]
         );
 
@@ -1088,9 +1113,9 @@ mod test {
         assert_eq!(
             remaining_route_schedule,
             vec![
-                FakeRoute(ip_addr!("0.0.0.101")),
-                FakeRoute(ip_addr!("1.0.0.101")),
-                FakeRoute(ip_addr!("2.0.0.101")),
+                FakeRoute(ip_addr!("192.0.2.11")),
+                FakeRoute(ip_addr!("192.0.2.21")),
+                FakeRoute(ip_addr!("192.0.2.31")),
             ]
         );
     }

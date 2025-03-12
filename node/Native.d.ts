@@ -123,6 +123,7 @@ type ChatListener = {
     ack: ServerMessageAck
   ): void;
   _queue_empty(): void;
+  _received_alerts(alerts: string[]): void;
   _connection_interrupted(
     // A LibSignalError or null, but not naming the type to avoid circular import dependencies.
     reason: Error | null
@@ -167,6 +168,7 @@ export function AuthenticatedChatConnection_connect(asyncRuntime: Wrapper<TokioA
 export function AuthenticatedChatConnection_disconnect(asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<AuthenticatedChatConnection>): CancellablePromise<void>;
 export function AuthenticatedChatConnection_info(chat: Wrapper<AuthenticatedChatConnection>): ChatConnectionInfo;
 export function AuthenticatedChatConnection_init_listener(chat: Wrapper<AuthenticatedChatConnection>, listener: ChatListener): void;
+export function AuthenticatedChatConnection_preconnect(asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>): CancellablePromise<void>;
 export function AuthenticatedChatConnection_send(asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<AuthenticatedChatConnection>, httpRequest: Wrapper<HttpRequest>, timeoutMillis: number): CancellablePromise<ChatResponse>;
 export function BackupAuthCredentialPresentation_CheckValidContents(presentationBytes: Buffer): void;
 export function BackupAuthCredentialPresentation_GetBackupId(presentationBytes: Buffer): Buffer;
@@ -463,6 +465,7 @@ export function ServerPublicParams_CreateProfileKeyCredentialRequestContextDeter
 export function ServerPublicParams_CreateReceiptCredentialPresentationDeterministic(serverPublicParams: Wrapper<ServerPublicParams>, randomness: Buffer, receiptCredential: Serialized<ReceiptCredential>): Serialized<ReceiptCredentialPresentation>;
 export function ServerPublicParams_CreateReceiptCredentialRequestContextDeterministic(serverPublicParams: Wrapper<ServerPublicParams>, randomness: Buffer, receiptSerial: Buffer): Serialized<ReceiptCredentialRequestContext>;
 export function ServerPublicParams_Deserialize(buffer: Buffer): ServerPublicParams;
+export function ServerPublicParams_GetEndorsementPublicKey(params: Wrapper<ServerPublicParams>): Buffer;
 export function ServerPublicParams_ReceiveAuthCredentialWithPniAsServiceId(params: Wrapper<ServerPublicParams>, aci: Buffer, pni: Buffer, redemptionTime: Timestamp, authCredentialWithPniResponseBytes: Buffer): Buffer;
 export function ServerPublicParams_ReceiveExpiringProfileKeyCredential(serverPublicParams: Wrapper<ServerPublicParams>, requestContext: Serialized<ProfileKeyCredentialRequestContext>, response: Serialized<ExpiringProfileKeyCredentialResponse>, currentTimeInSeconds: Timestamp): Serialized<ExpiringProfileKeyCredential>;
 export function ServerPublicParams_ReceiveReceiptCredential(serverPublicParams: Wrapper<ServerPublicParams>, requestContext: Serialized<ReceiptCredentialRequestContext>, response: Serialized<ReceiptCredentialResponse>): Serialized<ReceiptCredential>;
@@ -517,21 +520,22 @@ export function SignedPreKeyRecord_New(id: number, timestamp: Timestamp, pubKey:
 export function SignedPreKeyRecord_Serialize(obj: Wrapper<SignedPreKeyRecord>): Buffer;
 export function TESTING_CdsiLookupErrorConvert(errorDescription: string): void;
 export function TESTING_CdsiLookupResponseConvert(asyncRuntime: Wrapper<TokioAsyncContext>): CancellablePromise<LookupResponse>;
+export function TESTING_ChatConnectErrorConvert(errorDescription: string): void;
 export function TESTING_ChatRequestGetBody(request: Wrapper<HttpRequest>): Buffer;
 export function TESTING_ChatRequestGetHeaderValue(request: Wrapper<HttpRequest>, headerName: string): string;
 export function TESTING_ChatRequestGetMethod(request: Wrapper<HttpRequest>): string;
 export function TESTING_ChatRequestGetPath(request: Wrapper<HttpRequest>): string;
 export function TESTING_ChatResponseConvert(bodyPresent: boolean): ChatResponse;
-export function TESTING_ChatServiceErrorConvert(errorDescription: string): void;
+export function TESTING_ChatSendErrorConvert(errorDescription: string): void;
 export function TESTING_ConnectionManager_isUsingProxy(manager: Wrapper<ConnectionManager>): number;
-export function TESTING_ConnectionManager_newLocalOverride(userAgent: string, chatPort: number, cdsiPort: number, svr2Port: number, svr3SgxPort: number, svr3NitroPort: number, svr3Tpm2SnpPort: number, rootCertificateDer: Buffer): ConnectionManager;
+export function TESTING_ConnectionManager_newLocalOverride(userAgent: string, chatPort: number, cdsiPort: number, svr2Port: number, rootCertificateDer: Buffer): ConnectionManager;
 export function TESTING_ErrorOnBorrowAsync(_input: null): Promise<void>;
 export function TESTING_ErrorOnBorrowIo(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _input: null): CancellablePromise<void>;
 export function TESTING_ErrorOnBorrowSync(_input: null): void;
 export function TESTING_ErrorOnReturnAsync(_needsCleanup: null): Promise<null>;
 export function TESTING_ErrorOnReturnIo(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _needsCleanup: null): CancellablePromise<null>;
 export function TESTING_ErrorOnReturnSync(_needsCleanup: null): null;
-export function TESTING_FakeChatConnection_Create(tokio: Wrapper<TokioAsyncContext>, listener: ChatListener): FakeChatConnection;
+export function TESTING_FakeChatConnection_Create(tokio: Wrapper<TokioAsyncContext>, listener: ChatListener, alertsJoinedByNewlines: string): FakeChatConnection;
 export function TESTING_FakeChatConnection_TakeAuthenticatedChat(chat: Wrapper<FakeChatConnection>): AuthenticatedChatConnection;
 export function TESTING_FakeChatConnection_TakeRemote(chat: Wrapper<FakeChatConnection>): FakeChatRemoteEnd;
 export function TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted(chat: Wrapper<FakeChatRemoteEnd>): void;

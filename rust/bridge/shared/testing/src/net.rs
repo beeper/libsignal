@@ -4,14 +4,12 @@
 //
 
 use std::num::NonZeroU16;
-use std::str::FromStr;
 
 use libsignal_bridge_macros::*;
 use libsignal_bridge_types::net::chat::ServerMessageAck;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
 use libsignal_core::E164;
 use libsignal_net::cdsi::{CdsiProtocolError, LookupError, LookupResponse, LookupResponseEntry};
-use libsignal_net::chat::ChatServiceError;
 use libsignal_net::infra::ws2::attested::AttestedProtocolError;
 use libsignal_protocol::{Aci, Pni};
 use nonzero_ext::nonzero;
@@ -76,13 +74,16 @@ macro_rules! make_error_testing_enum {
             }
         };
         impl TryFrom<String> for $name {
-            type Error = <Self as FromStr>::Err;
+            type Error = <Self as ::std::str::FromStr>::Err;
             fn try_from(value: String) -> Result<Self, Self::Error> {
-                FromStr::from_str(&value)
+                ::std::str::FromStr::from_str(&value)
             }
         }
     }
 }
+
+// Make accessible to child modules.
+use make_error_testing_enum;
 
 make_error_testing_enum! {
     enum TestingCdsiLookupError for LookupError {
@@ -139,60 +140,6 @@ fn TESTING_CdsiLookupErrorConvert(
     })
 }
 
-make_error_testing_enum! {
-    enum TestingChatServiceError for ChatServiceError {
-        WebSocket => WebSocket,
-        AppExpired => AppExpired,
-        DeviceDeregistered => DeviceDeregistered,
-        UnexpectedFrameReceived => UnexpectedFrameReceived,
-        ServerRequestMissingId => ServerRequestMissingId,
-        IncomingDataInvalid => IncomingDataInvalid,
-        RequestHasInvalidHeader => RequestHasInvalidHeader,
-        RequestSendTimedOut => RequestSendTimedOut,
-        TimeoutEstablishingConnection => TimeoutEstablishingConnection,
-        AllConnectionRoutesFailed => AllConnectionRoutesFailed,
-        InvalidConnectionConfiguration => InvalidConnectionConfiguration,
-        Disconnected => Disconnected,
-        RetryLater => RetryAfter42Seconds,
-    }
-}
-
-#[bridge_fn]
-fn TESTING_ChatServiceErrorConvert(
-    // The stringly-typed API makes the call sites more self-explanatory.
-    error_description: AsType<TestingChatServiceError, String>,
-) -> Result<(), ChatServiceError> {
-    Err(match error_description.into_inner() {
-        TestingChatServiceError::WebSocket => ChatServiceError::WebSocket(
-            libsignal_net::infra::ws::WebSocketServiceError::Other("testing"),
-        ),
-        TestingChatServiceError::AppExpired => ChatServiceError::AppExpired,
-        TestingChatServiceError::DeviceDeregistered => ChatServiceError::DeviceDeregistered,
-        TestingChatServiceError::UnexpectedFrameReceived => {
-            ChatServiceError::UnexpectedFrameReceived
-        }
-        TestingChatServiceError::ServerRequestMissingId => ChatServiceError::ServerRequestMissingId,
-        TestingChatServiceError::IncomingDataInvalid => ChatServiceError::IncomingDataInvalid,
-        TestingChatServiceError::RequestHasInvalidHeader => {
-            ChatServiceError::RequestHasInvalidHeader
-        }
-        TestingChatServiceError::RequestSendTimedOut => ChatServiceError::RequestSendTimedOut,
-        TestingChatServiceError::TimeoutEstablishingConnection => {
-            ChatServiceError::TimeoutEstablishingConnection
-        }
-        TestingChatServiceError::AllConnectionRoutesFailed => {
-            ChatServiceError::AllConnectionRoutesFailed
-        }
-        TestingChatServiceError::InvalidConnectionConfiguration => {
-            ChatServiceError::InvalidConnectionConfiguration
-        }
-        TestingChatServiceError::Disconnected => ChatServiceError::Disconnected,
-        TestingChatServiceError::RetryAfter42Seconds => ChatServiceError::RetryLater {
-            retry_after_seconds: 42,
-        },
-    })
-}
-
 #[bridge_fn(jni = false, ffi = false)]
 fn TESTING_ServerMessageAck_Create() -> ServerMessageAck {
     ServerMessageAck::new(Box::new(|_| Ok(())))
@@ -204,18 +151,12 @@ fn TESTING_ConnectionManager_newLocalOverride(
     chatPort: AsType<NonZeroU16, u16>,
     cdsiPort: AsType<NonZeroU16, u16>,
     svr2Port: AsType<NonZeroU16, u16>,
-    svr3SgxPort: AsType<NonZeroU16, u16>,
-    svr3NitroPort: AsType<NonZeroU16, u16>,
-    svr3Tpm2SnpPort: AsType<NonZeroU16, u16>,
     rootCertificateDer: &[u8],
 ) -> ConnectionManager {
     let ports = net_env::LocalhostEnvPortConfig {
         chat_port: chatPort.into_inner(),
         cdsi_port: cdsiPort.into_inner(),
         svr2_port: svr2Port.into_inner(),
-        svr3_sgx_port: svr3SgxPort.into_inner(),
-        svr3_nitro_port: svr3NitroPort.into_inner(),
-        svr3_tpm2_snp_port: svr3Tpm2SnpPort.into_inner(),
     };
 
     let env = net_env::localhost_test_env_with_ports(ports, rootCertificateDer);

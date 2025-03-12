@@ -48,7 +48,7 @@ fn common_headers() -> http::HeaderMap {
 #[ignore_extra_doc_attributes]
 pub enum Error {
     /// Chat request failed: {0}
-    ChatServiceError(#[from] chat::ChatServiceError),
+    ChatSendError(#[from] chat::SendError),
     /// Bad status code: {0}
     RequestFailed(http::StatusCode),
     /// Verification failed: {0}
@@ -416,7 +416,7 @@ pub trait UnauthenticatedChat {
         &self,
         request: chat::Request,
         timeout: Duration,
-    ) -> BoxFuture<'_, std::result::Result<chat::Response, chat::ChatServiceError>>;
+    ) -> BoxFuture<'_, std::result::Result<chat::Response, chat::SendError>>;
 }
 
 pub struct Config {
@@ -889,7 +889,7 @@ fn verify_single_search_response(
         SearchContext {
             last_tree_head,
             last_distinguished_tree_head,
-            data: monitoring_data.map(MonitoringData::from),
+            data: monitoring_data,
         },
         true,
         now,
@@ -1186,6 +1186,7 @@ mod test_support {
     use futures_util::FutureExt as _;
     use libsignal_keytrans::{DeploymentMode, PublicConfig, VerifyingKey, VrfPublicKey};
     use libsignal_net_infra::route::DirectOrProxyRoute;
+    use libsignal_net_infra::EnableDomainFronting;
 
     use super::*;
     use crate::chat::ChatConnection;
@@ -1208,11 +1209,11 @@ mod test_support {
 
         pub const ACI: Uuid = uuid::uuid!("90c979fd-eab4-4a08-b6da-69dedeab9b29");
         pub const ACI_IDENTITY_KEY_BYTES: &[u8] =
-            &hex!("05d0e797ec91a4bce0e88959c419e96eb4fdabbb3dc688965584c966dc24195609");
+            &hex!("05111f9464c1822c6a2405acf1c5a4366679dc3349fc8eb015c8d7260e3f771177");
         pub const USERNAME_HASH: &[u8] =
             &hex!("d237a4b83b463ca7da58d4a16bf6a3ba104506eb412b235eb603ea10f467c655");
         pub const PHONE_NUMBER: E164 = E164::new(nonzero!(18005550100u64));
-        pub const UNIDENTIFIED_ACCESS_KEY: &[u8] = &hex!("fdc7951d1507268daf1834b74d23b76c");
+        pub const UNIDENTIFIED_ACCESS_KEY: &[u8] = &hex!("c6f7c258c24d69538ea553b4a943c8d9");
 
         pub fn aci() -> Aci {
             Aci::from(ACI)
@@ -1260,16 +1261,18 @@ mod test_support {
             &self,
             request: chat::Request,
             timeout: Duration,
-        ) -> BoxFuture<'_, std::result::Result<chat::Response, chat::ChatServiceError>> {
+        ) -> BoxFuture<'_, std::result::Result<chat::Response, chat::SendError>> {
             self.0.send(request, timeout).boxed()
         }
     }
 
     pub(super) async fn make_chat() -> KtUnauthChatConnection {
         use crate::chat::test_support::simple_chat_connection;
-        let chat = simple_chat_connection(&env::STAGING, |route| {
-            matches!(route.inner.inner, DirectOrProxyRoute::Direct(_))
-        })
+        let chat = simple_chat_connection(
+            &env::STAGING,
+            EnableDomainFronting::OneDomainPerProxy,
+            |route| matches!(route.inner.inner, DirectOrProxyRoute::Direct(_)),
+        )
         .await
         .expect("can connect to chat");
         KtUnauthChatConnection(chat)

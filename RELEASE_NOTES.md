@@ -1,10 +1,13 @@
-v0.67.0
+v0.67.4
 
-- Net: expose old and new CDSI connect logic.
-- Net: support uppercase scheme for proxy URL.
-- Net: retire an old SVR2 enclave.
-- Net: expose synchronous API for sending ChatConnection response.
-- Net: improve the handling of Chat errors and the associated messages and error
-       codes. This is a breaking change for Swift: a request that times out now
-       produces a `SignalError.requestTimeoutError(_:)` instead of
-       `SignalError.connectionTimeoutError(_:)`.
+- Android and iOS: ChatConnectionListener has a new optional callback for server alerts.
+  (Already added for Node in v0.67.2.)
+
+- Net.preconnectChat will start the connection process for an authenticated chat connection
+  without needing a username and password ready.
+
+- Rust: Update some dependencies (including boring) to the lastest compatible versions.
+
+- Net: Harmonized WebSocket PING interval with the client keep-alive interval to conserve resources.
+
+- Completely remove SVR3 support
