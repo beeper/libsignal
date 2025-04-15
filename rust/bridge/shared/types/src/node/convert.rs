@@ -375,6 +375,77 @@ impl SimpleArgTypeInfo for Box<[u8]> {
     }
 }
 
+impl SimpleArgTypeInfo for Box<[String]> {
+    type ArgType = JsArray;
+
+    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+        let count = foreign.len(cx);
+        (0..count)
+            .map(|i| {
+                let next = foreign.get(cx, i)?;
+                String::convert_from(cx, next)
+            })
+            .collect()
+    }
+}
+
+impl SimpleArgTypeInfo for libsignal_net::registration::PushTokenType {
+    type ArgType = JsString;
+
+    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+        let s = foreign.value(cx);
+        s.parse()
+            .or_else(|_| cx.throw_type_error(format!("invalid push token type {s:?}")))
+    }
+}
+
+impl SimpleArgTypeInfo for libsignal_net::registration::CreateSession {
+    type ArgType = JsObject;
+
+    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+        let number = foreign.get::<JsString, _, _>(cx, "number")?.value(cx);
+        let push_token = foreign
+            .get_opt::<JsString, _, _>(cx, "push_token")?
+            .map(|s| s.value(cx));
+        let push_token_type = foreign
+            .get_opt(cx, "push_token_type")?
+            .map(|s| SimpleArgTypeInfo::convert_from(cx, s))
+            .transpose()?;
+        let mcc = foreign
+            .get_opt::<JsString, _, _>(cx, "mcc")?
+            .map(|s| s.value(cx));
+        let mnc = foreign
+            .get_opt::<JsString, _, _>(cx, "mnc")?
+            .map(|s| s.value(cx));
+        Ok(Self {
+            number,
+            push_token,
+            push_token_type,
+            mcc,
+            mnc,
+        })
+    }
+}
+
+impl SimpleArgTypeInfo for libsignal_net::registration::SignedPreKeyBody<Box<[u8]>> {
+    type ArgType = JsObject;
+    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+        let key_id = foreign.get(cx, "keyId")?;
+        let key_id = u32::convert_from(cx, key_id)?;
+
+        let public_key: Handle<'_, JsBuffer> = foreign.get(cx, "publicKey")?;
+        let public_key_bytes = public_key.as_slice(cx).into();
+
+        let signature: Handle<'_, JsBuffer> = foreign.get(cx, "signature")?;
+        let signature = signature.as_slice(cx).into();
+        Ok(Self {
+            key_id,
+            public_key: public_key_bytes,
+            signature,
+        })
+    }
+}
+
 /// Converts `null` to `None`, passing through all other values.
 impl<'storage, 'context: 'storage, T> ArgTypeInfo<'storage, 'context> for Option<T>
 where
@@ -687,6 +758,23 @@ impl<'a> AsyncArgTypeInfo<'a> for Box<dyn ChatListener> {
 
     fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
         stored.make_listener()
+    }
+}
+
+impl<'a> AsyncArgTypeInfo<'a> for Box<dyn crate::net::registration::ConnectChatBridge> {
+    type ArgType = JsObject;
+    type StoredType = Option<crate::node::chat::NodeConnectChatFactory>;
+
+    fn save_async_arg(
+        cx: &mut FunctionContext,
+        foreign: Handle<Self::ArgType>,
+    ) -> NeonResult<Self::StoredType> {
+        crate::node::chat::NodeConnectChatFactory::from_connection_manager_wrapper(cx, foreign)
+            .map(Some)
+    }
+
+    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
+        Box::new(stored.take().expect("only loaded once"))
     }
 }
 
@@ -1044,6 +1132,53 @@ impl<'a> ResultTypeInfo<'a> for libsignal_net::cdsi::LookupResponse {
         output.set(cx, "entries", map)?;
         output.set(cx, "debugPermitsUsed", debug_permits_used)?;
         Ok(output)
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::RequestedInformation {
+    type ResultType = JsString;
+    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
+        Ok(cx.string(match self {
+            Self::PushChallenge => "pushChallenge",
+            Self::Captcha => "captcha",
+        }))
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RequestedInformation]> {
+    type ResultType = JsArray;
+    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
+        make_array(cx, self)
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RegisterResponseBadge]> {
+    type ResultType = JsArray;
+    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
+        make_array(cx, self)
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::RegisterResponseBadge {
+    type ResultType = JsObject;
+    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
+        let Self {
+            id,
+            visible,
+            expiration,
+        } = self;
+        let obj = cx.empty_object();
+
+        let id = cx.string(id);
+        obj.set(cx, "id", id)?;
+
+        let visible = cx.boolean(visible);
+        obj.set(cx, "visible", visible)?;
+
+        let expiration_seconds = cx.number(expiration.as_secs_f64());
+        obj.set(cx, "expirationSeconds", expiration_seconds)?;
+
+        Ok(obj)
     }
 }
 

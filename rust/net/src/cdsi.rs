@@ -5,12 +5,10 @@
 
 use std::default::Default;
 
-use futures_util::TryFutureExt as _;
-use http::{HeaderName, StatusCode};
+use http::StatusCode;
 use libsignal_core::{Aci, Pni, E164};
-use libsignal_net_infra::connection_manager::ConnectionManager;
-use libsignal_net_infra::dns::DnsResolver;
-use libsignal_net_infra::errors::{LogSafeDisplay, TransportConnectError};
+use libsignal_net_infra::errors::{LogSafeDisplay, RetryLater, TransportConnectError};
+use libsignal_net_infra::extract_retry_later;
 use libsignal_net_infra::route::{
     RouteProvider, ThrottlingConnector, UnresolvedWebsocketServiceRoute,
 };
@@ -18,7 +16,6 @@ use libsignal_net_infra::ws::{NextOrClose, WebSocketConnectError, WebSocketServi
 use libsignal_net_infra::ws2::attested::{
     AttestedConnection, AttestedConnectionError, AttestedProtocolError,
 };
-use libsignal_net_infra::{extract_retry_after_seconds, TransportConnector};
 use prost::Message as _;
 use thiserror::Error;
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -26,8 +23,8 @@ use tungstenite::protocol::CloseFrame;
 use uuid::Uuid;
 
 use crate::auth::Auth;
-use crate::connect_state::{ConnectState, WebSocketTransportConnectorFactory};
-use crate::enclave::{Cdsi, EnclaveEndpointConnection, EndpointParams};
+use crate::connect_state::{ConnectionResources, WebSocketTransportConnectorFactory};
+use crate::enclave::{Cdsi, EndpointParams};
 use crate::proto::cds2::{ClientRequest, ClientResponse};
 use crate::ws::WebSocketServiceConnectError;
 
@@ -242,7 +239,7 @@ pub enum LookupError {
     /// invalid response received from the server
     InvalidResponse,
     /// retry later
-    RateLimited { retry_after_seconds: u32 },
+    RateLimited(#[from] RetryLater),
     /// request token was invalid
     InvalidToken,
     /// failed to parse the response from the server
@@ -289,12 +286,8 @@ impl From<crate::enclave::Error> for LookupError {
                     received_at: _,
                 } => {
                     if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                        if let Some(retry_after_seconds) =
-                            extract_retry_after_seconds(response.headers())
-                        {
-                            return Self::RateLimited {
-                                retry_after_seconds,
-                            };
+                        if let Some(retry_later) = extract_retry_later(response.headers()) {
+                            return Self::RateLimited(retry_later);
                         }
                     }
                     Self::WebSocket(WebSocketServiceError::Http(response))
@@ -329,57 +322,31 @@ struct RateLimitExceededResponse {
 pub struct ClientResponseCollector(CdsiConnection);
 
 impl CdsiConnection {
-    /// Connect to remote host and verify remote attestation.
-    pub async fn connect<C, T>(
-        endpoint: &EnclaveEndpointConnection<Cdsi, C>,
-        transport_connector: T,
-        auth: Auth,
-    ) -> Result<Self, LookupError>
-    where
-        C: ConnectionManager,
-        T: TransportConnector,
-    {
-        log::info!("connecting to CDSI endpoint");
-        let (connection, _info) = endpoint
-            .connect(auth, transport_connector, "cdsi".into())
-            .inspect_err(|e| {
-                log::warn!("CDSI connection failed: {e}");
-            })
-            .await?;
-
-        log::info!("successfully established attested connection to CDSI endpoint");
-        Ok(Self(connection))
-    }
-
     pub async fn connect_with(
-        connect: &tokio::sync::RwLock<ConnectState<impl WebSocketTransportConnectorFactory>>,
-        resolver: &DnsResolver,
+        connection_resources: ConnectionResources<'_, impl WebSocketTransportConnectorFactory>,
         route_provider: impl RouteProvider<Route = UnresolvedWebsocketServiceRoute>,
-        confirmation_header_name: Option<HeaderName>,
         ws_config: crate::infra::ws2::Config,
         params: &EndpointParams<'_, Cdsi>,
         auth: Auth,
     ) -> Result<Self, LookupError> {
-        let (connection, _route_info) = ConnectState::connect_attested_ws(
-            connect,
-            route_provider,
-            auth,
-            resolver,
-            confirmation_header_name,
-            (
-                ws_config,
-                // We don't want to race multiple websocket handshakes because when
-                // we take the first one, the others will be uncermoniously closed.
-                // That looks like unexpected behavior at the server end, and the
-                // wasted handshakes consume resources unnecessarily.  Instead,
-                // allow parallelism at the transport level but throttle the number
-                // of websocket handshakes that can complete.
-                ThrottlingConnector::new(crate::infra::ws::WithoutResponseHeaders::new(), 1),
-            ),
-            "cdsi".into(),
-            params,
-        )
-        .await?;
+        let (connection, _route_info) = connection_resources
+            .connect_attested_ws(
+                route_provider,
+                auth,
+                (
+                    ws_config,
+                    // We don't want to race multiple websocket handshakes because when
+                    // we take the first one, the others will be uncermoniously closed.
+                    // That looks like unexpected behavior at the server end, and the
+                    // wasted handshakes consume resources unnecessarily.  Instead,
+                    // allow parallelism at the transport level but throttle the number
+                    // of websocket handshakes that can complete.
+                    ThrottlingConnector::new(crate::infra::ws::WithoutResponseHeaders::new(), 1),
+                ),
+                "cdsi".into(),
+                params,
+            )
+            .await?;
         Ok(Self(connection))
     }
 
@@ -526,9 +493,9 @@ fn err_for_close(close: Option<CloseFrame<'_>>) -> LookupError {
                 log::warn!("failed to parse rate limit from reason");
                 return unexpected_close(close);
             };
-            LookupError::RateLimited {
+            LookupError::RateLimited(RetryLater {
                 retry_after_seconds,
-            }
+            })
         }
         CdsiCloseCode::ServerInternalError | CdsiCloseCode::ServerUnavailable => {
             LookupError::Server {
@@ -544,15 +511,19 @@ mod test {
     use std::time::Duration;
 
     use assert_matches::assert_matches;
-    use hex_literal::hex;
+    use const_str::hex;
     use itertools::Itertools as _;
-    use libsignal_net_infra::testutil::InMemoryWarpConnector;
-    use libsignal_net_infra::utils::ObservableEvent;
+    use libsignal_net_infra::dns::DnsResolver;
+    use libsignal_net_infra::route::testutils::ConnectFn;
+    use libsignal_net_infra::route::DirectOrProxyProvider;
+    use libsignal_net_infra::testutil::no_network_change_events;
     use libsignal_net_infra::ws::testutil::fake_websocket;
     use libsignal_net_infra::ws2::attested::testutil::{
         run_attested_server, AttestedServerOutput, FAKE_ATTESTATION,
     };
+    use libsignal_net_infra::{AsHttpHeader as _, EnableDomainFronting};
     use nonzero_ext::nonzero;
+    use tokio_stream::wrappers::UnboundedReceiverStream;
     use tungstenite::protocol::frame::coding::CloseCode;
     use tungstenite::protocol::CloseFrame;
     use uuid::Uuid;
@@ -560,6 +531,8 @@ mod test {
 
     use super::*;
     use crate::auth::Auth;
+    use crate::connect_state::{ConnectState, SUGGESTED_CONNECT_CONFIG};
+    use crate::enclave::EnclaveEndpointConnection;
 
     #[test]
     fn parse_lookup_response_entries() {
@@ -612,13 +585,13 @@ mod test {
 
         assert_eq!(
             serialized.as_slice(),
-            &hex!(
-                "000000043136e799"
-                "000000043136e79a"
-                "000000043136e79b"
-                "000000043136e79c"
-                "000000043136e79d"
-            )
+            &hex!([
+                "000000043136e799",
+                "000000043136e79a",
+                "000000043136e79b",
+                "000000043136e79c",
+                "000000043136e79d",
+            ])
         );
     }
 
@@ -632,13 +605,13 @@ mod test {
 
         assert_eq!(
             serialized.as_slice(),
-            &hex!(
-                "8181818181818181818181818181818101010101010101010101010101010101"
-                "8282828282828282828282828282828202020202020202020202020202020202"
-                "8383838383838383838383838383838303030303030303030303030303030303"
-                "8484848484848484848484848484848404040404040404040404040404040404"
-                "8585858585858585858585858585858505050505050505050505050505050505"
-            )
+            &hex!([
+                "8181818181818181818181818181818101010101010101010101010101010101",
+                "8282828282828282828282828282828202020202020202020202020202020202",
+                "8383838383838383838383838383838303030303030303030303030303030303",
+                "8484848484848484848484848484848404040404040404040404040404040404",
+                "8585858585858585858585858585858505050505050505050505050505050505",
+            ])
         );
     }
 
@@ -938,9 +911,9 @@ mod test {
 
         assert_matches!(
             response,
-            Err(LookupError::RateLimited {
+            Err(LookupError::RateLimited(RetryLater {
                 retry_after_seconds: RETRY_AFTER_SECS
-            })
+            }))
         );
     }
 
@@ -992,39 +965,72 @@ mod test {
 
         assert_matches!(
             response,
-            Err(LookupError::RateLimited {
+            Err(LookupError::RateLimited(RetryLater {
                 retry_after_seconds: RETRY_AFTER_SECS
-            })
+            }))
         )
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn websocket_rejected_with_http_429_too_many_requests() {
         let h2_server = warp::get().then(|| async move {
-            warp::reply::with_status(
-                warp::reply::with_header("(ignored body)", "Retry-After", "100"),
-                warp::http::StatusCode::TOO_MANY_REQUESTS,
-            )
+            let reply = warp::reply();
+            let reply = warp::reply::with_header(reply, RetryLater::HEADER_NAME.as_str(), "100");
+            warp::reply::with_status(reply, warp::http::StatusCode::TOO_MANY_REQUESTS)
         });
-        let connector = InMemoryWarpConnector::new(h2_server);
+
+        let (tx_connections, incoming_connections) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(
+            warp::serve(h2_server)
+                .serve_incoming(UnboundedReceiverStream::new(incoming_connections)),
+        );
+
+        let connector = ConnectFn(|(), _route, _log_tag| {
+            let (local, remote) = tokio::io::duplex(1024);
+            tx_connections
+                .send(Ok::<_, TransportConnectError>(local))
+                .unwrap();
+            std::future::ready(Ok::<_, TransportConnectError>(remote))
+        });
 
         let env = crate::env::PROD;
-        let endpoint_connection = EnclaveEndpointConnection::new(
+        let ws2_config = EnclaveEndpointConnection::new(
             &env.cdsi,
             Duration::from_secs(10),
-            &ObservableEvent::default(),
-        );
+            &no_network_change_events(),
+        )
+        .ws2_config();
         let auth = Auth {
             username: "username".to_string(),
             password: "password".to_string(),
         };
 
-        let result = CdsiConnection::connect(&endpoint_connection, connector, auth).await;
+        let connect_state =
+            ConnectState::new_with_transport_connector(SUGGESTED_CONNECT_CONFIG, connector);
+        let network_change_event = no_network_change_events();
+        let dns_resolver = DnsResolver::new(&network_change_event);
+        let result = CdsiConnection::connect_with(
+            ConnectionResources {
+                connect_state: &connect_state,
+                dns_resolver: &dns_resolver,
+                network_change_event: &network_change_event,
+                confirmation_header_name: None,
+            },
+            DirectOrProxyProvider::maybe_proxied(
+                env.cdsi.route_provider(EnableDomainFronting::No),
+                None,
+            ),
+            ws2_config,
+            &env.cdsi.params,
+            auth,
+        )
+        .await;
+
         assert_matches!(
             result,
-            Err(LookupError::RateLimited {
+            Err(LookupError::RateLimited(RetryLater {
                 retry_after_seconds: 100
-            })
+            }))
         )
     }
 

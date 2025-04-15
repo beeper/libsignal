@@ -7,6 +7,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::num::NonZeroU16;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use auto_enums::enum_derive;
@@ -35,6 +36,9 @@ use crate::{
 };
 
 pub mod proxy;
+
+pub const LONG_TCP_HANDSHAKE_THRESHOLD: Duration = Duration::from_secs(3);
+pub const LONG_TLS_HANDSHAKE_THRESHOLD: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug)]
 pub struct TcpSslConnector {
@@ -100,8 +104,13 @@ pub struct DirectConnector {
     pub dns_resolver: DnsResolver,
 }
 
+/// Stateless [`Connector`] for [`TcpRoute`]s.
 #[derive(Debug, Default)]
-pub struct StatelessDirect;
+pub struct StatelessTcp;
+
+/// Stateless [`Connector`] for [`TlsRouteFragment`]s.
+#[derive(Debug, Default)]
+pub struct StatelessTls;
 
 #[async_trait]
 impl TransportConnector for DirectConnector {
@@ -139,7 +148,7 @@ impl DirectConnector {
     }
 }
 
-impl Connector<TcpRoute<IpAddr>, ()> for StatelessDirect {
+impl Connector<TcpRoute<IpAddr>, ()> for StatelessTcp {
     type Connection = TcpStream;
 
     type Error = TransportConnectError;
@@ -157,7 +166,7 @@ impl Connector<TcpRoute<IpAddr>, ()> for StatelessDirect {
     }
 }
 
-impl<Inner> Connector<TlsRouteFragment, Inner> for StatelessDirect
+impl<Inner> Connector<TlsRouteFragment, Inner> for StatelessTls
 where
     Inner: AsyncDuplexStream,
 {
@@ -246,9 +255,7 @@ async fn connect_tls<S: AsyncDuplexStream>(
         alpn: Some(alpn),
     };
 
-    StatelessDirect
-        .connect_over(transport, route, log_tag)
-        .await
+    StatelessTls.connect_over(transport, route, log_tag).await
 }
 
 async fn connect_tcp(
@@ -290,7 +297,7 @@ async fn connect_tcp(
     // First, for each resolved IP address, constructing a future
     // that incorporates the delay based on its position in the list.
     // This way we can start all futures at once and simply wait for the first one to complete successfully.
-    let connector = StatelessDirect;
+    let connector = StatelessTcp;
     let staggered_futures = dns_lookup.into_iter().enumerate().map(|(idx, ip)| {
         let delay = TCP_CONNECTION_ATTEMPT_DELAY * idx.try_into().unwrap();
         let connector = &connector;

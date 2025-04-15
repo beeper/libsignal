@@ -19,13 +19,19 @@ use libsignal_net_infra::errors::{LogSafeDisplay, TransportConnectError};
 use libsignal_net_infra::route::{
     ComposedConnector, ConnectError, ConnectionOutcomeParams, ConnectionOutcomes, Connector,
     ConnectorFactory, DelayBasedOnTransport, DescribeForLog, DescribedRouteConnector,
-    HttpRouteFragment, ResolveHostnames, ResolveWithSavedDescription, ResolvedRoute, RouteProvider,
-    RouteProviderContext, RouteProviderExt as _, RouteResolver, ThrottlingConnector,
+    DirectOrProxy, HttpRouteFragment, InterfaceChangedOr, InterfaceMonitor, LoggingConnector,
+    ResettingConnectionOutcomes, ResolveHostnames, ResolveWithSavedDescription, ResolvedRoute,
+    RouteProvider, RouteProviderContext, RouteProviderExt as _, RouteResolver, ThrottlingConnector,
     TransportRoute, UnresolvedRouteDescription, UnresolvedTransportRoute,
-    UnresolvedWebsocketServiceRoute, UsePreconnect, UsesTransport, WebSocketRouteFragment,
-    WebSocketServiceRoute,
+    UnresolvedWebsocketServiceRoute, UsePreconnect, UsesTransport, VariableTlsTimeoutConnector,
+    WebSocketRouteFragment, WebSocketServiceRoute,
 };
-use libsignal_net_infra::timeouts::{TimeoutOr, ONE_ROUTE_CONNECTION_TIMEOUT};
+use libsignal_net_infra::tcp_ssl::{LONG_TCP_HANDSHAKE_THRESHOLD, LONG_TLS_HANDSHAKE_THRESHOLD};
+use libsignal_net_infra::timeouts::{
+    TimeoutOr, MIN_TLS_HANDSHAKE_TIMEOUT, NETWORK_INTERFACE_POLL_INTERVAL,
+    ONE_ROUTE_CONNECTION_TIMEOUT, POST_ROUTE_CHANGE_CONNECTION_TIMEOUT,
+};
+use libsignal_net_infra::utils::NetworkChangeEvent;
 use libsignal_net_infra::ws::{WebSocketConnectError, WebSocketStreamLike};
 use libsignal_net_infra::ws2::attested::AttestedConnection;
 use libsignal_net_infra::{AsHttpHeader as _, AsyncDuplexStream};
@@ -51,6 +57,8 @@ pub const SUGGESTED_CONNECT_PARAMS: ConnectionOutcomeParams = ConnectionOutcomeP
 pub const SUGGESTED_CONNECT_CONFIG: Config = Config {
     connect_params: SUGGESTED_CONNECT_PARAMS,
     connect_timeout: ONE_ROUTE_CONNECTION_TIMEOUT,
+    network_interface_poll_interval: NETWORK_INTERFACE_POLL_INTERVAL,
+    post_route_change_connect_timeout: POST_ROUTE_CHANGE_CONNECTION_TIMEOUT,
 };
 
 /// Suggested lifetime for a [`PreconnectingConnector`] that handles up to a TLS handshake.
@@ -87,6 +95,10 @@ pub struct ConnectState<ConnectorFactory = DefaultConnectorFactory> {
     pub route_resolver: RouteResolver,
     /// The amount of time allowed for each connection attempt.
     pub connect_timeout: Duration,
+    /// How often to check if the network interface has changed, given no other info.
+    network_interface_poll_interval: Duration,
+    /// The amount of time allowed for a connection attempt after a network change.
+    post_route_change_connect_timeout: Duration,
     /// Transport-level connector used for all connections.
     make_transport_connector: ConnectorFactory,
     /// Record of connection outcomes.
@@ -95,10 +107,10 @@ pub struct ConnectState<ConnectorFactory = DefaultConnectorFactory> {
     route_provider_context: RouteProviderContextImpl,
 }
 
-pub type DefaultTransportConnector = ComposedConnector<
-    ThrottlingConnector<crate::infra::tcp_ssl::StatelessDirect>,
+pub type DefaultTransportConnector = VariableTlsTimeoutConnector<
+    ThrottlingConnector<LoggingConnector<crate::infra::tcp_ssl::StatelessTls>>,
     crate::infra::route::DirectOrProxy<
-        crate::infra::tcp_ssl::StatelessDirect,
+        LoggingConnector<crate::infra::tcp_ssl::StatelessTcp>,
         crate::infra::tcp_ssl::proxy::StatelessProxied,
         TransportConnectError,
     >,
@@ -109,6 +121,15 @@ pub type DefaultTransportConnector = ComposedConnector<
 pub struct Config {
     pub connect_params: ConnectionOutcomeParams,
     pub connect_timeout: Duration,
+    pub network_interface_poll_interval: Duration,
+    pub post_route_change_connect_timeout: Duration,
+}
+
+pub struct ConnectionResources<'a, TC> {
+    pub connect_state: &'a std::sync::Mutex<ConnectState<TC>>,
+    pub dns_resolver: &'a DnsResolver,
+    pub network_change_event: &'a NetworkChangeEvent,
+    pub confirmation_header_name: Option<HeaderName>,
 }
 
 pub struct DefaultConnectorFactory;
@@ -120,14 +141,25 @@ where
     type Connection = <DefaultTransportConnector as Connector<R, ()>>::Connection;
 
     fn make(&self) -> Self::Connector {
-        let throttle_tls_connections = ThrottlingConnector::new(Default::default(), 1);
-        let proxy_or_direct_connector = Default::default();
-        ComposedConnector::new(throttle_tls_connections, proxy_or_direct_connector)
+        let throttle_tls_connections = ThrottlingConnector::new(
+            LoggingConnector::new(Default::default(), LONG_TLS_HANDSHAKE_THRESHOLD, "TLS"),
+            1,
+        );
+        let proxy_or_direct_connector = DirectOrProxy::new(
+            LoggingConnector::new(Default::default(), LONG_TCP_HANDSHAKE_THRESHOLD, "TCP"),
+            // Proxy connectors use LoggingConnector internally
+            Default::default(),
+        );
+        VariableTlsTimeoutConnector::new(
+            throttle_tls_connections,
+            proxy_or_direct_connector,
+            MIN_TLS_HANDSHAKE_TIMEOUT,
+        )
     }
 }
 
 impl ConnectState {
-    pub fn new(config: Config) -> tokio::sync::RwLock<Self> {
+    pub fn new(config: Config) -> std::sync::Mutex<Self> {
         Self::new_with_transport_connector(config, DefaultConnectorFactory)
     }
 }
@@ -136,14 +168,18 @@ impl<ConnectorFactory> ConnectState<ConnectorFactory> {
     pub fn new_with_transport_connector(
         config: Config,
         make_transport_connector: ConnectorFactory,
-    ) -> tokio::sync::RwLock<Self> {
+    ) -> std::sync::Mutex<Self> {
         let Config {
             connect_params,
             connect_timeout,
+            network_interface_poll_interval,
+            post_route_change_connect_timeout,
         } = config;
         Self {
             route_resolver: RouteResolver::default(),
             connect_timeout,
+            network_interface_poll_interval,
+            post_route_change_connect_timeout,
             make_transport_connector,
             attempts_record: ConnectionOutcomes::new(connect_params),
             route_provider_context: RouteProviderContextImpl::default(),
@@ -183,6 +219,8 @@ impl RouteInfo {
 struct ConnectStateSnapshot<C> {
     route_resolver: RouteResolver,
     connect_timeout: Duration,
+    network_interface_poll_interval: Duration,
+    post_route_change_connect_timeout: Duration,
     transport_connector: C,
     attempts_record: ConnectionOutcomes<TransportRoute>,
     route_provider_context: RouteProviderContextImpl,
@@ -196,6 +234,8 @@ impl<TC> ConnectState<TC> {
         let Self {
             route_resolver,
             connect_timeout,
+            network_interface_poll_interval,
+            post_route_change_connect_timeout,
             make_transport_connector,
             attempts_record,
             route_provider_context,
@@ -204,18 +244,20 @@ impl<TC> ConnectState<TC> {
         ConnectStateSnapshot {
             route_resolver: route_resolver.clone(),
             connect_timeout: *connect_timeout,
+            network_interface_poll_interval: *network_interface_poll_interval,
+            post_route_change_connect_timeout: *post_route_change_connect_timeout,
             transport_connector: make_transport_connector.make(),
             attempts_record: attempts_record.clone(),
             route_provider_context: route_provider_context.clone(),
         }
     }
+}
 
+impl<TC> ConnectionResources<'_, TC> {
     pub async fn connect_ws<WC, UR, Transport>(
-        this: &tokio::sync::RwLock<Self>,
+        self,
         routes: impl RouteProvider<Route = UR>,
         ws_connector: WC,
-        resolver: &DnsResolver,
-        confirmation_header_name: Option<&HeaderName>,
         log_tag: Arc<str>,
     ) -> Result<(WC::Connection, RouteInfo), TimeoutOr<ConnectError<WebSocketServiceConnectError>>>
     where
@@ -228,22 +270,33 @@ impl<TC> ConnectState<TC> {
         // easier to test; specifically, the output is not guaranteed to be an AsyncDuplexStream.
         TC: ConnectorFactory<
             Transport,
+            Connection: Send,
             Connector: Sync + Connector<Transport, (), Error: Into<WebSocketConnectError>>,
         >,
         WC: Connector<
                 (WebSocketRouteFragment, HttpRouteFragment),
                 TC::Connection,
-                Error = tungstenite::Error,
+                Connection: Send,
+                Error = WebSocketConnectError,
             > + Send
             + Sync,
     {
+        let Self {
+            connect_state,
+            dns_resolver,
+            network_change_event,
+            confirmation_header_name,
+        } = self;
+
         let ConnectStateSnapshot {
             route_resolver,
             connect_timeout,
+            network_interface_poll_interval,
+            post_route_change_connect_timeout,
             transport_connector,
             attempts_record,
             route_provider_context,
-        } = this.read().await.snapshot();
+        } = connect_state.lock().expect("not poisoned").snapshot();
 
         let routes = routes.routes(&route_provider_context).collect_vec();
 
@@ -253,23 +306,36 @@ impl<TC> ConnectState<TC> {
         );
 
         let route_provider = routes.into_iter().map(ResolveWithSavedDescription);
-        let connector =
-            DescribedRouteConnector(ComposedConnector::new(ws_connector, &transport_connector));
-        let delay_policy = DelayBasedOnTransport(attempts_record);
+        let connector = InterfaceMonitor::new(
+            DescribedRouteConnector(ComposedConnector::new(
+                LoggingConnector::new(ws_connector, Duration::from_secs(3), "websocket"),
+                &transport_connector,
+            )),
+            network_change_event.clone(),
+            network_interface_poll_interval,
+            post_route_change_connect_timeout,
+        );
+        let delay_policy = DelayBasedOnTransport(ResettingConnectionOutcomes::new(
+            attempts_record,
+            network_change_event,
+        ));
 
         let start = Instant::now();
         let connect = crate::infra::route::connect(
             &route_resolver,
             delay_policy,
             route_provider,
-            resolver,
+            dns_resolver,
             connector,
             (),
             log_tag.clone(),
             |error| {
+                let error = error.into_inner_or_else(|| {
+                    WebSocketConnectError::Transport(TransportConnectError::ClientAbort)
+                });
                 let error = WebSocketServiceConnectError::from_websocket_error(
                     error,
-                    confirmation_header_name,
+                    confirmation_header_name.as_ref(),
                     Instant::now(),
                 );
                 log::debug!("[{log_tag}] connection attempt failed with {error}");
@@ -294,13 +360,17 @@ impl<TC> ConnectState<TC> {
             Err(e) => log::info!("[{log_tag}] connection failed with {e}"),
         }
 
-        this.write().await.attempts_record.apply_outcome_updates(
-            updates
-                .outcomes
-                .into_iter()
-                .map(|(route, outcome)| (route.into_transport_part(), outcome)),
-            updates.finished_at,
-        );
+        connect_state
+            .lock()
+            .expect("not poisoned")
+            .attempts_record
+            .apply_outcome_updates(
+                updates
+                    .outcomes
+                    .into_iter()
+                    .map(|(route, outcome)| (route.into_transport_part(), outcome)),
+                updates.finished_at,
+            );
 
         let (connection, description) = result?;
         Ok((
@@ -312,11 +382,9 @@ impl<TC> ConnectState<TC> {
     }
 
     pub(crate) async fn connect_attested_ws<E, WC>(
-        connect: &tokio::sync::RwLock<Self>,
+        self,
         routes: impl RouteProvider<Route = UnresolvedWebsocketServiceRoute>,
         auth: Auth,
-        resolver: &DnsResolver,
-        confirmation_header_name: Option<HeaderName>,
         (ws_config, ws_connector): (libsignal_net_infra::ws2::Config, WC),
         log_tag: Arc<str>,
         params: &EndpointParams<'_, E>,
@@ -327,7 +395,7 @@ impl<TC> ConnectState<TC> {
                 (WebSocketRouteFragment, HttpRouteFragment),
                 TC::Connection,
                 Connection: WebSocketStreamLike + Send + 'static,
-                Error = tungstenite::Error,
+                Error = WebSocketConnectError,
             > + Send
             + Sync,
         E: NewHandshake,
@@ -337,24 +405,20 @@ impl<TC> ConnectState<TC> {
             route
         });
 
-        let (ws, route_info) = ConnectState::connect_ws(
-            connect,
-            ws_routes,
-            ws_connector,
-            resolver,
-            confirmation_header_name.as_ref(),
-            log_tag.clone(),
-        )
-        .await
-        .map_err(|e| match e {
-            TimeoutOr::Other(ConnectError::NoResolvedRoutes | ConnectError::AllAttemptsFailed)
-            | TimeoutOr::Timeout {
-                attempt_duration: _,
-            } => crate::enclave::Error::ConnectionTimedOut,
-            TimeoutOr::Other(ConnectError::FatalConnect(e)) => {
-                crate::enclave::Error::WebSocketConnect(e)
-            }
-        })?;
+        let (ws, route_info) = self
+            .connect_ws(ws_routes, ws_connector, log_tag.clone())
+            .await
+            .map_err(|e| match e {
+                TimeoutOr::Other(
+                    ConnectError::NoResolvedRoutes | ConnectError::AllAttemptsFailed,
+                )
+                | TimeoutOr::Timeout {
+                    attempt_duration: _,
+                } => crate::enclave::Error::ConnectionTimedOut,
+                TimeoutOr::Other(ConnectError::FatalConnect(e)) => {
+                    crate::enclave::Error::WebSocketConnect(e)
+                }
+            })?;
 
         let connection =
             AttestedConnection::connect(ws, ws_config, log_tag, move |attestation_message| {
@@ -365,25 +429,36 @@ impl<TC> ConnectState<TC> {
     }
 }
 
-impl<TC> ConnectState<PreconnectingFactory<TC>>
+impl<TC> ConnectionResources<'_, PreconnectingFactory<TC>>
 where
     // Note that we're not using WebSocketTransportConnectorFactory here to make `connect_ws`
     // easier to test; specifically, the output is not guaranteed to be an AsyncDuplexStream.
     TC: ConnectorFactory<TransportRoute, Connector: Sync, Connection: Send>,
 {
     pub async fn preconnect_and_save(
-        this: &tokio::sync::RwLock<Self>,
+        self,
         routes: impl RouteProvider<Route = UnresolvedTransportRoute>,
-        resolver: &DnsResolver,
         log_tag: Arc<str>,
-    ) -> Result<(), TimeoutOr<ConnectError<WebSocketServiceConnectError>>> {
+    ) -> Result<(), TimeoutOr<ConnectError<TransportConnectError>>> {
+        let Self {
+            connect_state,
+            dns_resolver,
+            network_change_event,
+            confirmation_header_name: _,
+        } = self;
+
         let ConnectStateSnapshot {
             route_resolver,
             connect_timeout,
+            network_interface_poll_interval,
+            post_route_change_connect_timeout,
             transport_connector,
             attempts_record,
             route_provider_context,
-        } = this.read().await.snapshot::<UsePreconnect<_>>();
+        } = connect_state
+            .lock()
+            .expect("not poisoned")
+            .snapshot::<UsePreconnect<_>>();
 
         let routes = routes
             .map_routes(|r| UsePreconnect {
@@ -422,7 +497,12 @@ where
         }
 
         let route_provider = routes.into_iter();
-        let connector = ConnectWithSavedRoute(&transport_connector);
+        let connector = InterfaceMonitor::new(
+            ConnectWithSavedRoute(&transport_connector),
+            network_change_event.clone(),
+            network_interface_poll_interval,
+            post_route_change_connect_timeout,
+        );
         let delay_policy = DelayBasedOnTransport(attempts_record);
 
         let start = Instant::now();
@@ -430,14 +510,21 @@ where
             &route_resolver,
             delay_policy,
             route_provider,
-            resolver,
+            dns_resolver,
             connector,
             (),
             log_tag.clone(),
-            |_| {
-                // All transport-level errors are considered intermittent; see
-                // WebSocketServiceConnectError::classify.
-                ControlFlow::Continue(())
+            |error| {
+                match error {
+                    InterfaceChangedOr::InterfaceChanged => {
+                        ControlFlow::Break(TransportConnectError::ClientAbort)
+                    }
+                    InterfaceChangedOr::Other(_) => {
+                        // All normal transport-level errors are considered intermittent; see
+                        // WebSocketServiceConnectError::classify.
+                        ControlFlow::Continue(())
+                    }
+                }
             },
         );
 
@@ -461,7 +548,7 @@ where
 
         // Don't exit yet, we have to save the results!
         {
-            let mut connect_write = this.write().await;
+            let mut connect_write = connect_state.lock().expect("not poisoned");
 
             connect_write.attempts_record.apply_outcome_updates(
                 updates
@@ -521,13 +608,16 @@ mod test {
     use libsignal_net_infra::host::Host;
     use libsignal_net_infra::route::testutils::ConnectFn;
     use libsignal_net_infra::route::{
-        DirectOrProxyRoute, HttpsTlsRoute, TcpRoute, TlsRoute, TlsRouteFragment, UnresolvedHost,
-        UnresolvedTransportRoute, WebSocketRoute,
+        AttemptOutcome, DirectOrProxyRoute, HttpsTlsRoute, TcpRoute, TlsRoute, TlsRouteFragment,
+        UnresolvedHost, UnresolvedTransportRoute, UnsuccessfulOutcome, WebSocketRoute,
+        HAPPY_EYEBALLS_DELAY,
     };
+    use libsignal_net_infra::testutil::no_network_change_events;
     use libsignal_net_infra::{Alpn, DnsSource, RouteType};
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::ws::NotRejectedByServer;
 
     const FAKE_HOST_NAME: &str = "direct-host";
     static FAKE_TRANSPORT_ROUTE: LazyLock<UnresolvedTransportRoute> = LazyLock::new(|| TlsRoute {
@@ -588,7 +678,7 @@ mod test {
             let (ws, http) = &route;
             std::future::ready(
                 if (ws, http) == (&failing_route.fragment, &failing_route.inner.fragment) {
-                    Err(tungstenite::Error::ConnectionClosed)
+                    Err(tungstenite::Error::ConnectionClosed.into())
                 } else {
                     Ok(route)
                 },
@@ -604,6 +694,8 @@ mod test {
 
         let state = ConnectState {
             connect_timeout: Duration::MAX,
+            network_interface_poll_interval: Duration::MAX,
+            post_route_change_connect_timeout: Duration::MAX,
             route_resolver: RouteResolver::default(),
             attempts_record: ConnectionOutcomes::new(SUGGESTED_CONNECT_PARAMS),
             make_transport_connector: fake_transport_connector,
@@ -611,16 +703,21 @@ mod test {
         }
         .into();
 
-        let result = ConnectState::connect_ws(
-            &state,
-            vec![failing_route.clone(), succeeding_route.clone()],
-            ws_connector,
-            &resolver,
-            None,
-            "test".into(),
-        )
-        // This previously hung forever due to a deadlock bug.
-        .await;
+        let connection_resources = ConnectionResources {
+            connect_state: &state,
+            dns_resolver: &resolver,
+            network_change_event: &no_network_change_events(),
+            confirmation_header_name: None,
+        };
+
+        let result = connection_resources
+            .connect_ws(
+                vec![failing_route.clone(), succeeding_route.clone()],
+                ws_connector,
+                "test".into(),
+            )
+            // This previously hung forever due to a deadlock bug.
+            .await;
 
         let (connection, info) = result.expect("succeeded");
         assert_eq!(
@@ -648,6 +745,8 @@ mod test {
 
         let state = ConnectState {
             connect_timeout: CONNECT_TIMEOUT,
+            network_interface_poll_interval: Duration::MAX,
+            post_route_change_connect_timeout: Duration::MAX,
             route_resolver: RouteResolver::default(),
             attempts_record: ConnectionOutcomes::new(SUGGESTED_CONNECT_PARAMS),
             make_transport_connector: always_hangs_connector,
@@ -657,12 +756,16 @@ mod test {
 
         let [failing_route, succeeding_route] = (*FAKE_WEBSOCKET_ROUTES).clone();
 
-        let connect = ConnectState::connect_ws(
-            &state,
+        let connection_resources = ConnectionResources {
+            connect_state: &state,
+            dns_resolver: &resolver,
+            network_change_event: &no_network_change_events(),
+            confirmation_header_name: None,
+        };
+
+        let connect = connection_resources.connect_ws(
             vec![failing_route.clone(), succeeding_route.clone()],
             ws_connector,
-            &resolver,
-            None,
             "test".into(),
         );
 
@@ -676,6 +779,146 @@ mod test {
             })
         );
         assert_eq!(start.elapsed(), CONNECT_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn client_abort_transport_error_is_fatal() {
+        // We can't directly test the ClientAbort produced for a network change without *more*
+        // custom dependency injection for connect_ws---we can fire the network change event, but we
+        // can't actually change the local IP detection logic. But we can test a ClientAbort
+        // produced by the underlying connector.
+
+        let ws_connector = crate::infra::ws::Stateless;
+        let resolver = DnsResolver::new_from_static_map(HashMap::from([(
+            FAKE_HOST_NAME,
+            LookupResult::new(DnsSource::Static, vec![ip_addr!(v4, "192.0.2.1")], vec![]),
+        )]));
+
+        let client_abort_connector = ConnectFn(|(), _, _| {
+            std::future::ready(Err::<tokio::io::DuplexStream, _>(
+                TransportConnectError::ClientAbort,
+            ))
+        });
+
+        const CONNECT_TIMEOUT: Duration = Duration::from_secs(31);
+
+        let state = ConnectState {
+            connect_timeout: CONNECT_TIMEOUT,
+            network_interface_poll_interval: Duration::MAX,
+            post_route_change_connect_timeout: Duration::MAX,
+            route_resolver: RouteResolver::default(),
+            attempts_record: ConnectionOutcomes::new(SUGGESTED_CONNECT_PARAMS),
+            make_transport_connector: client_abort_connector,
+            route_provider_context: Default::default(),
+        }
+        .into();
+
+        let [failing_route, succeeding_route] = (*FAKE_WEBSOCKET_ROUTES).clone();
+
+        let connection_resources = ConnectionResources {
+            connect_state: &state,
+            dns_resolver: &resolver,
+            network_change_event: &no_network_change_events(),
+            confirmation_header_name: None,
+        };
+
+        let connect = connection_resources.connect_ws(
+            vec![failing_route.clone(), succeeding_route.clone()],
+            ws_connector,
+            "test".into(),
+        );
+
+        let result: Result<_, TimeoutOr<ConnectError<_>>> = connect.await;
+
+        assert_matches!(
+            result,
+            Err(TimeoutOr::Other(ConnectError::FatalConnect(
+                WebSocketServiceConnectError::Connect(
+                    WebSocketConnectError::Transport(TransportConnectError::ClientAbort),
+                    NotRejectedByServer { .. }
+                )
+            )))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cooldowns_reset_on_network_change_even_during_connect() {
+        // This doesn't actually matter since we're using a fake connector, but
+        // using the real route type is easier than trying to add yet more
+        // generic parameters.
+        let route = FAKE_WEBSOCKET_ROUTES[0].clone();
+        let start = Instant::now();
+
+        let ws_connector = ConnectFn(|(), route, _log_tag| std::future::ready(Ok(route)));
+        let bad_ip = ip_addr!(v4, "192.0.2.1");
+        let good_ip = ip_addr!(v4, "192.0.2.2");
+        let resolver = DnsResolver::new_from_static_map(HashMap::from([(
+            FAKE_HOST_NAME,
+            LookupResult::new(DnsSource::Static, vec![bad_ip, good_ip], vec![]),
+        )]));
+
+        let fake_transport_connector = ConnectFn(move |(), route: TransportRoute, _| {
+            std::future::ready(if *route.immediate_target() == bad_ip {
+                Err(WebSocketConnectError::Timeout)
+            } else {
+                Ok(())
+            })
+        });
+
+        let mut state = ConnectState {
+            connect_timeout: Duration::MAX,
+            network_interface_poll_interval: Duration::MAX,
+            post_route_change_connect_timeout: Duration::MAX,
+            route_resolver: RouteResolver::default(),
+            attempts_record: ConnectionOutcomes::new(SUGGESTED_CONNECT_PARAMS),
+            make_transport_connector: fake_transport_connector,
+            route_provider_context: Default::default(),
+        };
+
+        let past_failure = AttemptOutcome {
+            started: start,
+            result: Err(UnsuccessfulOutcome),
+        };
+        state.attempts_record.apply_outcome_updates(
+            [
+                (
+                    route.transport_part().clone().resolve(|_| bad_ip.into()),
+                    past_failure,
+                ),
+                (
+                    route.transport_part().clone().resolve(|_| good_ip.into()),
+                    past_failure,
+                ),
+            ],
+            start,
+        );
+
+        let (network_change_tx, network_change_rx) = tokio::sync::watch::channel(());
+
+        let connection_resources = ConnectionResources {
+            connect_state: &state.into(),
+            dns_resolver: &resolver,
+            network_change_event: &network_change_rx,
+            confirmation_header_name: None,
+        };
+
+        let mut connect = std::pin::pin!(connection_resources.connect_ws(
+            vec![route.clone()],
+            ws_connector,
+            "test".into(),
+        ));
+
+        let network_change_delay = Duration::from_millis(500);
+        _ = tokio::time::timeout(network_change_delay, connect.as_mut())
+            .await
+            .expect_err("should not be ready yet");
+
+        network_change_tx.send_replace(());
+        let result = connect.await;
+
+        let (connection, _info) = result.expect("succeeded");
+        assert_eq!(connection, (route.fragment, route.inner.fragment));
+        assert_eq!(start.elapsed(), network_change_delay + HAPPY_EYEBALLS_DELAY);
     }
 
     #[tokio::test(start_paused = true)]
@@ -709,6 +952,8 @@ mod test {
 
         let state = ConnectState {
             connect_timeout: CONNECT_TIMEOUT,
+            network_interface_poll_interval: Duration::MAX,
+            post_route_change_connect_timeout: Duration::MAX,
             route_resolver: RouteResolver::default(),
             attempts_record: ConnectionOutcomes::new(SUGGESTED_CONNECT_PARAMS),
             make_transport_connector,
@@ -720,14 +965,20 @@ mod test {
         let mut bad_transport_route = good_transport_route.clone();
         bad_transport_route.fragment.sni = Host::parse_as_ip_or_domain("fail");
 
-        ConnectState::preconnect_and_save(
-            &state,
-            vec![bad_transport_route.clone(), good_transport_route.clone()],
-            &resolver,
-            "preconnect".into(),
-        )
-        .await
-        .expect("success");
+        let connection_resources = ConnectionResources {
+            connect_state: &state,
+            dns_resolver: &resolver,
+            network_change_event: &no_network_change_events(),
+            confirmation_header_name: None,
+        };
+
+        connection_resources
+            .preconnect_and_save(
+                vec![bad_transport_route.clone(), good_transport_route.clone()],
+                "preconnect".into(),
+            )
+            .await
+            .expect("success");
 
         assert_eq!(
             *attempts_by_host.lock().expect("not poisoned"),
@@ -737,33 +988,38 @@ mod test {
             ])
         );
 
-        _ = ConnectState::connect_ws(
-            &state,
-            [bad_transport_route.clone(), good_transport_route.clone()]
-                .into_iter()
-                .map(|route| WebSocketRoute {
-                    fragment: WebSocketRouteFragment {
-                        ws_config: Default::default(),
-                        endpoint: PathAndQuery::from_static("/"),
-                        headers: HeaderMap::new(),
-                    },
-                    inner: HttpsTlsRoute {
-                        fragment: HttpRouteFragment {
-                            host_header: "host".into(),
-                            path_prefix: "".into(),
-                            front_name: None,
+        let connection_resources = ConnectionResources {
+            connect_state: &state,
+            dns_resolver: &resolver,
+            network_change_event: &no_network_change_events(),
+            confirmation_header_name: None,
+        };
+
+        _ = connection_resources
+            .connect_ws(
+                [bad_transport_route.clone(), good_transport_route.clone()]
+                    .into_iter()
+                    .map(|route| WebSocketRoute {
+                        fragment: WebSocketRouteFragment {
+                            ws_config: Default::default(),
+                            endpoint: PathAndQuery::from_static("/"),
+                            headers: HeaderMap::new(),
                         },
-                        inner: route,
-                    },
-                })
-                .collect_vec(),
-            ws_connector,
-            &resolver,
-            None,
-            "test".into(),
-        )
-        .await
-        .expect("succeeded");
+                        inner: HttpsTlsRoute {
+                            fragment: HttpRouteFragment {
+                                host_header: "host".into(),
+                                path_prefix: "".into(),
+                                front_name: None,
+                            },
+                            inner: route,
+                        },
+                    })
+                    .collect_vec(),
+                ws_connector,
+                "test".into(),
+            )
+            .await
+            .expect("succeeded");
 
         // Even though the bad transport route was listed first, we should have tried the good
         // transport route first due to the record of the preconnect attempts.

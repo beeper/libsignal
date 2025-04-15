@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::commitments::verify as verify_commitment;
 use crate::guide::{InvalidState, ProofGuide};
 use crate::implicit::{full_monitoring_path, monitoring_path};
-use crate::log::{evaluate_batch_proof, truncate_batch_proof, verify_consistency_proof};
+use crate::log::{evaluate_batch_proof, verify_consistency_proof};
 use crate::prefix::{evaluate as evaluate_prefix, MalformedProof};
 use crate::proto::*;
 use crate::{
@@ -429,7 +429,6 @@ fn verify_search_internal(
     monitor: bool,
     now: SystemTime,
 ) -> Result<SearchStateUpdate> {
-    // NOTE: Update this function in tandem with truncate_search_response.
     let SlimSearchRequest {
         search_key,
         version,
@@ -567,45 +566,6 @@ pub fn verify_search(
     now: SystemTime,
 ) -> Result<SearchStateUpdate> {
     verify_search_internal(config, req, res, context, force_monitor, now)
-}
-
-/// Checks that the output of an Update operation is valid and updates the
-/// client's stored data.
-pub fn verify_update(
-    config: &PublicConfig,
-    req: &UpdateRequest,
-    res: &UpdateResponse,
-    context: SearchContext,
-    now: SystemTime,
-) -> Result<SearchStateUpdate> {
-    let UpdateResponse {
-        tree_head,
-        vrf_proof,
-        search,
-        opening,
-    } = res;
-    verify_search_internal(
-        config,
-        SlimSearchRequest {
-            search_key: req.search_key.clone(),
-            version: None,
-        },
-        FullSearchResponse {
-            condensed: CondensedTreeSearchResponse {
-                vrf_proof: vrf_proof.clone(),
-                search: search.clone(),
-
-                opening: opening.clone(),
-                value: Some(UpdateValue {
-                    value: req.value.clone(),
-                }),
-            },
-            tree_head: get_proto_field(tree_head, "tree_head")?,
-        },
-        context,
-        true,
-        now,
-    )
 }
 
 /// Checks that the output of a Monitor operation is valid and updates the
@@ -922,81 +882,6 @@ impl MonitoringDataWrapper {
     }
 }
 
-/// Returns the TreeHead that would've been issued immediately after the value
-/// being searched for in `TreeSearchResponse` was sequenced.
-///
-/// Most validation is skipped so the TreeSearchResponse MUST already be verified.
-pub fn truncate_search_response(
-    config: &PublicConfig,
-    req: &SlimSearchRequest,
-    res: &FullSearchResponse,
-) -> Result<(u64, [u8; 32])> {
-    // NOTE: Update this function in tandem with verify_search_internal.
-    let SlimSearchRequest {
-        search_key,
-        version,
-    } = req;
-    let FullSearchResponse {
-        condensed:
-            CondensedTreeSearchResponse {
-                vrf_proof,
-                search,
-                opening: _,
-                value: _,
-            },
-        tree_head: full_tree_head,
-    } = res;
-
-    let index = evaluate_vrf_proof(vrf_proof, &config.vrf_key, search_key)?;
-
-    // Evaluate the SearchProof to find the terminal leaf.
-    let tree_size = {
-        let tree_head = get_proto_field(&full_tree_head.tree_head, "tree_head")?;
-        tree_head.tree_size
-    };
-    let search_proof = get_proto_field(search, "search")?;
-
-    let guide = ProofGuide::new(*version, search_proof.pos, tree_size);
-
-    let mut i = 0;
-    let mut leaves = HashMap::new();
-
-    let result = guide.consume(|guide, next_id| {
-        let step = &search_proof.steps[i];
-        let prefix_proof = get_proto_field(&step.prefix, "prefix")?;
-        guide.insert(next_id, prefix_proof.counter);
-
-        // Evaluate the prefix proof and combine it with the commitment to get
-        // the value stored in the log.
-        let prefix_root = evaluate_prefix(&index, search_proof.pos, prefix_proof)?;
-        let commitment = step
-            .commitment
-            .as_slice()
-            .try_into()
-            .map_err(|_| MalformedProof)?;
-        leaves.insert(next_id, leaf_hash(&prefix_root, commitment));
-
-        i += 1;
-        Ok::<(), Error>(())
-    })?;
-
-    let (_, result_id) =
-        result.expect("truncate_search_response called with search response that is not verified");
-
-    // Evaluate the inclusion proof to get root value.
-    let (ids, values) = into_sorted_pairs(leaves);
-
-    let inclusion_proof = get_hash_proof(&search_proof.inclusion)?;
-
-    let early_stop = ids
-        .iter()
-        .position(|&id| id == result_id)
-        .expect("result_id is not an id that was inspected by proof guide");
-    let root = truncate_batch_proof(early_stop, &ids, &values, &inclusion_proof)?;
-
-    Ok((result_id + 1, root))
-}
-
 fn into_sorted_pairs<K: Ord + Copy, V>(map: HashMap<K, V>) -> (Vec<K>, Vec<V>) {
     let mut pairs = map.into_iter().collect::<Vec<_>>();
     pairs.sort_by_key(|pair| pair.0);
@@ -1006,7 +891,7 @@ fn into_sorted_pairs<K: Ord + Copy, V>(map: HashMap<K, V>) -> (Vec<K>, Vec<V>) {
 #[cfg(test)]
 mod test {
     use assert_matches::assert_matches;
-    use hex_literal::hex;
+    use const_str::hex;
     use prost::Message as _;
     use test_case::test_case;
 
@@ -1069,17 +954,18 @@ mod test {
             CondensedTreeSearchResponse::decode(bytes.as_slice()).unwrap()
         };
         let response_tree_head = FullTreeHead::decode(
-            hex!(
-            "0a4c08f23710bbd4dfb897321a40385a"
-            "2eee61b2a0ef463251e8f0301389c3a3"
-            "34a0146bc6f2cb9b35938d9c16ba9922"
-            "3a651e963fab86e64e02484e49b5718d"
-            "d826aafe7c3e38dfe53226220603224e"
-            "0a4c08f23710e1d4e0b897321a40a973"
-            "dd2f6a412287f93b051bd7a5da9dc99b"
-            "61d86db8a25c861934e00ee6895097b5"
-            "5272f5f71de8b610b5da0b49fc263e0c"
-            "5e33cd3de26d3a9f98fd5d2aae06")
+            hex!([
+                "0a4c08f23710bbd4dfb897321a40385a",
+                "2eee61b2a0ef463251e8f0301389c3a3",
+                "34a0146bc6f2cb9b35938d9c16ba9922",
+                "3a651e963fab86e64e02484e49b5718d",
+                "d826aafe7c3e38dfe53226220603224e",
+                "0a4c08f23710e1d4e0b897321a40a973",
+                "dd2f6a412287f93b051bd7a5da9dc99b",
+                "61d86db8a25c861934e00ee6895097b5",
+                "5272f5f71de8b610b5da0b49fc263e0c",
+                "5e33cd3de26d3a9f98fd5d2aae06"
+            ])
             .as_slice(),
         )
         .expect("valid test full tree head");
@@ -1098,11 +984,12 @@ mod test {
         let last_tree_head = TreeHead {
             tree_size: 7154,
             timestamp: 1724279941691,
-            signature: hex!(
-                    "385a2eee61b2a0ef463251e8f0301389"
-                    "c3a334a0146bc6f2cb9b35938d9c16ba"
-                    "99223a651e963fab86e64e02484e49b5"
-                    "718dd826aafe7c3e38dfe53226220603")
+            signature: hex!([
+                "385a2eee61b2a0ef463251e8f0301389",
+                "c3a334a0146bc6f2cb9b35938d9c16ba",
+                "99223a651e963fab86e64e02484e49b5",
+                "718dd826aafe7c3e38dfe53226220603"
+            ])
             .to_vec(),
         };
         let last_root = hex!("1a7ff40e291a276bdcb63d97fe363edfc1c209971e06a806b82d16cbdcb38611");

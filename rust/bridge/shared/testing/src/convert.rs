@@ -196,11 +196,12 @@ struct CustomErrorType;
 #[cfg(feature = "jni")]
 impl From<CustomErrorType> for crate::jni::SignalJniError {
     fn from(CustomErrorType: CustomErrorType) -> Self {
-        Self::TestingError {
+        crate::jni::TestingError {
             exception_class: crate::jni::ClassName(
                 "org.signal.libsignal.internal.TestingException",
             ),
         }
+        .into()
     }
 }
 
@@ -215,6 +216,12 @@ fn TESTING_ReturnStringArray() -> Box<[String]> {
         .map(String::from)
         .into_iter()
         .collect()
+}
+
+#[allow(clippy::boxed_local)] // &[String] isn't supported for bridging (yet).
+#[bridge_fn(ffi = false)]
+fn TESTING_JoinStringArray(array: Box<[String]>, join_with: String) -> String {
+    array.join(&join_with)
 }
 
 #[bridge_fn]

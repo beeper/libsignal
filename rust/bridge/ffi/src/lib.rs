@@ -14,6 +14,7 @@ use libsignal_bridge::ffi::*;
 #[cfg(feature = "libsignal-bridge-testing")]
 #[allow(unused_imports)]
 use libsignal_bridge_testing::*;
+use libsignal_core::try_scoped;
 use libsignal_protocol::*;
 
 pub mod logging;
@@ -68,10 +69,10 @@ pub unsafe extern "C" fn signal_error_get_message(
     err: *const SignalFfiError,
     out: *mut *const c_char,
 ) -> *mut SignalFfiError {
-    let result = (|| {
+    let result = try_scoped(|| {
         let err = err.as_ref().ok_or(NullPointerError)?;
         write_result_to(out, err.to_string())
-    })();
+    });
 
     match result {
         Ok(()) => std::ptr::null_mut(),
@@ -254,6 +255,37 @@ pub unsafe extern "C" fn signal_sealed_session_cipher_decrypt(
         write_result_to(sender_uuid, decrypted.sender_uuid)?;
         write_result_to(sender_device_id, u32::from(decrypted.device_id))?;
         write_result_to(out, decrypted.message)?;
+        Ok(())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_hex_encode(
+    output: *mut c_char,
+    output_len: usize,
+    input: *const u8,
+    input_len: usize,
+) -> *mut SignalFfiError {
+    run_ffi_safe(|| {
+        if input_len == 0 {
+            return Ok(());
+        }
+        if input_len > output_len / 2 {
+            // We check this early because an output buffer of {NULL, 0} is *valid*, just too small
+            // for anything but a zero-length input, while std::slice::from_raw_parts_mut requires a
+            // non-null base pointer.
+            return Err(SignalProtocolError::InvalidArgument(
+                "output buffer too small".to_string(),
+            )
+            .into());
+        }
+        if input.is_null() || output.is_null() {
+            return Err(NullPointerError.into());
+        }
+        let output = std::slice::from_raw_parts_mut(output, output_len);
+        let output = zerocopy::IntoBytes::as_mut_bytes(output);
+        let input = std::slice::from_raw_parts(input, input_len);
+        hex::encode_to_slice(input, output).expect("checked above");
         Ok(())
     })
 }

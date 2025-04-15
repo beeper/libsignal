@@ -170,8 +170,8 @@ extension SignalConstPointerServerMessageAck: SignalConstPointer {
     }
 }
 
-internal final class UnauthConnectionEventsListenerBridge {
-    private weak var chatConnection: UnauthenticatedChatConnection?
+internal class UnauthConnectionEventsListenerBridge {
+    internal weak var chatConnection: UnauthenticatedChatConnection?
     private let chatListener: any ConnectionEventsListener<UnauthenticatedChatConnection>
 
     init(
@@ -182,19 +182,30 @@ internal final class UnauthConnectionEventsListenerBridge {
         self.chatListener = listener
     }
 
+    internal init(
+        chatConnectionEventsListenerForTesting chatListener: any ConnectionEventsListener<UnauthenticatedChatConnection>
+    ) {
+        self.chatListener = chatListener
+    }
+
     /// Creates an **owned** callback struct from this object.
     ///
     /// The resulting struct must eventually have its `destroy` callback invoked with its `ctx` as argument,
     /// or the ChatListenerBridge object used to construct it (`self`) will be leaked.
     func makeListenerStruct() -> SignalFfiChatListenerStruct {
         let receivedIncomingMessage: SignalReceivedIncomingMessage = { _, _, _, _ in
-            fatalError("not used for the unauth listener")
+            // Not used in the unauth chat listener
+            LoggerBridge.shared?.logger.log(level: .error, file: #fileID, line: #line, message: "unauth socket received an incoming request")
         }
         let receivedQueueEmpty: SignalReceivedQueueEmpty = { _ in
-            fatalError("not used for the unauth listener")
+            // Not used in the unauth chat listener
+            LoggerBridge.shared?.logger.log(level: .error, file: #fileID, line: #line, message: "unauth socket received a \"queue empty\" notification")
         }
-        let receivedAlerts: SignalReceivedAlerts = { _, _ in
-            fatalError("not used for the unauth listener")
+        let receivedAlerts: SignalReceivedAlerts = { _, alerts in
+            // Not used in the unauth chat listener
+            if alerts.lengths.length != 0 {
+                LoggerBridge.shared?.logger.log(level: .error, file: #fileID, line: #line, message: "unauth socket received \(alerts.lengths.length) alerts")
+            }
         }
         let connectionInterrupted: SignalConnectionInterrupted = { rawCtx, maybeError in
             let bridge = Unmanaged<UnauthConnectionEventsListenerBridge>.fromOpaque(rawCtx!)

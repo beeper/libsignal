@@ -1,13 +1,13 @@
-v0.67.4
+v0.70.0
 
-- Android and iOS: ChatConnectionListener has a new optional callback for server alerts.
-  (Already added for Node in v0.67.2.)
+- Resuming an existing registration session now requires the phone number with for which the session was created.
 
-- Net.preconnectChat will start the connection process for an authenticated chat connection
-  without needing a username and password ready.
+- Make the registration service client available in Java.
 
-- Rust: Update some dependencies (including boring) to the lastest compatible versions.
+- Enable registering an account via the Node registration service client.
 
-- Net: Harmonized WebSocket PING interval with the client keep-alive interval to conserve resources.
+- Java, Node, Swift: remove items marked as deprecated. This includes functions related to CDSI, HKDF, message backup validation, media sanitization, incremental MACs, and usernames.
 
-- Completely remove SVR3 support
+- Android: Build with NDK 28, the latest stable.
+
+- backups: Validate NotificationProfile::id

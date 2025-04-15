@@ -130,6 +130,30 @@ type ChatListener = {
   ): void;
 };
 
+type RegistrationSessionRequestedInformation = 'pushChallenge' | 'captcha';
+
+type RegistrationPushTokenType = 'apn' | 'fcm';
+
+type RegistrationCreateSessionRequest = {
+  number: string;
+  push_token?: string;
+  push_token_type?: RegistrationPushTokenType;
+  mcc?: string;
+  mnc?: string;
+};
+
+type RegisterResponseBadge = {
+  id: string;
+  visible: boolean;
+  expirationSeconds: number;
+};
+
+type SignedPublicPreKey = {
+  keyId: number;
+  publicKey: Buffer;
+  signature: Buffer;
+};
+
 type Wrapper<T> = Readonly<{
   _nativeHandle: T;
 }>;
@@ -193,6 +217,8 @@ export function BackupKey_DeriveLocalBackupMetadataKey(backupKey: Buffer): Buffe
 export function BackupKey_DeriveMediaEncryptionKey(backupKey: Buffer, mediaId: Buffer): Buffer;
 export function BackupKey_DeriveMediaId(backupKey: Buffer, mediaName: string): Buffer;
 export function BackupKey_DeriveThumbnailTransitEncryptionKey(backupKey: Buffer, mediaId: Buffer): Buffer;
+export function BridgedStringMap_insert(map: Wrapper<BridgedStringMap>, key: string, value: string): void;
+export function BridgedStringMap_new(initialCapacity: number): BridgedStringMap;
 export function CallLinkAuthCredentialPresentation_CheckValidContents(presentationBytes: Buffer): void;
 export function CallLinkAuthCredentialPresentation_GetUserId(presentationBytes: Buffer): Serialized<UuidCiphertext>;
 export function CallLinkAuthCredentialPresentation_Verify(presentationBytes: Buffer, now: Timestamp, serverParamsBytes: Buffer, callLinkParamsBytes: Buffer): void;
@@ -205,11 +231,11 @@ export function CallLinkPublicParams_CheckValidContents(paramsBytes: Buffer): vo
 export function CallLinkSecretParams_CheckValidContents(paramsBytes: Buffer): void;
 export function CallLinkSecretParams_DecryptUserId(paramsBytes: Buffer, userId: Serialized<UuidCiphertext>): Buffer;
 export function CallLinkSecretParams_DeriveFromRootKey(rootKey: Buffer): Buffer;
+export function CallLinkSecretParams_EncryptUserId(paramsBytes: Buffer, userId: Buffer): Serialized<UuidCiphertext>;
 export function CallLinkSecretParams_GetPublicParams(paramsBytes: Buffer): Buffer;
 export function Cds2ClientState_New(mrenclave: Buffer, attestationMsg: Buffer, currentTimestamp: Timestamp): SgxClientState;
 export function CdsiLookup_complete(asyncRuntime: Wrapper<TokioAsyncContext>, lookup: Wrapper<CdsiLookup>): CancellablePromise<LookupResponse>;
 export function CdsiLookup_new(asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>, username: string, password: string, request: Wrapper<LookupRequest>): CancellablePromise<CdsiLookup>;
-export function CdsiLookup_new_routes(asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>, username: string, password: string, request: Wrapper<LookupRequest>): CancellablePromise<CdsiLookup>;
 export function CdsiLookup_token(lookup: Wrapper<CdsiLookup>): Buffer;
 export function ChatConnectionInfo_description(connectionInfo: Wrapper<ChatConnectionInfo>): string;
 export function ChatConnectionInfo_ip_version(connectionInfo: Wrapper<ChatConnectionInfo>): number;
@@ -221,12 +247,13 @@ export function ComparableBackup_GetComparableString(backup: Wrapper<ComparableB
 export function ComparableBackup_GetUnknownFields(backup: Wrapper<ComparableBackup>): string[];
 export function ComparableBackup_ReadUnencrypted(stream: InputStream, len: bigint, purpose: number): Promise<ComparableBackup>;
 export function ConnectionManager_clear_proxy(connectionManager: Wrapper<ConnectionManager>): void;
-export function ConnectionManager_new(environment: number, userAgent: string): ConnectionManager;
+export function ConnectionManager_new(environment: number, userAgent: string, remoteConfig: Wrapper<BridgedStringMap>): ConnectionManager;
 export function ConnectionManager_on_network_change(connectionManager: Wrapper<ConnectionManager>): void;
 export function ConnectionManager_set_censorship_circumvention_enabled(connectionManager: Wrapper<ConnectionManager>, enabled: boolean): void;
 export function ConnectionManager_set_invalid_proxy(connectionManager: Wrapper<ConnectionManager>): void;
 export function ConnectionManager_set_ipv6_enabled(connectionManager: Wrapper<ConnectionManager>, ipv6Enabled: boolean): void;
 export function ConnectionManager_set_proxy(connectionManager: Wrapper<ConnectionManager>, proxy: Wrapper<ConnectionProxyConfig>): void;
+export function ConnectionManager_set_remote_config(connectionManager: Wrapper<ConnectionManager>, remoteConfig: Wrapper<BridgedStringMap>): void;
 export function ConnectionProxyConfig_new(scheme: string, host: string, port: number, username: string | null, password: string | null): ConnectionProxyConfig;
 export function CreateCallLinkCredentialPresentation_CheckValidContents(presentationBytes: Buffer): void;
 export function CreateCallLinkCredentialPresentation_Verify(presentationBytes: Buffer, roomId: Buffer, now: Timestamp, serverParamsBytes: Buffer, callLinkParamsBytes: Buffer): void;
@@ -276,6 +303,7 @@ export function GroupSecretParams_GetMasterKey(params: Serialized<GroupSecretPar
 export function GroupSecretParams_GetPublicParams(params: Serialized<GroupSecretParams>): Serialized<GroupPublicParams>;
 export function GroupSendDerivedKeyPair_CheckValidContents(bytes: Buffer): void;
 export function GroupSendDerivedKeyPair_ForExpiration(expiration: Timestamp, serverParams: Wrapper<ServerSecretParams>): Buffer;
+export function GroupSendEndorsement_CallLinkParams_ToToken(endorsement: Buffer, callLinkSecretParamsSerialized: Buffer): Buffer;
 export function GroupSendEndorsement_CheckValidContents(bytes: Buffer): void;
 export function GroupSendEndorsement_Combine(endorsements: Buffer[]): Buffer;
 export function GroupSendEndorsement_Remove(endorsement: Buffer, toRemove: Buffer): Buffer;
@@ -330,7 +358,6 @@ export function LookupRequest_new(): LookupRequest;
 export function LookupRequest_setToken(request: Wrapper<LookupRequest>, token: Buffer): void;
 export function MessageBackupKey_FromAccountEntropyPool(accountEntropy: AccountEntropyPool, aci: Buffer): MessageBackupKey;
 export function MessageBackupKey_FromBackupKeyAndBackupId(backupKey: Buffer, backupId: Buffer): MessageBackupKey;
-export function MessageBackupKey_FromMasterKey(masterKey: Buffer, aci: Buffer): MessageBackupKey;
 export function MessageBackupKey_GetAesKey(key: Wrapper<MessageBackupKey>): Buffer;
 export function MessageBackupKey_GetHmacKey(key: Wrapper<MessageBackupKey>): Buffer;
 export function MessageBackupValidator_Validate(key: Wrapper<MessageBackupKey>, firstStream: InputStream, secondStream: InputStream, len: bigint, purpose: number): Promise<MessageBackupValidationOutcome>;
@@ -406,6 +433,38 @@ export function ReceiptCredentialResponse_CheckValidContents(buffer: Buffer): vo
 export function ReceiptCredential_CheckValidContents(buffer: Buffer): void;
 export function ReceiptCredential_GetReceiptExpirationTime(receiptCredential: Serialized<ReceiptCredential>): Timestamp;
 export function ReceiptCredential_GetReceiptLevel(receiptCredential: Serialized<ReceiptCredential>): bigint;
+export function RegisterAccountRequest_Create(): RegisterAccountRequest;
+export function RegisterAccountRequest_SetAccountPassword(registerAccount: Wrapper<RegisterAccountRequest>, accountPassword: Buffer): void;
+export function RegisterAccountRequest_SetIdentityPqLastResortPreKey(registerAccount: Wrapper<RegisterAccountRequest>, identityType: number, pqLastResortPreKey: SignedPublicPreKey): void;
+export function RegisterAccountRequest_SetIdentityPublicKey(registerAccount: Wrapper<RegisterAccountRequest>, identityType: number, identityKey: Wrapper<PublicKey>): void;
+export function RegisterAccountRequest_SetIdentitySignedPreKey(registerAccount: Wrapper<RegisterAccountRequest>, identityType: number, signedPreKey: SignedPublicPreKey): void;
+export function RegisterAccountRequest_SetSkipDeviceTransfer(registerAccount: Wrapper<RegisterAccountRequest>): void;
+export function RegisterAccountResponse_GetEntitlementBackupExpirationSeconds(response: Wrapper<RegisterAccountResponse>): bigint | null;
+export function RegisterAccountResponse_GetEntitlementBackupLevel(response: Wrapper<RegisterAccountResponse>): bigint | null;
+export function RegisterAccountResponse_GetEntitlementBadges(response: Wrapper<RegisterAccountResponse>): RegisterResponseBadge[];
+export function RegisterAccountResponse_GetIdentity(response: Wrapper<RegisterAccountResponse>, identityType: number): Buffer;
+export function RegisterAccountResponse_GetNumber(response: Wrapper<RegisterAccountResponse>): string;
+export function RegisterAccountResponse_GetReregistration(response: Wrapper<RegisterAccountResponse>): boolean;
+export function RegisterAccountResponse_GetStorageCapable(response: Wrapper<RegisterAccountResponse>): boolean;
+export function RegisterAccountResponse_GetUsernameHash(response: Wrapper<RegisterAccountResponse>): Buffer | null;
+export function RegisterAccountResponse_GetUsernameLinkHandle(response: Wrapper<RegisterAccountResponse>): Uuid | null;
+export function RegistrationAccountAttributes_Create(recoveryPassword: Buffer, aciRegistrationId: number, pniRegistrationId: number, registrationLock: string | null, unidentifiedAccessKey: Buffer | null, unrestrictedUnidentifiedAccess: boolean, capabilities: string[], discoverableByPhoneNumber: boolean): RegistrationAccountAttributes;
+export function RegistrationService_CreateSession(asyncRuntime: Wrapper<TokioAsyncContext>, createSession: RegistrationCreateSessionRequest, connectChat: ConnectChatBridge): CancellablePromise<RegistrationService>;
+export function RegistrationService_RegisterAccount(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, registerAccount: Wrapper<RegisterAccountRequest>, accountAttributes: Wrapper<RegistrationAccountAttributes>): CancellablePromise<RegisterAccountResponse>;
+export function RegistrationService_RegistrationSession(service: Wrapper<RegistrationService>): RegistrationSession;
+export function RegistrationService_RequestPushChallenge(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, pushToken: string, pushTokenType: RegistrationPushTokenType): CancellablePromise<void>;
+export function RegistrationService_RequestVerificationCode(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, transport: string, client: string, languages: string[]): CancellablePromise<void>;
+export function RegistrationService_ResumeSession(asyncRuntime: Wrapper<TokioAsyncContext>, sessionId: string, number: string, connectChat: ConnectChatBridge): CancellablePromise<RegistrationService>;
+export function RegistrationService_SessionId(service: Wrapper<RegistrationService>): string;
+export function RegistrationService_SubmitCaptcha(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, captchaValue: string): CancellablePromise<void>;
+export function RegistrationService_SubmitPushChallenge(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, pushChallenge: string): CancellablePromise<void>;
+export function RegistrationService_SubmitVerificationCode(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, code: string): CancellablePromise<void>;
+export function RegistrationSession_GetAllowedToRequestCode(session: Wrapper<RegistrationSession>): boolean;
+export function RegistrationSession_GetNextCallSeconds(session: Wrapper<RegistrationSession>): number | null;
+export function RegistrationSession_GetNextSmsSeconds(session: Wrapper<RegistrationSession>): number | null;
+export function RegistrationSession_GetNextVerificationAttemptSeconds(session: Wrapper<RegistrationSession>): number | null;
+export function RegistrationSession_GetRequestedInformation(session: Wrapper<RegistrationSession>): RegistrationSessionRequestedInformation[];
+export function RegistrationSession_GetVerified(session: Wrapper<RegistrationSession>): boolean;
 export function SanitizedMetadata_GetDataLen(sanitized: Wrapper<SanitizedMetadata>): bigint;
 export function SanitizedMetadata_GetDataOffset(sanitized: Wrapper<SanitizedMetadata>): bigint;
 export function SanitizedMetadata_GetMetadata(sanitized: Wrapper<SanitizedMetadata>): Buffer;
@@ -518,10 +577,12 @@ export function SignedPreKeyRecord_GetSignature(obj: Wrapper<SignedPreKeyRecord>
 export function SignedPreKeyRecord_GetTimestamp(obj: Wrapper<SignedPreKeyRecord>): Timestamp;
 export function SignedPreKeyRecord_New(id: number, timestamp: Timestamp, pubKey: Wrapper<PublicKey>, privKey: Wrapper<PrivateKey>, signature: Buffer): SignedPreKeyRecord;
 export function SignedPreKeyRecord_Serialize(obj: Wrapper<SignedPreKeyRecord>): Buffer;
+export function TESTING_BridgedStringMap_dump_to_json(map: Wrapper<BridgedStringMap>): string;
 export function TESTING_CdsiLookupErrorConvert(errorDescription: string): void;
 export function TESTING_CdsiLookupResponseConvert(asyncRuntime: Wrapper<TokioAsyncContext>): CancellablePromise<LookupResponse>;
 export function TESTING_ChatConnectErrorConvert(errorDescription: string): void;
 export function TESTING_ChatRequestGetBody(request: Wrapper<HttpRequest>): Buffer;
+export function TESTING_ChatRequestGetHeaderNames(request: Wrapper<HttpRequest>): string[];
 export function TESTING_ChatRequestGetHeaderValue(request: Wrapper<HttpRequest>, headerName: string): string;
 export function TESTING_ChatRequestGetMethod(request: Wrapper<HttpRequest>): string;
 export function TESTING_ChatRequestGetPath(request: Wrapper<HttpRequest>): string;
@@ -538,17 +599,24 @@ export function TESTING_ErrorOnReturnSync(_needsCleanup: null): null;
 export function TESTING_FakeChatConnection_Create(tokio: Wrapper<TokioAsyncContext>, listener: ChatListener, alertsJoinedByNewlines: string): FakeChatConnection;
 export function TESTING_FakeChatConnection_TakeAuthenticatedChat(chat: Wrapper<FakeChatConnection>): AuthenticatedChatConnection;
 export function TESTING_FakeChatConnection_TakeRemote(chat: Wrapper<FakeChatConnection>): FakeChatRemoteEnd;
+export function TESTING_FakeChatConnection_TakeUnauthenticatedChat(chat: Wrapper<FakeChatConnection>): UnauthenticatedChatConnection;
 export function TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted(chat: Wrapper<FakeChatRemoteEnd>): void;
 export function TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<FakeChatRemoteEnd>): CancellablePromise<FakeChatSentRequest | null>;
 export function TESTING_FakeChatRemoteEnd_SendRawServerRequest(chat: Wrapper<FakeChatRemoteEnd>, bytes: Buffer): void;
 export function TESTING_FakeChatRemoteEnd_SendRawServerResponse(chat: Wrapper<FakeChatRemoteEnd>, bytes: Buffer): void;
+export function TESTING_FakeChatRemoteEnd_SendServerResponse(chat: Wrapper<FakeChatRemoteEnd>, response: Wrapper<FakeChatResponse>): void;
+export function TESTING_FakeChatResponse_Create(id: bigint, status: number, message: string, headers: string[], body: Buffer | null): FakeChatResponse;
 export function TESTING_FakeChatSentRequest_RequestId(request: Wrapper<FakeChatSentRequest>): bigint;
 export function TESTING_FakeChatSentRequest_TakeHttpRequest(request: Wrapper<FakeChatSentRequest>): HttpRequest;
+export function TESTING_FakeChatServer_Create(): FakeChatServer;
+export function TESTING_FakeChatServer_GetNextRemote(asyncRuntime: Wrapper<TokioAsyncContext>, server: Wrapper<FakeChatServer>): CancellablePromise<FakeChatRemoteEnd>;
+export function TESTING_FakeRegistrationSession_CreateSession(asyncRuntime: Wrapper<TokioAsyncContext>, createSession: RegistrationCreateSessionRequest, chat: Wrapper<FakeChatServer>): CancellablePromise<RegistrationService>;
 export function TESTING_FutureFailure(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _input: number): CancellablePromise<number>;
 export function TESTING_FutureProducesOtherPointerType(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, input: string): CancellablePromise<OtherTestingHandleType>;
 export function TESTING_FutureProducesPointerType(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, input: number): CancellablePromise<TestingHandleType>;
 export function TESTING_FutureSuccess(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, input: number): CancellablePromise<number>;
 export function TESTING_InputStreamReadIntoZeroLengthSlice(capsAlphabetInput: InputStream): Promise<Buffer>;
+export function TESTING_JoinStringArray(array: string[], joinWith: string): string;
 export function TESTING_NonSuspendingBackgroundThreadRuntime_New(): NonSuspendingBackgroundThreadRuntime;
 export function TESTING_OnlyCompletesByCancellation(asyncRuntime: Wrapper<TokioAsyncContext>): CancellablePromise<void>;
 export function TESTING_OtherTestingHandleType_getValue(handle: Wrapper<OtherTestingHandleType>): string;
@@ -565,6 +633,12 @@ export function TESTING_PanicOnReturnAsync(_needsCleanup: null): Promise<null>;
 export function TESTING_PanicOnReturnIo(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _needsCleanup: null): CancellablePromise<null>;
 export function TESTING_PanicOnReturnSync(_needsCleanup: null): null;
 export function TESTING_ProcessBytestringArray(input: Buffer[]): Buffer[];
+export function TESTING_RegistrationService_CreateSessionErrorConvert(errorDescription: string): void;
+export function TESTING_RegistrationService_RequestVerificationCodeErrorConvert(errorDescription: string): void;
+export function TESTING_RegistrationService_ResumeSessionErrorConvert(errorDescription: string): void;
+export function TESTING_RegistrationService_SubmitVerificationErrorConvert(errorDescription: string): void;
+export function TESTING_RegistrationService_UpdateSessionErrorConvert(errorDescription: string): void;
+export function TESTING_RegistrationSessionInfoConvert(): RegistrationSession;
 export function TESTING_ReturnStringArray(): string[];
 export function TESTING_RoundTripI32(input: number): number;
 export function TESTING_RoundTripU16(input: number): number;
@@ -604,6 +678,7 @@ export function initLogger(maxLevel: LogLevel, callback: (level: LogLevel, targe
 export function test_only_fn_returns_123(): number;
 interface Aes256GcmSiv { readonly __type: unique symbol; }
 interface AuthenticatedChatConnection { readonly __type: unique symbol; }
+interface BridgedStringMap { readonly __type: unique symbol; }
 interface CdsiLookup { readonly __type: unique symbol; }
 interface ChatConnectionInfo { readonly __type: unique symbol; }
 interface CiphertextMessage { readonly __type: unique symbol; }
@@ -616,7 +691,9 @@ interface ExpiringProfileKeyCredential { readonly __type: unique symbol; }
 interface ExpiringProfileKeyCredentialResponse { readonly __type: unique symbol; }
 interface FakeChatConnection { readonly __type: unique symbol; }
 interface FakeChatRemoteEnd { readonly __type: unique symbol; }
+interface FakeChatResponse { readonly __type: unique symbol; }
 interface FakeChatSentRequest { readonly __type: unique symbol; }
+interface FakeChatServer { readonly __type: unique symbol; }
 interface Fingerprint { readonly __type: unique symbol; }
 interface GroupMasterKey { readonly __type: unique symbol; }
 interface GroupPublicParams { readonly __type: unique symbol; }
@@ -650,6 +727,11 @@ interface ReceiptCredentialPresentation { readonly __type: unique symbol; }
 interface ReceiptCredentialRequest { readonly __type: unique symbol; }
 interface ReceiptCredentialRequestContext { readonly __type: unique symbol; }
 interface ReceiptCredentialResponse { readonly __type: unique symbol; }
+interface RegisterAccountRequest { readonly __type: unique symbol; }
+interface RegisterAccountResponse { readonly __type: unique symbol; }
+interface RegistrationAccountAttributes { readonly __type: unique symbol; }
+interface RegistrationService { readonly __type: unique symbol; }
+interface RegistrationSession { readonly __type: unique symbol; }
 interface SanitizedMetadata { readonly __type: unique symbol; }
 interface SealedSenderDecryptionResult { readonly __type: unique symbol; }
 interface SenderCertificate { readonly __type: unique symbol; }

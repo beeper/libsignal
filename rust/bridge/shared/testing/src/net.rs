@@ -10,6 +10,7 @@ use libsignal_bridge_types::net::chat::ServerMessageAck;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
 use libsignal_core::E164;
 use libsignal_net::cdsi::{CdsiProtocolError, LookupError, LookupResponse, LookupResponseEntry};
+use libsignal_net::infra::errors::RetryLater;
 use libsignal_net::infra::ws2::attested::AttestedProtocolError;
 use libsignal_protocol::{Aci, Pni};
 use nonzero_ext::nonzero;
@@ -18,6 +19,7 @@ use uuid::Uuid;
 use crate::*;
 
 pub mod chat;
+pub mod registration;
 
 #[bridge_io(TokioAsyncContext)]
 async fn TESTING_CdsiLookupResponseConvert() -> LookupResponse {
@@ -121,9 +123,9 @@ fn TESTING_CdsiLookupErrorConvert(
             })
         }
         TestingCdsiLookupError::InvalidResponse => LookupError::InvalidResponse,
-        TestingCdsiLookupError::RetryAfter42Seconds => LookupError::RateLimited {
+        TestingCdsiLookupError::RetryAfter42Seconds => LookupError::RateLimited(RetryLater {
             retry_after_seconds: 42,
-        },
+        }),
         TestingCdsiLookupError::InvalidToken => LookupError::InvalidToken,
         TestingCdsiLookupError::InvalidArgument => LookupError::InvalidArgument {
             server_reason: "fake reason".into(),
@@ -160,7 +162,7 @@ fn TESTING_ConnectionManager_newLocalOverride(
     };
 
     let env = net_env::localhost_test_env_with_ports(ports, rootCertificateDer);
-    ConnectionManager::new_from_static_environment(env, userAgent.as_str())
+    ConnectionManager::new_from_static_environment(env, userAgent.as_str(), Default::default())
 }
 
 #[bridge_fn]

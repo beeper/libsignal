@@ -61,7 +61,7 @@ pub(crate) struct CustomClaims<'a> {
 // oe_custom_claims_header_t
 //     uint64_t version;
 //     uint64_t num_claims;
-#[derive(zerocopy::FromBytes, zerocopy::FromZeroes)]
+#[derive(zerocopy::FromBytes)]
 #[repr(C)]
 #[allow(dead_code)] // incorrectly identified as never constructed
 struct CustomClaimsHeader {
@@ -74,7 +74,7 @@ struct CustomClaimsHeader {
 //     uint8_t name[];
 //       // name_size bytes follow.
 //       // value_size_bytes follow.
-#[derive(zerocopy::FromBytes, zerocopy::FromZeroes)]
+#[derive(zerocopy::FromBytes)]
 #[repr(C)]
 #[allow(dead_code)] // incorrectly identified as never constructed
 struct CustomClaimsEntryHeader {
@@ -156,7 +156,7 @@ impl CustomClaims<'_> {
 
 #[cfg(test)]
 mod test {
-    use hex_literal::hex;
+    use const_str::hex;
 
     use super::*;
     use crate::dcap::MREnclave;

@@ -19,19 +19,19 @@ attest = { workspace = true }
 libsignal-core = { workspace = true }
 libsignal-keytrans = { workspace = true }
 libsignal-protocol = { workspace = true }
+zkgroup = { workspace = true }
 
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
-const-str = { workspace = true, features = ["std"] }
+const-str = { workspace = true }
 derive-where = { workspace = true }
-derive_more = { workspace = true, features = ["from"] }
+derive_more = { workspace = true, features = ["debug", "from"] }
 displaydoc = { workspace = true }
 either = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
-hex-literal = { workspace = true }
 hmac = { workspace = true }
 http = { workspace = true }
 itertools = { workspace = true }
@@ -47,6 +47,7 @@ rustls-platform-verifier = { workspace = true }
 scopeguard = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_with = { workspace = true, features = ["base64"] }
 sha2 = { workspace = true }
 snow = { workspace = true }
 static_assertions = { workspace = true }
@@ -58,7 +59,7 @@ tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true, features = ["url"] }
 url = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 visibility = { workspace = true }
 zerocopy = { workspace = true }
 
@@ -70,9 +71,10 @@ libsignal-net = { path = ".", features = ["test-util"] }
 libsignal-net-infra = { path = "infra", features = ["test-util"] }
 
 assert_matches = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
 env_logger = { workspace = true }
-hex-literal = { workspace = true }
+pretty_assertions = { workspace = true }
+rand_chacha = { workspace = true }
 snow = { workspace = true, features = ["default-resolver"] }
 test-case = { workspace = true }
 test-log = { workspace = true }

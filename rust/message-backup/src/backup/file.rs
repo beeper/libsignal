@@ -9,12 +9,15 @@
 #![allow(clippy::manual_non_exhaustive)]
 
 use hex::ToHex as _;
+use serde_with::hex::Hex;
+use serde_with::serde_as;
 use uuid::Uuid;
 
 use crate::backup::time::{ReportUnusualTimestamp, Timestamp, TimestampError};
 use crate::backup::{serialize, TryFromWith, TryIntoWith};
 use crate::proto::backup as proto;
 
+#[serde_as]
 #[derive(Debug, serde::Serialize)]
 #[cfg_attr(test, derive(Default, PartialEq))]
 pub enum AttachmentLocator {
@@ -38,6 +41,19 @@ pub enum AttachmentLocator {
         #[serde(with = "hex")]
         digest: Vec<u8>,
         size: u32,
+    },
+    Local {
+        #[serde_as(as = "Option<Hex>")]
+        local_key: Option<Vec<u8>>,
+        #[serde(with = "hex")]
+        remote_key: Vec<u8>,
+        #[serde(with = "hex")]
+        remote_digest: Vec<u8>,
+        is_thumbnail: bool,
+        size: u32,
+        backup_cdn_number: Option<u32>,
+        transit_cdn_key: Option<String>,
+        transit_cdn_number: Option<u32>,
     },
     #[cfg_attr(test, default)]
     Invalid,
@@ -158,6 +174,52 @@ impl<C: ReportUnusualTimestamp + ?Sized> TryFromWith<proto::file_pointer::Locato
                     size,
                 })
             }
+            proto::file_pointer::Locator::LocalLocator(proto::file_pointer::LocalLocator {
+                mediaName,
+                localKey,
+                remoteKey,
+                remoteDigest,
+                size,
+                backupCdnNumber,
+                transitCdnKey,
+                transitCdnNumber,
+                special_fields: _,
+            }) => {
+                if mediaName.is_empty() {
+                    return Err(AttachmentLocatorError::MissingMediaName);
+                }
+                if remoteKey.is_empty() {
+                    return Err(AttachmentLocatorError::MissingKey);
+                }
+                if remoteDigest.is_empty() {
+                    return Err(AttachmentLocatorError::MissingDigest);
+                }
+                if transitCdnKey.is_some() != transitCdnNumber.is_some() {
+                    return Err(AttachmentLocatorError::TransitCdnMismatch);
+                }
+                if transitCdnKey.as_deref() == Some("") {
+                    return Err(AttachmentLocatorError::MissingTransitCdnKey);
+                }
+
+                let (is_thumbnail, media_name) = match mediaName.strip_suffix("_thumbnail") {
+                    Some(media_name) => (true, media_name),
+                    None => (false, &*mediaName),
+                };
+                if !media_name.eq_ignore_ascii_case(&remoteDigest.encode_hex::<String>()) {
+                    return Err(AttachmentLocatorError::InvalidMediaName);
+                }
+
+                Ok(Self::Local {
+                    local_key: localKey,
+                    remote_key: remoteKey,
+                    remote_digest: remoteDigest,
+                    is_thumbnail,
+                    size,
+                    backup_cdn_number: backupCdnNumber,
+                    transit_cdn_key: transitCdnKey,
+                    transit_cdn_number: transitCdnNumber,
+                })
+            }
             proto::file_pointer::Locator::InvalidAttachmentLocator(
                 proto::file_pointer::InvalidAttachmentLocator { special_fields: _ },
             ) => Ok(Self::Invalid),
@@ -165,12 +227,13 @@ impl<C: ReportUnusualTimestamp + ?Sized> TryFromWith<proto::file_pointer::Locato
     }
 }
 
+#[serde_as]
 #[derive(Debug, serde::Serialize)]
 #[cfg_attr(test, derive(Default, PartialEq))]
 pub struct FilePointer {
     pub locator: AttachmentLocator,
     pub content_type: Option<String>,
-    #[serde(serialize_with = "serialize::optional_hex")]
+    #[serde_as(as = "Option<Hex>")]
     pub incremental_mac: Option<Vec<u8>>,
     pub incremental_mac_chunk_size: Option<u32>,
     pub file_name: Option<String>,
@@ -239,11 +302,12 @@ impl<C: ReportUnusualTimestamp + ?Sized> TryFromWith<proto::FilePointer, C> for 
     }
 }
 
+#[serde_as]
 #[derive(Debug, serde::Serialize)]
 #[cfg_attr(test, derive(Default, PartialEq))]
 pub struct MessageAttachment {
     pub pointer: FilePointer,
-    #[serde(serialize_with = "serialize::enum_as_string")]
+    #[serde_as(as = "serialize::EnumAsString")]
     pub flag: proto::message_attachment::Flag,
     pub client_uuid: Option<Uuid>,
     #[serde(skip)]
@@ -296,7 +360,7 @@ impl<C: ReportUnusualTimestamp + ?Sized> TryFromWith<proto::MessageAttachment, C
 
 #[cfg(test)]
 mod test {
-    use hex_literal::hex;
+    use const_str::hex;
     use test_case::test_case;
 
     use super::*;
@@ -465,6 +529,47 @@ mod test {
         let mut pointer = proto::FilePointer::test_data();
         modifier(&mut pointer);
         FilePointer::try_from_with(pointer, &TestContext::default()).map(|_| ())
+    }
+
+    impl proto::file_pointer::LocalLocator {
+        fn test_data() -> Self {
+            Self {
+                mediaName: "5678".into(),
+                localKey: Some(hex!("1234").into()),
+                remoteKey: hex!("1234").into(),
+                remoteDigest: hex!("5678").into(),
+                size: 123,
+                backupCdnNumber: Some(3),
+                transitCdnKey: Some("ABCDEFG".into()),
+                transitCdnNumber: Some(2),
+                special_fields: Default::default(),
+            }
+        }
+    }
+    #[test_case(|_| {} => Ok(()); "valid")]
+    #[test_case(|x| x.mediaName = "".into() => Err(AttachmentLocatorError::MissingMediaName); "no mediaName")]
+    #[test_case(|x| x.mediaName = "1234".into() => Err(AttachmentLocatorError::InvalidMediaName); "invalid mediaName")]
+    #[test_case(|x| x.localKey = None => Ok(()); "localKey is allowed to be missing")]
+    #[test_case(|x| x.backupCdnNumber = None => Ok(()); "no backupCdnNumber")]
+    #[test_case(|x| x.remoteKey = vec![] => Err(AttachmentLocatorError::MissingKey); "no key")]
+    #[test_case(|x| x.remoteDigest = vec![] => Err(AttachmentLocatorError::MissingDigest); "no digest")]
+    #[test_case(|x| x.size = 0 => Ok(()); "size zero")]
+    #[test_case(|x| x.transitCdnKey = None => Err(AttachmentLocatorError::TransitCdnMismatch); "no transitCdnKey")]
+    #[test_case(|x| x.transitCdnKey = Some("".into()) => Err(AttachmentLocatorError::MissingTransitCdnKey); "empty transitCdnKey")]
+    #[test_case(|x| {
+        x.transitCdnKey = None;
+        x.transitCdnNumber = None;
+    } => Ok(()); "no transitCdn fields")]
+    fn local_locator(
+        modifier: impl FnOnce(&mut proto::file_pointer::LocalLocator),
+    ) -> Result<(), AttachmentLocatorError> {
+        let mut locator = proto::file_pointer::LocalLocator::test_data();
+        modifier(&mut locator);
+        AttachmentLocator::try_from_with(
+            proto::file_pointer::Locator::LocalLocator(locator),
+            &TestContext::default(),
+        )
+        .map(|_| ())
     }
 
     impl proto::MessageAttachment {

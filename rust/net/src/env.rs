@@ -9,8 +9,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
-use const_str::ip_addr;
-use hex_literal::hex;
+use const_str::{hex, ip_addr};
 use http::HeaderValue;
 use libsignal_keytrans::{DeploymentMode, PublicConfig, VerifyingKey, VrfPublicKey};
 use libsignal_net_infra::certs::RootCertificates;
@@ -34,6 +33,8 @@ use crate::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, SgxPreQua
 const DEFAULT_HTTPS_PORT: NonZeroU16 = nonzero!(443_u16);
 pub const TIMESTAMP_HEADER_NAME: &str = "x-signal-timestamp";
 pub(crate) const ALERT_HEADER_NAME: &str = "x-signal-alert";
+pub(crate) const CONNECTION_INVALIDATED_CLOSE_CODE: u16 = 4401;
+pub(crate) const CONNECTED_ELSEWHERE_CLOSE_CODE: u16 = 4409;
 
 const DOMAIN_CONFIG_CHAT: DomainConfig = DomainConfig {
     ip_v4: &[
@@ -173,7 +174,7 @@ pub const PROXY_CONFIG_G: ProxyConfig = ProxyConfig {
 };
 
 pub(crate) const ENDPOINT_PARAMS_CDSI_STAGING: EndpointParams<'static, Cdsi> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_STAGING_AND_PROD),
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI),
     raft_config: (),
 };
 
@@ -184,7 +185,7 @@ pub(crate) const ENDPOINT_PARAMS_SVR2_STAGING: EndpointParams<'static, SgxPreQua
     };
 
 pub(crate) const ENDPOINT_PARAMS_CDSI_PROD: EndpointParams<'static, Cdsi> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_STAGING_AND_PROD),
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_PREQUANTUM),
     raft_config: (),
 };
 pub(crate) const ENDPOINT_PARAMS_SVR2_PROD: EndpointParams<'static, SgxPreQuantum> =
@@ -199,6 +200,12 @@ pub(crate) const KEYTRANS_VRF_KEY_MATERIAL_STAGING: &[u8; 32] =
     &hex!("ec3a268237cf5c47115cf222405d5f90cc633ebe05caf82c0dd5acf9d341dadb");
 pub(crate) const KEYTRANS_AUDITOR_KEY_MATERIAL_STAGING: &[u8; 32] =
     &hex!("1123b13ee32479ae6af5739e5d687b51559abf7684120511f68cde7a21a0e755");
+
+pub(crate) const KEYTRANS_CONFIG_STAGING: KeyTransConfig = KeyTransConfig {
+    signing_key_material: KEYTRANS_SIGNING_KEY_MATERIAL_STAGING,
+    vrf_key_material: KEYTRANS_VRF_KEY_MATERIAL_STAGING,
+    auditor_key_material: KEYTRANS_AUDITOR_KEY_MATERIAL_STAGING,
+};
 
 /// Configuration for a target network resource, like `chat.signal.org`.
 #[derive(Clone)]
@@ -239,6 +246,7 @@ pub struct ConnectionProxyConfig {
     pub configs: [ProxyConfig; 2],
 }
 
+#[derive(Clone)]
 pub struct KeyTransConfig {
     pub signing_key_material: &'static [u8; 32],
     pub vrf_key_material: &'static [u8; 32],
@@ -499,11 +507,7 @@ pub const STAGING: Env<'static> = Env {
         domain_config: DOMAIN_CONFIG_SVR2_STAGING,
         params: ENDPOINT_PARAMS_SVR2_STAGING,
     },
-    keytrans_config: Some(KeyTransConfig {
-        signing_key_material: KEYTRANS_SIGNING_KEY_MATERIAL_STAGING,
-        vrf_key_material: KEYTRANS_VRF_KEY_MATERIAL_STAGING,
-        auditor_key_material: KEYTRANS_AUDITOR_KEY_MATERIAL_STAGING,
-    }),
+    keytrans_config: Some(KEYTRANS_CONFIG_STAGING),
 };
 
 pub const PROD: Env<'static> = Env {
@@ -535,7 +539,7 @@ mod test {
         HttpRouteFragment, HttpsTlsRoute, RouteProvider as _, TcpRoute, TlsRoute, TlsRouteFragment,
         UnresolvedHost,
     };
-    use libsignal_net_infra::utils::ObservableEvent;
+    use libsignal_net_infra::testutil::no_network_change_events;
     use libsignal_net_infra::Alpn;
     use test_case::test_matrix;
 
@@ -660,7 +664,7 @@ mod test {
         // The point of this test isn't to test the resolver, but to use it to test something else.
         // So, I directly access the raw CustomDnsResolver::resolve method.
         // Other usages should use the higher level DnsResolver::lookup instead.
-        let resolver = build_custom_resolver_cloudflare_doh(&ObservableEvent::new());
+        let resolver = build_custom_resolver_cloudflare_doh(&no_network_change_events());
 
         let (hostname, static_hardcoded_ips) = config.static_fallback();
 

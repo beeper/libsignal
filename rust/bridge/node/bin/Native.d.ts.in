@@ -130,6 +130,30 @@ type ChatListener = {
   ): void;
 };
 
+type RegistrationSessionRequestedInformation = 'pushChallenge' | 'captcha';
+
+type RegistrationPushTokenType = 'apn' | 'fcm';
+
+type RegistrationCreateSessionRequest = {
+  number: string;
+  push_token?: string;
+  push_token_type?: RegistrationPushTokenType;
+  mcc?: string;
+  mnc?: string;
+};
+
+type RegisterResponseBadge = {
+  id: string;
+  visible: boolean;
+  expirationSeconds: number;
+};
+
+type SignedPublicPreKey = {
+  keyId: number;
+  publicKey: Buffer;
+  signature: Buffer;
+};
+
 type Wrapper<T> = Readonly<{
   _nativeHandle: T;
 }>;

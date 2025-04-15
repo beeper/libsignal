@@ -58,6 +58,16 @@ public class UnidentifiedSenderMessageContent: NativeHandleOwner<SignalMutPointe
     }
 
     public convenience init<Bytes: ContiguousBytes>(
+        bytes: Bytes
+    ) throws {
+        var result = SignalMutPointerUnidentifiedSenderMessageContent()
+        try bytes.withUnsafeBorrowedBuffer {
+            try checkError(signal_unidentified_sender_message_content_deserialize(&result, $0))
+        }
+        self.init(owned: NonNull(result)!)
+    }
+
+    public convenience init<Bytes: ContiguousBytes>(
         message sealedSenderMessage: Bytes,
         identityStore: IdentityKeyStore,
         context: StoreContext
@@ -93,6 +103,32 @@ public class UnidentifiedSenderMessageContent: NativeHandleOwner<SignalMutPointe
                         contentHint.rawValue,
                         groupIdBuffer
                     ))
+            }
+        }
+        self.init(owned: NonNull(result)!)
+    }
+
+    public convenience init<MessageBytes: ContiguousBytes, GroupIdBytes: ContiguousBytes>(
+        _ message: MessageBytes,
+        type: CiphertextMessage.MessageType,
+        from sender: SenderCertificate,
+        contentHint: ContentHint,
+        groupId: GroupIdBytes
+    ) throws {
+        var result = SignalMutPointerUnidentifiedSenderMessageContent()
+        try message.withUnsafeBorrowedBuffer { messageBuffer in
+            try sender.withNativeHandle { senderHandle in
+                try groupId.withUnsafeBorrowedBuffer { groupIdBuffer in
+                    try checkError(
+                        signal_unidentified_sender_message_content_new_from_content_and_type(
+                            &result,
+                            messageBuffer,
+                            type.rawValue,
+                            senderHandle.const(),
+                            contentHint.rawValue,
+                            groupIdBuffer
+                        ))
+                }
             }
         }
         self.init(owned: NonNull(result)!)
@@ -156,6 +192,16 @@ public class UnidentifiedSenderMessageContent: NativeHandleOwner<SignalMutPointe
             }
         }
         return .init(rawValue: rawHint)
+    }
+
+    public func serialize() -> [UInt8] {
+        return withNativeHandle { nativeHandle in
+            failOnError {
+                try invokeFnReturningArray {
+                    signal_unidentified_sender_message_content_serialize($0, nativeHandle.const())
+                }
+            }
+        }
     }
 }
 

@@ -4,7 +4,7 @@
 //
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::hash::Hash;
 use std::pin::Pin;
@@ -22,6 +22,7 @@ use crate::dns::DnsError;
 use crate::route::{ResolveHostnames, ResolvedRoute, Resolver, TransportRoute, UsesTransport};
 use crate::utils::binary_heap::{MinKeyValueQueue, Queue};
 use crate::utils::future::SomeOrPending;
+use crate::utils::NetworkChangeEvent;
 
 /// Resolves routes with domain names to equivalent routes with IP addresses.
 ///
@@ -36,6 +37,15 @@ pub struct RouteResolver {
 pub trait RouteDelayPolicy<R> {
     /// Given a route, how much should it be delayed by?
     fn compute_delay(&self, route: &R, now: Instant) -> Duration;
+
+    /// Produces a future that completes when the RouteDelayPolicy wants to indicate that its
+    /// previous delays are no longer accurate.
+    ///
+    /// This future should be "cancel-safe"; if it's ready but not polled to completion, the next
+    /// call to `wants_recalculation` should produce a ready future immediately.
+    fn wants_recalculation(&mut self) -> impl Future<Output = ()> + '_ {
+        std::future::pending()
+    }
 }
 
 /// Metadata about a resolved route.
@@ -139,6 +149,32 @@ impl RouteResolver {
     }
 }
 
+#[derive(Default)]
+pub struct ScheduleStatus {
+    waiting_on_resolution: bool,
+    scheduled_route_count: usize,
+    scheduled_route_cooldown: Duration,
+}
+
+impl Display for ScheduleStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.waiting_on_resolution, self.scheduled_route_count) {
+            (false, 0) => write!(f, "no more routes"),
+            (false, count) => write!(
+                f,
+                "{count} route(s) delayed for another {:.2?}",
+                self.scheduled_route_cooldown
+            ),
+            (true, 0) => write!(f, "more routes waiting on DNS resolution"),
+            (true, count) => write!(
+                f,
+                "{count} route(s) delayed for {:.2?}, more waiting on DNS resolution",
+                self.scheduled_route_cooldown
+            ),
+        }
+    }
+}
+
 impl<S, R, SP> Schedule<S, R, SP>
 where
     S: FusedStream<Item = (ResolvedRoutes<R>, ResolveMeta)>,
@@ -179,6 +215,7 @@ where
         enum Event<T> {
             PulledFromResolver(T),
             ReturnNextIndividualRoute,
+            RecalculateDelays,
         }
 
         let mut resolver_stream =
@@ -201,6 +238,7 @@ where
             let event = tokio::select! {
                 () = SomeOrPending(next_from_individual_routes) => Event::ReturnNextIndividualRoute,
                 route = SomeOrPending(pull_from_resolver_if_not_terminated) => Event::PulledFromResolver(route),
+                () = scoring_policy.wants_recalculation() => Event::RecalculateDelays,
             };
 
             match event {
@@ -235,6 +273,17 @@ where
                     // queues are empty and we need to exit.
                     continue;
                 }
+                Event::RecalculateDelays => {
+                    let now = Instant::now();
+                    delayed_individual_routes.recalculate_keys(|key, route| {
+                        let delay = HAPPY_EYEBALLS_DELAY
+                            * u32::try_from(key.resolved_index).unwrap_or(u32::MAX)
+                            + scoring_policy.compute_delay(route, now);
+                        key.time = now + delay;
+                    });
+                    // Start over with our new delays.
+                    continue;
+                }
                 Event::ReturnNextIndividualRoute => {
                     let next = delayed_individual_routes
                         .pop()
@@ -242,6 +291,18 @@ where
                     return Some(next.1);
                 }
             }
+        }
+    }
+
+    pub fn status(&self) -> ScheduleStatus {
+        ScheduleStatus {
+            waiting_on_resolution: !self.resolver_stream.is_terminated(),
+            scheduled_route_count: self.delayed_individual_routes.len(),
+            scheduled_route_cooldown: self
+                .delayed_individual_routes
+                .peek()
+                .map(|(key, _)| key.time.saturating_duration_since(Instant::now()))
+                .unwrap_or_default(),
         }
     }
 }
@@ -265,6 +326,17 @@ impl<R: Hash + Eq + Clone> ConnectionOutcomes<R> {
             params,
             recent_failures: Default::default(),
         }
+    }
+
+    /// Configuration that stores no history, suitable for one-shot connections.
+    pub fn for_oneshot() -> Self {
+        Self::new(ConnectionOutcomeParams {
+            age_cutoff: Duration::ZERO,
+            cooldown_growth_factor: 0.0,
+            count_growth_factor: 0.0,
+            max_count: 0,
+            max_delay: Duration::ZERO,
+        })
     }
 
     /// Update the internal state with the results of completed connection attempts.
@@ -315,9 +387,12 @@ impl<R: Hash + Eq + Clone> ConnectionOutcomes<R> {
     }
 }
 
-impl<P: RouteDelayPolicy<R>, R> RouteDelayPolicy<R> for &P {
+impl<P: RouteDelayPolicy<R>, R> RouteDelayPolicy<R> for &mut P {
     fn compute_delay(&self, route: &R, now: Instant) -> Duration {
         P::compute_delay(self, route, now)
+    }
+    fn wants_recalculation(&mut self) -> impl Future<Output = ()> + '_ {
+        P::wants_recalculation(self)
     }
 }
 
@@ -349,7 +424,7 @@ impl ConnectionOutcomeParams {
     ///
     /// The implementation is based on exponential backoff with a scaling factor
     /// based on the amount of time since the last known failure.
-    fn compute_delay(
+    pub fn compute_delay(
         &self,
         since_last_failure: Duration,
         consecutive_failure_count: u8,
@@ -430,6 +505,49 @@ where
     fn compute_delay(&self, route: &R, now: Instant) -> Duration {
         self.0.compute_delay(route.transport_part(), now)
     }
+    fn wants_recalculation(&mut self) -> impl Future<Output = ()> + '_ {
+        self.0.wants_recalculation()
+    }
+}
+
+/// A wrapper around [`ConnectionOutcomes`] that turns into [`NoDelay`](super::NoDelay) on a
+/// [`NetworkChangeEvent`].
+pub struct ResettingConnectionOutcomes<R> {
+    outcomes: Option<ConnectionOutcomes<R>>,
+    reset_signal: NetworkChangeEvent,
+}
+
+impl<R> ResettingConnectionOutcomes<R> {
+    pub fn new(outcomes: ConnectionOutcomes<R>, reset_signal: &NetworkChangeEvent) -> Self {
+        Self {
+            outcomes: Some(outcomes),
+            reset_signal: reset_signal.clone(),
+        }
+    }
+}
+
+impl<R: Eq + Hash> RouteDelayPolicy<R> for ResettingConnectionOutcomes<R> {
+    fn compute_delay(&self, route: &R, now: Instant) -> Duration {
+        let Some(outcomes) = &self.outcomes else {
+            return Duration::ZERO;
+        };
+        outcomes.compute_delay(route, now)
+    }
+
+    async fn wants_recalculation(&mut self) {
+        if self.outcomes.is_none() {
+            // We only report that we want recalculation if anything would change.
+            () = std::future::pending().await;
+        }
+        match self.reset_signal.changed().await {
+            Ok(()) => {}
+            Err(_) => {
+                // If the sender for the reset signal dropped, we'll never want recalculation.
+                () = std::future::pending().await;
+            }
+        }
+        self.outcomes = None;
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -464,6 +582,7 @@ impl<S: FusedStream<Item = (A, B)>, A, B> FusedStream for SwapPairStream<S> {
     }
 }
 
+#[cfg_attr(feature = "test-util", visibility::make(pub))]
 const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(300);
 
 /// A group of resolved routes that came from the same unresolved route.

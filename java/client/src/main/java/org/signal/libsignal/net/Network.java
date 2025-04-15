@@ -8,11 +8,15 @@ package org.signal.libsignal.net;
 import static org.signal.libsignal.internal.FilterExceptions.filterExceptions;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
+import org.signal.libsignal.internal.BridgedStringMap;
 import org.signal.libsignal.internal.CompletableFuture;
 import org.signal.libsignal.internal.Native;
 import org.signal.libsignal.internal.NativeHandleGuard;
+import org.signal.libsignal.net.internal.ConnectChatBridge;
 
 public class Network {
   public enum Environment {
@@ -39,8 +43,12 @@ public class Network {
   private final ConnectionManager connectionManager;
 
   public Network(Environment env, String userAgent) {
+    this(env, userAgent, Collections.emptyMap());
+  }
+
+  public Network(Environment env, String userAgent, Map<String, String> remoteConfig) {
     this.tokioAsyncContext = new TokioAsyncContext();
-    this.connectionManager = new ConnectionManager(env, userAgent);
+    this.connectionManager = new ConnectionManager(env, userAgent, remoteConfig);
   }
 
   /**
@@ -131,6 +139,11 @@ public class Network {
     this.connectionManager.setCensorshipCircumventionEnabled(enabled);
   }
 
+  /** Updates the remote config settings used by libsignal. */
+  public void setRemoteConfig(Map<String, String> remoteConfig) {
+    this.connectionManager.setRemoteConfig(remoteConfig);
+  }
+
   /**
    * Notifies libsignal that the network has changed.
    *
@@ -143,17 +156,7 @@ public class Network {
   public CompletableFuture<CdsiLookupResponse> cdsiLookup(
       String username, String password, CdsiLookupRequest request, Consumer<byte[]> tokenConsumer)
       throws IOException, InterruptedException, ExecutionException {
-    return this.cdsiLookup(username, password, request, tokenConsumer, false);
-  }
-
-  public CompletableFuture<CdsiLookupResponse> cdsiLookup(
-      String username,
-      String password,
-      CdsiLookupRequest request,
-      Consumer<byte[]> tokenConsumer,
-      boolean useNewConnectLogic)
-      throws IOException, InterruptedException, ExecutionException {
-    return CdsiLookup.start(this, username, password, request, useNewConnectLogic)
+    return CdsiLookup.start(this, username, password, request)
         .thenCompose(
             (CdsiLookup lookup) -> {
               tokenConsumer.accept(lookup.getToken());
@@ -249,11 +252,14 @@ public class Network {
         tokioAsyncContext, connectionManager, username, password, receiveStories, listener);
   }
 
-  static class ConnectionManager extends NativeHandleGuard.SimpleOwner {
+  static class ConnectionManager extends NativeHandleGuard.SimpleOwner
+      implements ConnectChatBridge {
     private final Environment environment;
 
-    private ConnectionManager(Environment env, String userAgent) {
-      super(Native.ConnectionManager_new(env.value, userAgent));
+    private ConnectionManager(Environment env, String userAgent, Map<String, String> remoteConfig) {
+      super(
+          new BridgedStringMap(remoteConfig)
+              .guardedMap(map -> Native.ConnectionManager_new(env.value, userAgent, map)));
       this.environment = env;
     }
 
@@ -300,6 +306,17 @@ public class Network {
 
     private void setCensorshipCircumventionEnabled(boolean enabled) {
       guardedRun(h -> Native.ConnectionManager_set_censorship_circumvention_enabled(h, enabled));
+    }
+
+    private void setRemoteConfig(Map<String, String> remoteConfig) {
+      new BridgedStringMap(remoteConfig)
+          .guardedRun(
+              map -> this.guardedRun(h -> Native.ConnectionManager_set_remote_config(h, map)));
+    }
+
+    @Override
+    public long getConnectionManagerUnsafeNativeHandle() {
+      return unsafeNativeHandleWithoutGuard();
     }
 
     @Override

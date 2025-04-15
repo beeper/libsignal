@@ -11,13 +11,13 @@ use either::{for_both, Either};
 use libsignal_net::infra::certs::RootCertificates;
 use libsignal_net::infra::dns::custom_resolver::CustomDnsResolver;
 use libsignal_net::infra::dns::dns_lookup::{DnsLookup, DnsLookupRequest};
-use libsignal_net::infra::dns::dns_transport_doh::DohTransport;
-use libsignal_net::infra::dns::dns_transport_udp::UdpTransport;
 use libsignal_net::infra::host::Host;
-use libsignal_net::infra::utils::ObservableEvent;
+use libsignal_net_infra::dns::dns_transport_doh::DohTransportConnectorFactory;
+use libsignal_net_infra::dns::dns_transport_udp::UdpTransportConnectorFactory;
 use libsignal_net_infra::route::{
-    HttpRouteFragment, HttpsTlsRoute, TcpRoute, TlsRoute, TlsRouteFragment,
+    HttpRouteFragment, HttpsTlsRoute, TcpRoute, TlsRoute, TlsRouteFragment, UdpRoute,
 };
+use libsignal_net_infra::testutil::no_network_change_events;
 use libsignal_net_infra::Alpn;
 use nonzero_ext::nonzero;
 use tokio::time::Instant;
@@ -51,10 +51,14 @@ async fn main() {
 
     let custom_resolver = match args.transport {
         Transport::Udp => {
-            let ns_address = (HOST_IP, 53);
-            Either::Left(CustomDnsResolver::<UdpTransport>::new(
-                ns_address,
-                &ObservableEvent::default(),
+            let ns_address = UdpRoute {
+                address: HOST_IP,
+                port: nonzero!(53u16),
+            };
+            Either::Left(CustomDnsResolver::new(
+                vec![ns_address],
+                UdpTransportConnectorFactory,
+                &no_network_change_events(),
             ))
         }
         Transport::Doh => {
@@ -77,9 +81,10 @@ async fn main() {
                     },
                 },
             };
-            Either::Right(CustomDnsResolver::<DohTransport>::new(
+            Either::Right(CustomDnsResolver::new(
                 vec![target],
-                &ObservableEvent::default(),
+                DohTransportConnectorFactory,
+                &no_network_change_events(),
             ))
         }
     };

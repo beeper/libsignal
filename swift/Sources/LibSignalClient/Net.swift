@@ -26,9 +26,9 @@ public class Net {
     public static let signalTlsProxyScheme = "org.signal.tls"
 
     /// Creates a new `Net` instance that enables interacting with services in the given Signal environment.
-    public init(env: Environment, userAgent: String) {
+    public init(env: Environment, userAgent: String, remoteConfig: [String: String] = [:]) {
         self.asyncContext = TokioAsyncContext()
-        self.connectionManager = ConnectionManager(env: env, userAgent: userAgent)
+        self.connectionManager = ConnectionManager(env: env, userAgent: userAgent, remoteConfig: remoteConfig)
     }
 
     /// Sets the proxy host to be used for all new connections (until overridden).
@@ -102,6 +102,11 @@ public class Net {
         self.connectionManager.setCensorshipCircumventionEnabled(enabled)
     }
 
+    /// Updates the remote config settings used by libsignal.
+    public func setRemoteConfig(_ remoteConfig: [String: String]) {
+        self.connectionManager.setRemoteConfig(remoteConfig)
+    }
+
     /// Notifies libsignal that the network has changed.
     ///
     /// This will lead to, e.g. caches being cleared and cooldowns being reset.
@@ -120,23 +125,10 @@ public class Net {
         prevE164s: [String],
         e164s: [String],
         acisAndAccessKeys: [AciAndAccessKey],
-        token: Data?,
-        useNewConnectLogic: Bool = false
-    ) async throws -> CdsiLookup {
-        let request = try CdsiLookupRequest(e164s: e164s, prevE164s: prevE164s, acisAndAccessKeys: acisAndAccessKeys, token: token)
-        return try await self.cdsiLookup(auth: auth, request: request, useNewConnectLogic: useNewConnectLogic)
-    }
-
-    @available(*, deprecated, message: "returnAcisWithoutUaks is deprecated; use the overload that does not have it as an argument")
-    public func cdsiLookup(
-        auth: Auth,
-        prevE164s: [String],
-        e164s: [String],
-        acisAndAccessKeys: [AciAndAccessKey],
-        returnAcisWithoutUaks: Bool,
         token: Data?
     ) async throws -> CdsiLookup {
-        return try await self.cdsiLookup(auth: auth, prevE164s: prevE164s, e164s: e164s, acisAndAccessKeys: acisAndAccessKeys, token: token)
+        let request = try CdsiLookupRequest(e164s: e164s, prevE164s: prevE164s, acisAndAccessKeys: acisAndAccessKeys, token: token)
+        return try await self.cdsiLookup(auth: auth, request: request)
     }
 
     /// Starts a new CDSI lookup request.
@@ -149,7 +141,6 @@ public class Net {
     /// - Parameters:
     ///   - auth: The information to use when authenticating with the CDSI server.
     ///   - request: The CDSI request to be sent to the server.
-    ///   - useNewConnectLogic: Whether to use the newer logic for establishing the connection used for the request.
     ///
     /// - Returns:
     ///   An object representing the in-progress request. If this method
@@ -183,14 +174,12 @@ public class Net {
     /// ```
     public func cdsiLookup(
         auth: Auth,
-        request: CdsiLookupRequest,
-        useNewConnectLogic: Bool = false
+        request: CdsiLookupRequest
     ) async throws -> CdsiLookup {
-        let create_lookup = useNewConnectLogic ? signal_cdsi_lookup_new_routes : signal_cdsi_lookup_new
         let handle = try await self.asyncContext.invokeAsyncFunction { promise, asyncContext in
             self.connectionManager.withNativeHandle { connectionManager in
                 request.withNativeHandle { request in
-                    create_lookup(promise, asyncContext.const(), connectionManager.const(), auth.username, auth.password, request.const())
+                    signal_cdsi_lookup_new(promise, asyncContext.const(), connectionManager.const(), auth.username, auth.password, request.const())
                 }
             }
         }
@@ -298,9 +287,11 @@ internal class ConnectionManager: NativeHandleOwner<SignalMutPointerConnectionMa
         }
     }
 
-    convenience init(env: Net.Environment, userAgent: String) {
+    convenience init(env: Net.Environment, userAgent: String, remoteConfig: [String: String]) {
         var handle = SignalMutPointerConnectionManager()
-        failOnError(signal_connection_manager_new(&handle, env.rawValue, userAgent))
+        remoteConfig.withBridgedStringMap { remoteConfig in
+            failOnError(signal_connection_manager_new(&handle, env.rawValue, userAgent, remoteConfig))
+        }
         self.init(owned: NonNull(handle)!)
     }
 
@@ -344,6 +335,14 @@ internal class ConnectionManager: NativeHandleOwner<SignalMutPointerConnectionMa
     internal func setCensorshipCircumventionEnabled(_ enabled: Bool) {
         self.withNativeHandle {
             failOnError(signal_connection_manager_set_censorship_circumvention_enabled($0.const(), enabled))
+        }
+    }
+
+    internal func setRemoteConfig(_ remoteConfig: [String: String]) {
+        remoteConfig.withBridgedStringMap { remoteConfig in
+            self.withNativeHandle {
+                failOnError(signal_connection_manager_set_remote_config($0.const(), remoteConfig))
+            }
         }
     }
 

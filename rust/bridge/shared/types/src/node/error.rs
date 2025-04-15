@@ -5,7 +5,9 @@
 
 use std::fmt;
 
+#[cfg(feature = "signal-media")]
 use signal_media::sanitize::mp4::{Error as Mp4Error, ParseError as Mp4ParseError};
+#[cfg(feature = "signal-media")]
 use signal_media::sanitize::webp::{Error as WebpError, ParseError as WebpParseError};
 
 use super::*;
@@ -24,15 +26,6 @@ node_register!(registerErrors);
 
 fn no_extra_properties<'a>(cx: &mut impl Context<'a>) -> JsResult<'a, JsValue> {
     Ok(cx.undefined().upcast())
-}
-
-fn optional_extra_properties<'a, C: Context<'a>, F: FnOnce(&mut C) -> JsResult<'a, JsValue>>(
-    f: Option<F>,
-) -> impl FnOnce(&mut C) -> JsResult<'a, JsValue> {
-    |cx| match f {
-        None => no_extra_properties(cx),
-        Some(f) => f(cx),
-    }
 }
 
 fn new_js_error<'a, C: Context<'a>>(
@@ -119,7 +112,23 @@ impl std::fmt::Display for ThrownException {
 
 impl std::error::Error for ThrownException {}
 
-pub trait SignalNodeError: Sized + fmt::Display {
+pub trait SignalNodeError {
+    fn into_throwable<'a, C: Context<'a>>(
+        self,
+        cx: &mut C,
+        module: Handle<'a, JsObject>,
+        operation_name: &str,
+    ) -> Handle<'a, JsError>;
+}
+
+/// Provides a simple [`SignalNodeError`] implementation.
+///
+/// Implementing types get a straightforward blanket implementation of
+/// [`SignalNodeError`] that converts to a generic error with
+/// [`self.to_string()`](ToString::to_string) as the error message.
+pub trait DefaultSignalNodeError: ToString {}
+
+impl<S: DefaultSignalNodeError> SignalNodeError for S {
     fn into_throwable<'a, C: Context<'a>>(
         self,
         cx: &mut C,
@@ -140,7 +149,6 @@ pub trait SignalNodeError: Sized + fmt::Display {
 
 const INVALID_MEDIA_INPUT: &str = "InvalidMediaInput";
 const IO_ERROR: &str = "IoError";
-const RATE_LIMITED_ERROR: &str = "RateLimitedError";
 const UNSUPPORTED_MEDIA_INPUT: &str = "UnsupportedMediaInput";
 
 impl SignalNodeError for SignalProtocolError {
@@ -237,17 +245,17 @@ impl SignalNodeError for SignalProtocolError {
     }
 }
 
-impl SignalNodeError for device_transfer::Error {}
+impl DefaultSignalNodeError for device_transfer::Error {}
 
-impl SignalNodeError for attest::hsm_enclave::Error {}
+impl DefaultSignalNodeError for attest::hsm_enclave::Error {}
 
-impl SignalNodeError for attest::enclave::Error {}
+impl DefaultSignalNodeError for attest::enclave::Error {}
 
-impl SignalNodeError for signal_crypto::Error {}
+impl DefaultSignalNodeError for signal_crypto::Error {}
 
-impl SignalNodeError for zkgroup::ZkGroupVerificationFailure {}
+impl DefaultSignalNodeError for zkgroup::ZkGroupVerificationFailure {}
 
-impl SignalNodeError for zkgroup::ZkGroupDeserializationFailure {}
+impl DefaultSignalNodeError for zkgroup::ZkGroupDeserializationFailure {}
 
 impl SignalNodeError for usernames::UsernameError {
     fn into_throwable<'a, C: Context<'a>>(
@@ -282,7 +290,7 @@ impl SignalNodeError for usernames::UsernameError {
     }
 }
 
-impl SignalNodeError for usernames::ProofVerificationFailure {}
+impl DefaultSignalNodeError for usernames::ProofVerificationFailure {}
 
 impl SignalNodeError for usernames::UsernameLinkError {
     fn into_throwable<'a, C: Context<'a>>(
@@ -311,6 +319,7 @@ impl SignalNodeError for usernames::UsernameLinkError {
     }
 }
 
+#[cfg(feature = "signal-media")]
 impl SignalNodeError for Mp4Error {
     fn into_throwable<'a, C: Context<'a>>(
         self,
@@ -342,6 +351,7 @@ impl SignalNodeError for Mp4Error {
     }
 }
 
+#[cfg(feature = "signal-media")]
 impl SignalNodeError for WebpError {
     fn into_throwable<'a, C: Context<'a>>(
         self,
@@ -405,29 +415,29 @@ impl SignalNodeError for libsignal_net::chat::ConnectError {
         module: Handle<'a, JsObject>,
         operation_name: &str,
     ) -> Handle<'a, JsError> {
-        let (name, properties) = match self {
-            Self::AppExpired => (Some("AppExpired"), None),
-            Self::DeviceDeregistered => (Some("DeviceDelinked"), None),
-            Self::RetryLater {
-                retry_after_seconds,
-            } => rate_limited_error(retry_after_seconds),
+        let name = match self {
+            Self::AppExpired => "AppExpired",
+            Self::DeviceDeregistered => "DeviceDelinked",
+            Self::RetryLater(retry_later) => {
+                return retry_later.into_throwable(cx, module, operation_name)
+            }
             Self::WebSocket(_)
             | Self::Timeout
             | Self::AllAttemptsFailed
             | Self::InvalidConnectionConfiguration =>
             // TODO: Distinguish retryable errors from proper failures?
             {
-                (Some(IO_ERROR), None)
+                IO_ERROR
             }
         };
         let message = self.to_string();
         new_js_error(
             cx,
             module,
-            name,
+            Some(name),
             &message,
             operation_name,
-            optional_extra_properties(properties),
+            no_extra_properties,
         )
     }
 }
@@ -441,6 +451,8 @@ impl SignalNodeError for libsignal_net::chat::SendError {
     ) -> Handle<'a, JsError> {
         let name = match self {
             Self::Disconnected => Some("ChatServiceInactive"),
+            Self::ConnectionInvalidated => Some("ConnectionInvalidated"),
+            Self::ConnectedElsewhere => Some("ConnectedElsewhere"),
             Self::WebSocket(_)
             | Self::IncomingDataInvalid
             | Self::RequestHasInvalidHeader
@@ -458,6 +470,31 @@ impl SignalNodeError for libsignal_net::chat::SendError {
             &message,
             operation_name,
             no_extra_properties,
+        )
+    }
+}
+
+impl SignalNodeError for libsignal_net::infra::errors::RetryLater {
+    fn into_throwable<'a, C: Context<'a>>(
+        self,
+        cx: &mut C,
+        module: Handle<'a, JsObject>,
+        operation_name: &str,
+    ) -> Handle<'a, JsError> {
+        let properties = move |cx: &mut C| {
+            let props = cx.empty_object();
+            let retry_after = self.retry_after_seconds.convert_into(cx)?;
+            props.set(cx, "retryAfterSecs", retry_after)?;
+            Ok(props.upcast())
+        };
+        let message = self.to_string();
+        new_js_error(
+            cx,
+            module,
+            Some("RateLimitedError"),
+            &message,
+            operation_name,
+            properties,
         )
     }
 }
@@ -489,13 +526,13 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
         module: Handle<'a, JsObject>,
         operation_name: &str,
     ) -> Handle<'a, JsError> {
-        let (name, make_extra_props) = match self {
-            Self::RateLimited {
-                retry_after_seconds,
-            } => rate_limited_error(retry_after_seconds),
+        let name = match self {
+            Self::RateLimited(retry_later) => {
+                return retry_later.into_throwable(cx, module, operation_name)
+            }
             Self::AttestationError(e) => return e.into_throwable(cx, module, operation_name),
-            Self::InvalidArgument { server_reason: _ } => (None, None),
-            Self::InvalidToken => (Some("CdsiInvalidToken"), None),
+            Self::InvalidArgument { server_reason: _ } => None,
+            Self::InvalidToken => Some("CdsiInvalidToken"),
             Self::ConnectionTimedOut
             | Self::ConnectTransport(_)
             | Self::WebSocket(_)
@@ -503,7 +540,7 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
             | Self::EnclaveProtocol(_)
             | Self::InvalidResponse
             | Self::ParseError
-            | Self::Server { reason: _ } => (Some(IO_ERROR), None),
+            | Self::Server { reason: _ } => Some(IO_ERROR),
         };
         let message = self.to_string();
         new_js_error(
@@ -512,26 +549,187 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
             name,
             &message,
             operation_name,
-            optional_extra_properties(make_extra_props),
+            no_extra_properties,
         )
     }
 }
 
-fn rate_limited_error<'a, C: Context<'a>>(
-    retry_after_seconds: u32,
-) -> (
-    Option<&'a str>,
-    Option<impl Fn(&mut C) -> JsResult<'a, JsValue>>,
-) {
-    (
-        Some(RATE_LIMITED_ERROR),
-        Some(move |cx: &mut C| {
-            let props = cx.empty_object();
-            let retry_after = retry_after_seconds.convert_into(cx)?;
-            props.set(cx, "retryAfterSecs", retry_after)?;
-            Ok(props.upcast())
-        }),
-    )
+mod registration {
+    use libsignal_net::infra::errors::RetryLater;
+    use libsignal_net::registration::{
+        CreateSessionError, RegisterAccountError, RegistrationLock, RequestError,
+        RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
+        UpdateSessionError, VerificationCodeNotDeliverable,
+    };
+
+    use super::*;
+
+    impl<E: Into<BridgedErrorVariant> + std::fmt::Display> SignalNodeError for RequestError<E> {
+        fn into_throwable<'a, C: Context<'a>>(
+            self,
+            cx: &mut C,
+            module: Handle<'a, JsObject>,
+            operation_name: &str,
+        ) -> Handle<'a, JsError> {
+            let inner = match self {
+                RequestError::RequestWasNotValid => BridgedErrorVariant::RequestInvalid,
+                RequestError::Other(inner) => inner.into(),
+                RequestError::Timeout => {
+                    return libsignal_net::chat::SendError::RequestTimedOut.into_throwable(
+                        cx,
+                        module,
+                        operation_name,
+                    )
+                }
+                RequestError::Unknown(message) => {
+                    return new_js_error(
+                        cx,
+                        module,
+                        None,
+                        &message,
+                        operation_name,
+                        no_extra_properties,
+                    )
+                }
+            };
+            SignalNodeError::into_throwable(inner, cx, module, operation_name)
+        }
+    }
+
+    enum BridgedErrorVariant {
+        SessionNotFound,
+        InvalidSessionId,
+        RequestInvalid,
+        RetryLater(RetryLater),
+        RequestRejected,
+        NotReadyForVerification,
+        VerificationSendFailed,
+        VerificationNotDeliverable(VerificationCodeNotDeliverable),
+        RegistrationLock(RegistrationLock),
+        RecoveryVerificationFailed,
+        DeviceTransferPossibleNotSkipped,
+    }
+
+    impl SignalNodeError for BridgedErrorVariant {
+        fn into_throwable<'a, C: Context<'a>>(
+            self,
+            cx: &mut C,
+            module: Handle<'a, JsObject>,
+            operation_name: &str,
+        ) -> Handle<'a, JsError> {
+            let message = match self {
+                BridgedErrorVariant::RetryLater(retry_later) => {
+                    return retry_later.into_throwable(cx, module, operation_name)
+                }
+                BridgedErrorVariant::SessionNotFound => {
+                    "no verification session found for the session ID"
+                }
+                BridgedErrorVariant::InvalidSessionId => "the session ID was invalid",
+                BridgedErrorVariant::RequestInvalid => "the request did not pass server validation",
+                BridgedErrorVariant::RequestRejected => "the information provided was rejected",
+                BridgedErrorVariant::NotReadyForVerification => {
+                    "the session is not ready for verification"
+                }
+                BridgedErrorVariant::VerificationSendFailed => {
+                    "sending the verification code failed"
+                }
+                BridgedErrorVariant::VerificationNotDeliverable(_not_deliverable) => {
+                    "the verification code could not be delivered"
+                }
+                BridgedErrorVariant::RecoveryVerificationFailed => {
+                    "the recovery password was not accepted"
+                }
+                BridgedErrorVariant::DeviceTransferPossibleNotSkipped => {
+                    "device transfer is possible but wasn't explicitly skipped"
+                }
+                BridgedErrorVariant::RegistrationLock(_registration_lock) => {
+                    "registration is locked"
+                }
+            };
+            new_js_error(
+                cx,
+                module,
+                None,
+                message,
+                operation_name,
+                no_extra_properties,
+            )
+        }
+    }
+
+    impl From<CreateSessionError> for BridgedErrorVariant {
+        fn from(value: CreateSessionError) -> Self {
+            match value {
+                CreateSessionError::InvalidSessionId => Self::InvalidSessionId,
+                CreateSessionError::RetryLater(retry_later) => Self::RetryLater(retry_later),
+            }
+        }
+    }
+
+    impl From<ResumeSessionError> for BridgedErrorVariant {
+        fn from(value: ResumeSessionError) -> Self {
+            match value {
+                ResumeSessionError::InvalidSessionId => Self::InvalidSessionId,
+                ResumeSessionError::SessionNotFound => Self::SessionNotFound,
+            }
+        }
+    }
+
+    impl From<UpdateSessionError> for BridgedErrorVariant {
+        fn from(value: UpdateSessionError) -> Self {
+            match value {
+                UpdateSessionError::Rejected => Self::RequestRejected,
+                UpdateSessionError::RetryLater(retry_later) => Self::RetryLater(retry_later),
+            }
+        }
+    }
+
+    impl From<RequestVerificationCodeError> for BridgedErrorVariant {
+        fn from(value: RequestVerificationCodeError) -> Self {
+            match value {
+                RequestVerificationCodeError::InvalidSessionId => Self::InvalidSessionId,
+                RequestVerificationCodeError::SessionNotFound => Self::SessionNotFound,
+                RequestVerificationCodeError::NotReadyForVerification => {
+                    Self::NotReadyForVerification
+                }
+                RequestVerificationCodeError::SendFailed => Self::VerificationSendFailed,
+                RequestVerificationCodeError::CodeNotDeliverable(not_deliverable) => {
+                    Self::VerificationNotDeliverable(not_deliverable)
+                }
+                RequestVerificationCodeError::RetryLater(retry_later) => {
+                    Self::RetryLater(retry_later)
+                }
+            }
+        }
+    }
+
+    impl From<SubmitVerificationError> for BridgedErrorVariant {
+        fn from(value: SubmitVerificationError) -> Self {
+            match value {
+                SubmitVerificationError::InvalidSessionId => Self::InvalidSessionId,
+                SubmitVerificationError::SessionNotFound => Self::SessionNotFound,
+                SubmitVerificationError::NotReadyForVerification => Self::NotReadyForVerification,
+                SubmitVerificationError::RetryLater(retry_later) => Self::RetryLater(retry_later),
+            }
+        }
+    }
+
+    impl From<RegisterAccountError> for BridgedErrorVariant {
+        fn from(value: RegisterAccountError) -> Self {
+            match value {
+                RegisterAccountError::DeviceTransferIsPossibleButNotSkipped => {
+                    Self::DeviceTransferPossibleNotSkipped
+                }
+                RegisterAccountError::RegistrationRecoveryVerificationFailed => {
+                    Self::RecoveryVerificationFailed
+                }
+                RegisterAccountError::RegistrationLock(registration_lock) => {
+                    Self::RegistrationLock(registration_lock)
+                }
+                RegisterAccountError::RetryLater(retry_later) => Self::RetryLater(retry_later),
+            }
+        }
+    }
 }
 
 impl SignalNodeError for CancellationError {

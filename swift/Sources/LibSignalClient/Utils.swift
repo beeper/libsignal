@@ -226,3 +226,77 @@ extension Optional where Wrapped: StringProtocol {
         return try wrapped.withCString(body)
     }
 }
+
+extension Array where Element == UInt8 {
+    /// Converts these bytes to (lowercase) hexadecimal.
+    public func toHex() -> String {
+        var hex = [UInt8](repeating: 0, count: self.count * 2)
+        hex.withUnsafeMutableBytes { hex in
+            failOnError(
+                signal_hex_encode(
+                    hex.baseAddress?.assumingMemoryBound(to: CChar.self),
+                    hex.count,
+                    self,
+                    self.count
+                )
+            )
+        }
+        return String(decoding: hex, as: Unicode.UTF8.self)
+    }
+}
+
+extension Data {
+    /// Converts these bytes to (lowercase) hexadecimal.
+    public func toHex() -> String {
+        var hex = [UInt8](repeating: 0, count: self.count * 2)
+        hex.withUnsafeMutableBytes { hex in
+            self.withUnsafeBytes { input in
+                failOnError(
+                    signal_hex_encode(
+                        hex.baseAddress?.assumingMemoryBound(to: CChar.self),
+                        hex.count,
+                        input.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                        input.count
+                    )
+                )
+            }
+        }
+        return String(decoding: hex, as: Unicode.UTF8.self)
+    }
+}
+
+extension [String: String] {
+    internal func withBridgedStringMap<Result>(_ callback: (SignalMutPointerBridgedStringMap) throws -> Result) rethrows -> Result {
+        var map = SignalMutPointerBridgedStringMap()
+        failOnError(signal_bridged_string_map_new(&map, UInt32(clamping: self.count)))
+        defer { signal_bridged_string_map_destroy(map) }
+
+        for (key, value) in self {
+            failOnError(signal_bridged_string_map_insert(map, key, value))
+        }
+
+        return try callback(map)
+    }
+}
+
+extension SignalMutPointerBridgedStringMap: SignalMutPointer {
+    public typealias ConstPointer = SignalConstPointerBridgedStringMap
+
+    public init(untyped: OpaquePointer?) {
+        self.init(raw: untyped)
+    }
+
+    public func toOpaque() -> OpaquePointer? {
+        self.raw
+    }
+
+    public func const() -> Self.ConstPointer {
+        Self.ConstPointer(raw: self.raw)
+    }
+}
+
+extension SignalConstPointerBridgedStringMap: SignalConstPointer {
+    public func toOpaque() -> OpaquePointer? {
+        self.raw
+    }
+}

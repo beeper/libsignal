@@ -2,6 +2,7 @@
 // Copyright 2024 Signal Messenger, LLC.
 // SPDX-License-Identifier: AGPL-3.0-only
 //
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
@@ -18,8 +19,13 @@ use crate::dns::dns_lookup::DnsLookupRequest;
 use crate::dns::dns_message;
 use crate::dns::dns_message::{parse_a_record, parse_aaaa_record};
 use crate::dns::dns_types::ResourceType;
-use crate::http_client::{http2_client, AggregatingHttp2Client};
-use crate::route::{HttpsTlsRoute, ResolvedRoute, TcpRoute, TlsRoute};
+use crate::errors::{LogSafeDisplay, TransportConnectError};
+use crate::http_client::{AggregatingHttp2Client, Http2Connector};
+use crate::route::{
+    Connector, ConnectorExt, ConnectorFactory, HttpsTlsRoute, TcpRoute, ThrottlingConnector,
+    TlsRoute, VariableTlsTimeoutConnector,
+};
+use crate::timeouts::MIN_TLS_HANDSHAKE_TIMEOUT;
 use crate::{dns, DnsSource};
 
 pub(crate) const CLOUDFLARE_IPS: (Ipv4Addr, Ipv6Addr) = (
@@ -28,6 +34,65 @@ pub(crate) const CLOUDFLARE_IPS: (Ipv4Addr, Ipv6Addr) = (
 );
 const MAX_RESPONSE_SIZE: usize = 10240;
 
+pub struct DohTransportConnectorFactory;
+
+impl ConnectorFactory<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>> for DohTransportConnectorFactory {
+    type Connector = DohTransportConnector;
+    type Connection = DohTransport;
+
+    fn make(&self) -> Self::Connector {
+        Default::default()
+    }
+}
+
+pub struct DohTransportConnector {
+    transport_connector: VariableTlsTimeoutConnector<
+        ThrottlingConnector<crate::tcp_ssl::StatelessTls>,
+        crate::tcp_ssl::StatelessTcp,
+        TransportConnectError,
+    >,
+}
+
+impl Default for DohTransportConnector {
+    fn default() -> Self {
+        Self {
+            transport_connector: VariableTlsTimeoutConnector::new(
+                ThrottlingConnector::new(crate::tcp_ssl::StatelessTls, 1),
+                crate::tcp_ssl::StatelessTcp,
+                MIN_TLS_HANDSHAKE_TIMEOUT,
+            ),
+        }
+    }
+}
+
+impl Connector<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>, ()> for DohTransportConnector {
+    type Connection = DohTransport;
+    type Error = Error;
+
+    async fn connect_over(
+        &self,
+        _over: (),
+        route: HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>,
+        log_tag: Arc<str>,
+    ) -> Result<Self::Connection, Self::Error> {
+        let connector = Http2Connector {
+            inner: &self.transport_connector,
+            max_response_size: MAX_RESPONSE_SIZE,
+        };
+        let http_client = connector
+            .connect(route, log_tag.clone())
+            .await
+            .map_err(|e| {
+                log::error!(
+                    "[{log_tag}] Failed to create HTTP2 client: {}",
+                    &e as &dyn LogSafeDisplay
+                );
+                Error::TransportFailure
+            })?;
+        Ok(DohTransport { http_client })
+    }
+}
+
 /// DNS transport that sends queries over HTTPS
 #[derive(Clone, Debug)]
 pub struct DohTransport {
@@ -35,49 +100,27 @@ pub struct DohTransport {
 }
 
 impl DnsTransport for DohTransport {
-    type ConnectionParameters = Vec<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>>;
-
-    fn dns_source() -> DnsSource {
-        DnsSource::DnsOverHttpsLookup
-    }
-
-    async fn connect(
-        mut connection_params: Self::ConnectionParameters,
-        ipv6_enabled: bool,
-    ) -> dns::Result<Self> {
-        let log_tag = "DNS-over-HTTPS".into();
-
-        connection_params.retain(|route| ipv6_enabled || route.immediate_target().is_ipv4());
-
-        match http2_client(connection_params, MAX_RESPONSE_SIZE, &log_tag).await {
-            Ok(http_client) => Ok(Self { http_client }),
-            Err(error) => {
-                log::error!("[{log_tag}] Failed to create HTTP2 client: {error}");
-                Err(Error::TransportFailure)
-            }
-        }
-    }
+    const SOURCE: DnsSource = DnsSource::DnsOverHttpsLookup;
 
     async fn send_queries(
         self,
         request: DnsLookupRequest,
     ) -> dns::Result<impl Stream<Item = dns::Result<DnsQueryResult>> + Send + 'static> {
-        let arc = Arc::new(self);
-        let futures = match request.ipv6_enabled {
-            true => vec![
-                arc.clone()
-                    .send_request(request.clone(), ResourceType::AAAA),
-                arc.clone().send_request(request.clone(), ResourceType::A),
-            ],
-            false => vec![arc.clone().send_request(request.clone(), ResourceType::A)],
-        };
+        let futures = request
+            .ipv6_enabled
+            .then(|| {
+                self.clone()
+                    .send_request(request.clone(), ResourceType::AAAA)
+            })
+            .into_iter()
+            .chain([self.send_request(request, ResourceType::A)]);
         Ok(FuturesUnordered::from_iter(futures))
     }
 }
 
 impl DohTransport {
     async fn send_request(
-        self: Arc<Self>,
+        self,
         request: DnsLookupRequest,
         resource_type: ResourceType,
     ) -> dns::Result<DnsQueryResult> {

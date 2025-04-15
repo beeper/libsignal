@@ -49,27 +49,6 @@ export enum ContentHint {
 
 export type Uuid = string;
 
-export class HKDF {
-  /**
-   * @deprecated Use the top-level 'hkdf' function for standard HKDF behavior
-   */
-  static new(version: number): HKDF {
-    if (version != 3) {
-      throw new Error('HKDF versions other than 3 are no longer supported');
-    }
-    return new HKDF();
-  }
-
-  deriveSecrets(
-    outputLength: number,
-    keyMaterial: Buffer,
-    label: Buffer,
-    salt: Buffer | null
-  ): Buffer {
-    return hkdf(outputLength, keyMaterial, label, salt);
-  }
-}
-
 export function hkdf(
   outputLength: number,
   keyMaterial: Buffer,
@@ -243,6 +222,20 @@ export class KEMKeyPair {
   }
 }
 
+/** The public information contained in a {@link SignedPreKeyRecord} */
+export type SignedPublicPreKey = {
+  id(): number;
+  publicKey(): PublicKey;
+  signature(): Buffer;
+};
+
+/** The public information contained in a {@link KyberPreKeyRecord} */
+export type SignedKyberPublicPreKey = {
+  id(): number;
+  publicKey(): KEMPublicKey;
+  signature(): Buffer;
+};
+
 export class PreKeyBundle {
   readonly _nativeHandle: Native.PreKeyBundle;
 
@@ -369,7 +362,7 @@ export class PreKeyRecord {
   }
 }
 
-export class SignedPreKeyRecord {
+export class SignedPreKeyRecord implements SignedPublicPreKey {
   readonly _nativeHandle: Native.SignedPreKeyRecord;
 
   private constructor(handle: Native.SignedPreKeyRecord) {
@@ -429,7 +422,7 @@ export class SignedPreKeyRecord {
   }
 }
 
-export class KyberPreKeyRecord {
+export class KyberPreKeyRecord implements SignedKyberPublicPreKey {
   readonly _nativeHandle: Native.KyberPreKeyRecord;
 
   private constructor(handle: Native.KyberPreKeyRecord) {
@@ -831,7 +824,7 @@ export class SenderKeyDistributionMessage {
   ): Promise<SenderKeyDistributionMessage> {
     const handle = await Native.SenderKeyDistributionMessage_Create(
       sender,
-      Buffer.from(uuid.parse(distributionId) as Uint8Array),
+      Buffer.from(uuid.parse(distributionId)),
       store
     );
     return new SenderKeyDistributionMessage(handle);
@@ -848,7 +841,7 @@ export class SenderKeyDistributionMessage {
     return new SenderKeyDistributionMessage(
       Native.SenderKeyDistributionMessage_New(
         messageVersion,
-        Buffer.from(uuid.parse(distributionId) as Uint8Array),
+        Buffer.from(uuid.parse(distributionId)),
         chainId,
         iteration,
         chainKey,
@@ -912,7 +905,7 @@ export class SenderKeyMessage {
     return new SenderKeyMessage(
       Native.SenderKeyMessage_New(
         messageVersion,
-        Buffer.from(uuid.parse(distributionId) as Uint8Array),
+        Buffer.from(uuid.parse(distributionId)),
         chainId,
         iteration,
         ciphertext,
@@ -1214,7 +1207,7 @@ export async function groupEncrypt(
   return CiphertextMessage._fromNativeHandle(
     await Native.GroupCipher_EncryptMessage(
       sender,
-      Buffer.from(uuid.parse(distributionId) as Uint8Array),
+      Buffer.from(uuid.parse(distributionId)),
       message,
       store
     )

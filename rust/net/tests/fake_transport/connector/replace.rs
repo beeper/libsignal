@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use libsignal_net_infra::route::{ComposedConnector, DirectOrProxy, ThrottlingConnector};
+use libsignal_net_infra::route::{
+    ComposedConnector, DirectOrProxy, LoggingConnector, ThrottlingConnector,
+    VariableTlsTimeoutConnector,
+};
 
 use super::FakeTransportConnector;
 
@@ -33,6 +36,24 @@ where
     }
 }
 
+impl<Inner, Outer, Error> ReplaceStatelessConnectorsWithFake
+    for VariableTlsTimeoutConnector<Outer, Inner, Error>
+where
+    Outer: ReplaceStatelessConnectorsWithFake,
+    Inner: ReplaceStatelessConnectorsWithFake,
+{
+    type Replacement = VariableTlsTimeoutConnector<Outer::Replacement, Inner::Replacement, Error>;
+
+    fn replace_with_fake(self, fake: FakeTransportConnector) -> Self::Replacement {
+        let (outer, inner, timeout) = self.into_connectors_and_min_timeout();
+        VariableTlsTimeoutConnector::new(
+            outer.replace_with_fake(fake.clone()),
+            inner.replace_with_fake(fake),
+            timeout,
+        )
+    }
+}
+
 impl<D, P, E> ReplaceStatelessConnectorsWithFake for DirectOrProxy<D, P, E>
 where
     D: ReplaceStatelessConnectorsWithFake,
@@ -57,7 +78,15 @@ impl ReplaceStatelessConnectorsWithFake for libsignal_net::infra::tcp_ssl::proxy
     }
 }
 
-impl ReplaceStatelessConnectorsWithFake for libsignal_net::infra::tcp_ssl::StatelessDirect {
+impl ReplaceStatelessConnectorsWithFake for libsignal_net::infra::tcp_ssl::StatelessTcp {
+    type Replacement = FakeTransportConnector;
+
+    fn replace_with_fake(self, fake: FakeTransportConnector) -> Self::Replacement {
+        fake
+    }
+}
+
+impl ReplaceStatelessConnectorsWithFake for libsignal_net::infra::tcp_ssl::StatelessTls {
     type Replacement = FakeTransportConnector;
 
     fn replace_with_fake(self, fake: FakeTransportConnector) -> Self::Replacement {
@@ -72,5 +101,16 @@ impl<C: ReplaceStatelessConnectorsWithFake> ReplaceStatelessConnectorsWithFake
 
     fn replace_with_fake(self, fake: FakeTransportConnector) -> Self::Replacement {
         self.replace_connector(fake)
+    }
+}
+
+impl<C: ReplaceStatelessConnectorsWithFake> ReplaceStatelessConnectorsWithFake
+    for LoggingConnector<C>
+{
+    type Replacement = C::Replacement;
+
+    fn replace_with_fake(self, fake: FakeTransportConnector) -> Self::Replacement {
+        // Discard the logging for fake connections.
+        self.into_inner().replace_with_fake(fake)
     }
 }

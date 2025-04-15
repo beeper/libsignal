@@ -4,15 +4,12 @@
 //
 
 use std::fmt::Display;
-use std::time::Duration;
 
-use async_trait::async_trait;
 use http::HeaderName;
 use libsignal_net_infra::connection_manager::{ErrorClass, ErrorClassifier};
 use libsignal_net_infra::errors::{LogSafeDisplay, TransportConnectError};
-use libsignal_net_infra::service::{CancellationToken, ServiceConnector};
+use libsignal_net_infra::extract_retry_later;
 use libsignal_net_infra::ws::WebSocketConnectError;
-use libsignal_net_infra::{extract_retry_after_seconds, ConnectionParams};
 use tokio::time::Instant;
 
 #[derive(Debug, thiserror::Error)]
@@ -102,52 +99,6 @@ impl Display for WebSocketServiceConnectError {
     }
 }
 
-/// [`ServiceConnector`] wrapper that transforms the connect error using
-/// [`WebSocketServiceConnectError::from_websocket_error`].
-#[derive(Clone, Debug)]
-pub struct WebSocketServiceConnector<S>(S);
-
-impl<S> WebSocketServiceConnector<S> {
-    pub fn new(inner: S) -> Self {
-        Self(inner)
-    }
-}
-
-#[async_trait]
-impl<S: ServiceConnector<ConnectError: Into<WebSocketConnectError>> + Sync> ServiceConnector
-    for WebSocketServiceConnector<S>
-{
-    type Service = S::Service;
-
-    type Channel = S::Channel;
-
-    type ConnectError = WebSocketServiceConnectError;
-
-    async fn connect_channel(
-        &self,
-        connection_params: &ConnectionParams,
-    ) -> Result<Self::Channel, Self::ConnectError> {
-        self.0
-            .connect_channel(connection_params)
-            .await
-            .map_err(|e| {
-                // Because of the `await`, it's possible some time has already
-                // elapsed since the response came in, but this is the first
-                // chance we have to process it. A late timestamp means a more
-                // conservative retry period, that's all.
-                WebSocketServiceConnectError::from_websocket_error(
-                    e.into(),
-                    connection_params.connection_confirmation_header.as_ref(),
-                    Instant::now(),
-                )
-            })
-    }
-
-    fn start_service(&self, channel: Self::Channel) -> (Self::Service, CancellationToken) {
-        self.0.start_service(channel)
-    }
-}
-
 /// Marker that indicates an error was not a rejection from a Signal server
 ///
 /// This type is intentionally only constructible by code in this module. To
@@ -163,29 +114,36 @@ impl LogSafeDisplay for WebSocketServiceConnectError {}
 
 impl ErrorClassifier for WebSocketServiceConnectError {
     fn classify(&self) -> ErrorClass {
-        let WebSocketServiceConnectError::RejectedByServer {
-            response,
-            received_at,
-        } = self
-        else {
-            // If we didn't make it to the server, we should retry.
-            return ErrorClass::Intermittent;
-        };
+        match self {
+            WebSocketServiceConnectError::RejectedByServer {
+                response,
+                received_at,
+            } => {
+                // Retry-After takes precedence over everything else.
+                if let Some(retry_later) = extract_retry_later(response.headers()) {
+                    return ErrorClass::RetryAt(*received_at + retry_later.duration());
+                }
 
-        // Retry-After takes precedence over everything else.
-        if let Some(retry_after_seconds) = extract_retry_after_seconds(response.headers()) {
-            return ErrorClass::RetryAt(
-                *received_at + Duration::from_secs(retry_after_seconds.into()),
-            );
+                // If we're rejected based on the request (4xx), there's no point in retrying.
+                if response.status().is_client_error() {
+                    return ErrorClass::Fatal;
+                }
+
+                // Otherwise, assume we have a server problem (5xx), and retry.
+                ErrorClass::Intermittent
+            }
+            WebSocketServiceConnectError::Connect(
+                WebSocketConnectError::Transport(TransportConnectError::ClientAbort),
+                NotRejectedByServer { .. },
+            ) => {
+                // If we *locally* chose to abort, that isn't route-specific; treat it as fatal.
+                ErrorClass::Fatal
+            }
+            WebSocketServiceConnectError::Connect(_, NotRejectedByServer { .. }) => {
+                // In any other case, if we didn't make it to the server, we should retry.
+                ErrorClass::Intermittent
+            }
         }
-
-        // If we're rejected based on the request (4xx), there's no point in retrying.
-        if response.status().is_client_error() {
-            return ErrorClass::Fatal;
-        }
-
-        // Otherwise, assume we have a server problem (5xx), and retry.
-        ErrorClass::Intermittent
     }
 }
 

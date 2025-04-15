@@ -34,6 +34,9 @@ pub trait Queue: Default {
     fn is_empty(&self) -> bool {
         self.peek().is_none()
     }
+
+    /// Returns the number of elements currently in the queue.
+    fn len(&self) -> usize;
 }
 
 /// A min-heap.
@@ -76,6 +79,10 @@ impl<T: Ord + Eq> Queue for MinHeap<T> {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl<T: Ord + Eq> Extend<T> for MinHeap<T> {
@@ -106,12 +113,30 @@ impl<K: Ord + Eq, V> Queue for MinKeyValueQueue<K, V> {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl<K: Ord + Eq, V> Extend<(K, V)> for MinKeyValueQueue<K, V> {
     fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
         self.0
             .extend(iter.into_iter().map(|(key, value)| KeyValue { key, value }));
+    }
+}
+
+impl<K: Ord + Eq, V> MinKeyValueQueue<K, V> {
+    /// Iterates over all kv-pairs in the queue in arbitrary order, allowing the caller to modify
+    /// the key for each, then re-heapifies in O(N) time.
+    ///
+    /// If the callback panics, all items in the queue are dropped.
+    pub fn recalculate_keys(&mut self, mut callback: impl FnMut(&mut K, &V)) {
+        let mut storage = std::mem::take(&mut (self.0).0).into_vec();
+        for kv_pair in &mut storage {
+            callback(&mut kv_pair.0.key, &kv_pair.0.value);
+        }
+        (self.0).0 = storage.into();
     }
 }
 

@@ -14,8 +14,11 @@ import {
   AuthenticatedChatConnection,
   ChatServiceListener,
 } from './net/Chat';
+import { RegistrationService } from './net/Registration';
+import { BridgedStringMap } from './internal';
 export * from './net/CDSI';
 export * from './net/Chat';
+export * from './net/Registration';
 
 // This must match the libsignal-bridge Rust enum of the same name.
 export enum Environment {
@@ -77,6 +80,7 @@ export type NetConstructorOptions = Readonly<
       localTestServer?: false;
       env: Environment;
       userAgent: string;
+      remoteConfig?: Map<string, string>;
     }
   | {
       localTestServer: true;
@@ -120,7 +124,13 @@ export class Net {
       );
     } else {
       this._connectionManager = newNativeHandle(
-        Native.ConnectionManager_new(options.env, options.userAgent)
+        Native.ConnectionManager_new(
+          options.env,
+          options.userAgent,
+          new BridgedStringMap(
+            options.remoteConfig || new Map<string, string>()
+          )
+        )
       );
     }
   }
@@ -186,6 +196,42 @@ export class Net {
       receiveStories,
       listener,
       options
+    );
+  }
+
+  public async resumeRegistrationSession({
+    sessionId,
+    e164,
+    connectionTimeoutMillis,
+  }: {
+    sessionId: string;
+    e164: string;
+    connectionTimeoutMillis?: number;
+  }): Promise<RegistrationService> {
+    return RegistrationService.resumeSession(
+      {
+        connectionManager: this._connectionManager,
+        tokioAsyncContext: this.asyncContext,
+        connectionTimeoutMillis: connectionTimeoutMillis,
+      },
+      { sessionId, e164 }
+    );
+  }
+
+  public async createRegistrationSession({
+    e164,
+    connectionTimeoutMillis,
+  }: {
+    e164: string;
+    connectionTimeoutMillis?: number;
+  }): Promise<RegistrationService> {
+    return RegistrationService.createSession(
+      {
+        connectionManager: this._connectionManager,
+        tokioAsyncContext: this.asyncContext,
+        connectionTimeoutMillis: connectionTimeoutMillis,
+      },
+      { e164 }
     );
   }
 
@@ -359,6 +405,14 @@ export class Net {
    */
   clearProxy(): void {
     Native.ConnectionManager_clear_proxy(this._connectionManager);
+  }
+
+  /** Updates the remote config settings used by libsignal. */
+  setRemoteConfig(remoteConfig: Map<string, string>): void {
+    Native.ConnectionManager_set_remote_config(
+      this._connectionManager,
+      new BridgedStringMap(remoteConfig)
+    );
   }
 
   /**

@@ -74,6 +74,7 @@ protobuf-json-mapping = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true, optional = true, features = ["preserve_order"] }
+serde_with = { workspace = true, features = ["hex"] }
 sha2 = { workspace = true }
 static_assertions = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
@@ -87,12 +88,12 @@ libsignal-message-backup = { path = "./", features = ["json", "scramble", "test-
 
 signal-crypto = { workspace = true }
 
-array-concat = { workspace = true }
+array-concat = { workspace = true, features = ["const_panic"] }
 assert_cmd = { workspace = true }
+const-str = { workspace = true }
 criterion = { workspace = true }
 dir-test = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
-hex-literal = { workspace = true }
 json5 = { workspace = true }
 nonzero_ext = { workspace = true }
 once_cell = { workspace = true }

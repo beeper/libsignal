@@ -45,6 +45,9 @@ pub use tcp::*;
 mod tls;
 pub use tls::*;
 
+mod udp;
+pub use udp::*;
+
 mod ws;
 pub use ws::*;
 
@@ -330,11 +333,14 @@ where
     let mut log_for_slow_connections = tokio::time::interval(Duration::from_secs(3));
     log_for_slow_connections.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Skip the first tick, as tokio::time::interval's "first tick completes immediately."
-    log_for_slow_connections.tick().await;
+    log_for_slow_connections.reset();
+
+    let start_of_connecting = Instant::now();
 
     // Whether the Schedule should be polled for its next route.
     let mut poll_schedule_for_next = true;
-    let mut most_recent_connection_start = Instant::now();
+    let mut most_recent_connection_start = start_of_connecting;
+    let mut connects_started = 0;
     let mut connects_in_progress = FuturesUnordered::new();
     let mut outcomes = Vec::new();
 
@@ -387,10 +393,12 @@ where
             }
 
             Event::NextRouteAvailable(Some(route)) => {
+                let log_tag_for_connect = format!("{log_tag} {connects_started}").into();
+                connects_started += 1;
                 connects_in_progress.push(async {
                     let started = Instant::now();
                     let result = connector
-                        .connect_over(inner.clone(), route.clone(), log_tag.clone())
+                        .connect_over(inner.clone(), route.clone(), log_tag_for_connect)
                         .await;
                     (route, result, started)
                 });
@@ -434,9 +442,14 @@ where
             }
             Event::LogStatus => {
                 log::info!(
-                    "[{log_tag}] {} connection(s) in progress, {} pending",
+                    "[{log_tag}] {} connection(s) in progress after {:.2?}, {}",
                     connects_in_progress.len(),
-                    if schedule.is_some() { "more" } else { "none" }
+                    start_of_connecting.elapsed(),
+                    schedule
+                        .as_ref()
+                        .as_pin_ref()
+                        .map(|schedule| schedule.status())
+                        .unwrap_or_default(),
                 );
             }
         }
@@ -493,6 +506,8 @@ impl<R> RouteDelayPolicy<R> for NoDelay {
 #[cfg(any(test, feature = "test-util"))]
 pub mod testutils {
     use std::cell::RefCell;
+    use std::convert::Infallible;
+    use std::future::Future;
     use std::net::IpAddr;
 
     use rand::rngs::mock::StepRng;
@@ -558,6 +573,27 @@ pub mod testutils {
             self.rng.borrow_mut().gen()
         }
     }
+
+    #[derive(Debug, PartialEq, Clone)]
+    pub struct FakeConnectError;
+
+    /// [`Connector`] impl whose `connect_over` never resolves.
+    pub struct NeverConnect;
+
+    impl<R> Connector<R, ()> for NeverConnect {
+        type Connection = Infallible;
+
+        type Error = FakeConnectError;
+
+        fn connect_over(
+            &self,
+            (): (),
+            _route: R,
+            _log_tag: Arc<str>,
+        ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
+            std::future::pending()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -587,7 +623,7 @@ mod test {
     use crate::dns::lookup_result::LookupResult;
     use crate::host::Host;
     use crate::route::resolve::testutils::FakeResolver;
-    use crate::route::testutils::{FakeContext, FakeRoute};
+    use crate::route::testutils::{FakeConnectError, FakeContext, FakeRoute};
     use crate::route::{SocksProxy, TlsProxy};
     use crate::tcp_ssl::proxy::socks;
     use crate::{Alpn, DnsSource};
@@ -847,9 +883,6 @@ mod test {
     #[derive(Debug, PartialEq)]
     struct FakeConnection<R>(R);
 
-    #[derive(Debug, PartialEq)]
-    struct FakeConnectError;
-
     #[derive(Debug)]
     struct FakeConnector<R> {
         outgoing: mpsc::UnboundedSender<FakeConnectResponder<R>>,
@@ -910,13 +943,12 @@ mod test {
             ("G", ip_addr!(v6, "3fff::7")),
         ];
         let (connector, mut connection_responders) = FakeConnector::new();
-        let outcomes = NoDelay;
         let (resolver, mut resolution_responders) = FakeResolver::new();
 
         let _connection_task = tokio::spawn(async move {
             connect(
                 &RouteResolver::default(),
-                &outcomes,
+                NoDelay,
                 HOSTNAMES
                     .iter()
                     .map(|(h, _addr)| FakeRoute(UnresolvedHost::from(Arc::from(*h)))),
@@ -984,7 +1016,6 @@ mod test {
         ];
 
         let (connector, mut connection_responders) = FakeConnector::<FakeRoute<IpAddr>>::new();
-        let outcomes = NoDelay;
         let (resolver, mut resolution_responders) = FakeResolver::new();
 
         const SUCCESSFUL_ROUTE_INDEX: usize = 4;
@@ -1017,7 +1048,7 @@ mod test {
 
         let (result, updates) = connect(
             &RouteResolver::default(),
-            &outcomes,
+            NoDelay,
             HOSTNAMES
                 .iter()
                 .map(|(h, _addr)| FakeRoute(UnresolvedHost::from(Arc::from(*h)))),
@@ -1070,7 +1101,6 @@ mod test {
         ];
 
         let (connector, mut connection_responders) = FakeConnector::<FakeRoute<IpAddr>>::new();
-        let outcomes = NoDelay;
         let (resolver, mut resolution_responders) = FakeResolver::new();
 
         let connect_task = tokio::spawn(async move {
@@ -1096,7 +1126,7 @@ mod test {
 
         let (result, _updates) = connect(
             &RouteResolver::default(),
-            &outcomes,
+            NoDelay,
             HOSTNAMES
                 .iter()
                 .map(|(h, _addr)| FakeRoute(UnresolvedHost::from(Arc::from(*h)))),
@@ -1121,24 +1151,6 @@ mod test {
                 HOSTNAMES[0].1[2],
             ]
         );
-    }
-
-    /// [`Connector`] impl whose `connect_over` never resolves.
-    struct NeverConnect;
-
-    impl<R> Connector<R, ()> for NeverConnect {
-        type Connection = Infallible;
-
-        type Error = FakeConnectError;
-
-        fn connect_over(
-            &self,
-            (): (),
-            _route: R,
-            _log_tag: Arc<str>,
-        ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
-            std::future::pending()
-        }
     }
 
     #[tokio::test(start_paused = true)]

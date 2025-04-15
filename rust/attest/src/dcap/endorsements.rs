@@ -259,7 +259,7 @@ fn data_for_field<'a>(field: SgxEndorsementField, offsets: &[usize], data: &'a [
     &data[offsets[index]..offsets[index + 1]]
 }
 
-#[derive(Debug, zerocopy::FromBytes, zerocopy::FromZeroes)]
+#[derive(Debug, zerocopy::FromBytes)]
 #[repr(C)]
 pub(crate) struct EndorsementsHeader {
     // include/openenclave/bits/attestation.h
@@ -282,7 +282,7 @@ static_assertions::const_assert_eq!(16, std::mem::size_of::<EndorsementsHeader>(
 
 #[cfg(test)]
 mod tests {
-    use hex_literal::hex;
+    use const_str::hex;
     use zerocopy::FromBytes;
 
     use super::*;
@@ -311,7 +311,7 @@ mod tests {
                 .try_into()
                 .unwrap();
 
-        let header = EndorsementsHeader::read_from(&data).expect("failed to parse header");
+        let header = EndorsementsHeader::read_from_bytes(&data).expect("failed to parse header");
 
         assert_eq!(1, header.version.get());
         assert_eq!(2, header.enclave_type.get()) // oe_enclave_type_t (include/openenclave/bits/types.h)

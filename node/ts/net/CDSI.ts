@@ -12,12 +12,7 @@ import { TokioAsyncContext, newNativeHandle, ServiceAuth } from '../net';
 export type CDSRequestOptionsType = {
   e164s: Array<string>;
   acisAndAccessKeys: Array<{ aci: string; accessKey: string }>;
-  /**
-   * @deprecated this option is ignored by the server.
-   */
-  returnAcisWithoutUaks: boolean;
   abortSignal?: AbortSignal;
-  useNewConnectLogic?: boolean;
 };
 
 export type CDSResponseEntryType<Aci, Pni> = {
@@ -44,12 +39,7 @@ export async function cdsiLookup(
     connectionManager: Native.Wrapper<Native.ConnectionManager>;
   }>,
   { username, password }: Readonly<ServiceAuth>,
-  {
-    e164s,
-    acisAndAccessKeys,
-    abortSignal,
-    useNewConnectLogic,
-  }: ReadonlyDeep<CDSRequestOptionsType>
+  { e164s, acisAndAccessKeys, abortSignal }: ReadonlyDeep<CDSRequestOptionsType>
 ): Promise<CDSResponseType<string, string>> {
   const request = newNativeHandle(Native.LookupRequest_new());
   e164s.forEach((e164) => {
@@ -64,13 +54,15 @@ export async function cdsiLookup(
     );
   });
 
-  const startLookup = useNewConnectLogic
-    ? Native.CdsiLookup_new_routes
-    : Native.CdsiLookup_new;
-
   const lookup = await asyncContext.makeCancellable(
     abortSignal,
-    startLookup(asyncContext, connectionManager, username, password, request)
+    Native.CdsiLookup_new(
+      asyncContext,
+      connectionManager,
+      username,
+      password,
+      request
+    )
   );
   return await asyncContext.makeCancellable(
     abortSignal,

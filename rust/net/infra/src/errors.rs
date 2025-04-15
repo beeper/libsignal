@@ -4,16 +4,24 @@
 //
 
 use std::fmt::Display;
+use std::time::Duration;
 
+use http::{HeaderName, HeaderValue};
 use tokio_boring_signal::HandshakeError;
 
-use crate::certs;
+use crate::{certs, AsHttpHeader};
 
 pub trait LogSafeDisplay: Display {}
 
 /// Vacuous implementation since you can't actually [`Display::fmt`] a
 /// [`std::convert::Infallible`].
 impl LogSafeDisplay for std::convert::Infallible {}
+
+#[derive(Copy, Clone, Debug, thiserror::Error, displaydoc::Display)]
+/// retry after {retry_after_seconds}s
+pub struct RetryLater {
+    pub retry_after_seconds: u32,
+}
 
 /// Errors that can occur during transport-level connection establishment.
 #[derive(displaydoc::Display, Debug, thiserror::Error)]
@@ -53,11 +61,23 @@ impl Display for SslErrorReasons {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FailedHandshakeReason {
     io: Option<std::io::ErrorKind>,
     code: Option<boring_signal::ssl::ErrorCode>,
 }
+
+impl FailedHandshakeReason {
+    pub const TIMED_OUT: Self = Self {
+        io: Some(std::io::ErrorKind::TimedOut),
+        code: None,
+    };
+}
+
+/// Error type for TLS handshake timeouts
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("TLS handshake timed out")]
+pub struct TlsHandshakeTimeout;
 
 impl<S> From<HandshakeError<S>> for FailedHandshakeReason {
     fn from(value: HandshakeError<S>) -> Self {
@@ -84,6 +104,21 @@ impl Display for FailedHandshakeReason {
         }
 
         Ok(())
+    }
+}
+
+impl RetryLater {
+    /// The amount of time to wait before retrying, as a [`Duration`].
+    pub fn duration(&self) -> Duration {
+        Duration::from_secs(self.retry_after_seconds.into())
+    }
+}
+
+impl AsHttpHeader for RetryLater {
+    const HEADER_NAME: HeaderName = HeaderName::from_static("retry-after");
+
+    fn header_value(&self) -> HeaderValue {
+        HeaderValue::from(self.retry_after_seconds)
     }
 }
 
@@ -119,5 +154,11 @@ impl From<TransportConnectError> for std::io::Error {
             TransportConnectError::ClientAbort => ErrorKind::ConnectionAborted,
         };
         Self::new(kind, value.to_string())
+    }
+}
+
+impl From<TlsHandshakeTimeout> for TransportConnectError {
+    fn from(TlsHandshakeTimeout: TlsHandshakeTimeout) -> Self {
+        Self::SslFailedHandshake(FailedHandshakeReason::TIMED_OUT)
     }
 }
