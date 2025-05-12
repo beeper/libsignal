@@ -13,6 +13,7 @@ import org.signal.libsignal.protocol.state.SessionStore;
 import org.signal.libsignal.protocol.state.PreKeyStore;
 import org.signal.libsignal.protocol.state.SignedPreKeyStore;
 import org.signal.libsignal.protocol.state.KyberPreKeyStore;
+import org.signal.libsignal.protocol.SignedPublicPreKey;
 import org.signal.libsignal.protocol.groups.state.SenderKeyStore;
 import org.signal.libsignal.protocol.logging.Log;
 import org.signal.libsignal.protocol.logging.SignalProtocolLogger;
@@ -544,8 +545,33 @@ public final class Native {
   public static native long ReceiptCredential_GetReceiptExpirationTime(byte[] receiptCredential);
   public static native long ReceiptCredential_GetReceiptLevel(byte[] receiptCredential);
 
+  public static native long RegisterAccountRequest_Create();
+  public static native void RegisterAccountRequest_Destroy(long handle);
+  public static native void RegisterAccountRequest_SetAccountPassword(long registerAccount, String accountPassword);
+  public static native void RegisterAccountRequest_SetGcmPushToken(long registerAccount, String gcmPushToken);
+  public static native void RegisterAccountRequest_SetIdentityPqLastResortPreKey(long registerAccount, int identityType, SignedPublicPreKey pqLastResortPreKey);
+  public static native void RegisterAccountRequest_SetIdentityPublicKey(long registerAccount, int identityType, long identityKey);
+  public static native void RegisterAccountRequest_SetIdentitySignedPreKey(long registerAccount, int identityType, SignedPublicPreKey signedPreKey);
+  public static native void RegisterAccountRequest_SetSkipDeviceTransfer(long registerAccount);
+
+  public static native void RegisterAccountResponse_Destroy(long handle);
+  public static native long RegisterAccountResponse_GetEntitlementBackupExpirationSeconds(long response);
+  public static native long RegisterAccountResponse_GetEntitlementBackupLevel(long response);
+  public static native Object[] RegisterAccountResponse_GetEntitlementBadges(long response);
+  public static native byte[] RegisterAccountResponse_GetIdentity(long response, int identityType);
+  public static native String RegisterAccountResponse_GetNumber(long response);
+  public static native boolean RegisterAccountResponse_GetReregistration(long response);
+  public static native boolean RegisterAccountResponse_GetStorageCapable(long response);
+  public static native byte[] RegisterAccountResponse_GetUsernameHash(long response);
+  public static native UUID RegisterAccountResponse_GetUsernameLinkHandle(long response);
+
+  public static native long RegistrationAccountAttributes_Create(byte[] recoveryPassword, int aciRegistrationId, int pniRegistrationId, String registrationLock, byte[] unidentifiedAccessKey, boolean unrestrictedUnidentifiedAccess, Object[] capabilities, boolean discoverableByPhoneNumber);
+  public static native void RegistrationAccountAttributes_Destroy(long handle);
+
+  public static native CompletableFuture<Object> RegistrationService_CheckSvr2Credentials(long asyncRuntime, long service, Object[] svrTokens);
   public static native CompletableFuture<Long> RegistrationService_CreateSession(long asyncRuntime, Object createSession, ConnectChatBridge connectChat);
   public static native void RegistrationService_Destroy(long handle);
+  public static native CompletableFuture<Long> RegistrationService_RegisterAccount(long asyncRuntime, long service, long registerAccount, long accountAttributes);
   public static native long RegistrationService_RegistrationSession(long service);
   public static native CompletableFuture<Void> RegistrationService_RequestPushChallenge(long asyncRuntime, long service, String pushToken, Object pushTokenType);
   public static native CompletableFuture<Void> RegistrationService_RequestVerificationCode(long asyncRuntime, long service, String transport, String client, Object[] languages);
@@ -677,17 +703,12 @@ public final class Native {
   public static native boolean SessionRecord_CurrentRatchetKeyMatches(long s, long key) throws Exception;
   public static native long SessionRecord_Deserialize(byte[] data) throws Exception;
   public static native void SessionRecord_Destroy(long handle);
-  public static native byte[] SessionRecord_GetAliceBaseKey(long obj) throws Exception;
   public static native byte[] SessionRecord_GetLocalIdentityKeyPublic(long obj) throws Exception;
   public static native int SessionRecord_GetLocalRegistrationId(long obj) throws Exception;
-  public static native byte[] SessionRecord_GetReceiverChainKeyValue(long sessionState, long key) throws Exception;
   public static native byte[] SessionRecord_GetRemoteIdentityKeyPublic(long obj) throws Exception;
   public static native int SessionRecord_GetRemoteRegistrationId(long obj) throws Exception;
-  public static native byte[] SessionRecord_GetSenderChainKeyValue(long obj) throws Exception;
   public static native int SessionRecord_GetSessionVersion(long s) throws Exception;
   public static native boolean SessionRecord_HasUsableSenderChain(long s, long now) throws Exception;
-  public static native long SessionRecord_InitializeAliceSession(long identityKeyPrivate, long identityKeyPublic, long basePrivate, long basePublic, long theirIdentityKey, long theirSignedPrekey, long theirRatchetKey) throws Exception;
-  public static native long SessionRecord_InitializeBobSession(long identityKeyPrivate, long identityKeyPublic, long signedPrekeyPrivate, long signedPrekeyPublic, long ephPrivate, long ephPublic, long theirIdentityKey, long theirBaseKey) throws Exception;
   public static native long SessionRecord_NewFresh();
   public static native byte[] SessionRecord_Serialize(long obj) throws Exception;
 

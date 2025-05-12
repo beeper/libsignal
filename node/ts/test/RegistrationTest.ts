@@ -11,11 +11,15 @@ import * as Native from '../../Native';
 import { ErrorCode, LibSignalErrorBase } from '../Errors';
 import {
   newNativeHandle,
+  RegisterAccountResponse,
   RegistrationService,
   RegistrationSessionState,
+  Svr2CredentialResult,
   TokioAsyncContext,
 } from '../net';
 import { InternalRequest } from './NetTest';
+import { IdentityKeyPair } from '../EcKeys';
+import { Aci, Pni } from '../Address';
 
 use(chaiAsPromised);
 use(sinonChai);
@@ -38,6 +42,59 @@ describe('Registration types', () => {
       newNativeHandle(Native.TESTING_RegistrationSessionInfoConvert())
     );
     expect(convertedSession).to.deep.equal(expectedSession);
+  });
+
+  it('marshals signed public pre-key correctly', () => {
+    const key = IdentityKeyPair.generate().publicKey;
+    const signedPublicPreKey = {
+      keyId: 42,
+      publicKey: key.serialize(),
+      signature: Buffer.from('signature'),
+    };
+    Native.TESTING_SignedPublicPreKey_CheckBridgesCorrectly(
+      key,
+      signedPublicPreKey
+    );
+  });
+
+  it('converts register account response correctly', () => {
+    const response = new RegisterAccountResponse(
+      Native.TESTING_RegisterAccountResponse_CreateTestValue()
+    );
+    expect(response.number).to.eq('+18005550123');
+    expect(response.aci).to.deep.eq(
+      Aci.parseFromServiceIdString('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+    );
+    expect(response.pni).to.deep.eq(
+      Pni.parseFromServiceIdString('PNI:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')
+    );
+    expect(response.usernameHash).to.deep.eq(Buffer.from('username-hash'));
+    expect(response.usernameLinkHandle).to.deep.eq(
+      Buffer.from(Array(16).fill(0x55))
+    );
+    expect(response.storageCapable).to.eq(true);
+    expect(response.entitlementBadges).to.deep.eq([
+      { id: 'first', visible: true, expirationSeconds: 123456 },
+      { id: 'second', visible: false, expirationSeconds: 555 },
+    ]);
+    expect(response.backupEntitlement).to.deep.eq({
+      backupLevel: 123n,
+      expirationSeconds: 888888n,
+    });
+    expect(response.reregistration).to.eq(true);
+  });
+
+  it('converts SVR2 credential response correctly', () => {
+    const expectedEntries: Map<string, Svr2CredentialResult> = new Map(
+      Object.entries({
+        'username:pass-match': 'match',
+        'username:pass-no-match': 'no-match',
+        'username:pass-invalid': 'invalid',
+      })
+    );
+    expect(
+      Native.TESTING_RegistrationService_CheckSvr2CredentialsResponseConvert()
+    ).deep.eq(expectedEntries);
   });
 
   expect(() =>
@@ -120,6 +177,29 @@ describe('Registration types', () => {
           ['InvalidSessionId', ErrorCode.Generic],
           ['SessionNotFound', ErrorCode.Generic],
           ['NotReadyForVerification', ErrorCode.Generic],
+          retryLaterCase,
+          unknownCase,
+          timeoutCase,
+        ],
+      },
+      {
+        operationName: 'CheckSvr2Credentials',
+        convertFn:
+          Native.TESTING_RegistrationService_CheckSvr2CredentialsErrorConvert,
+        cases: [
+          ['CredentialsCouldNotBeParsed', ErrorCode.Generic],
+          unknownCase,
+          timeoutCase,
+        ],
+      },
+      {
+        operationName: 'RegisterAccount',
+        convertFn:
+          Native.TESTING_RegistrationService_RegisterAccountErrorConvert,
+        cases: [
+          ['DeviceTransferIsPossibleButNotSkipped', ErrorCode.Generic],
+          ['RegistrationRecoveryVerificationFailed', ErrorCode.Generic],
+          ['RegistrationLockFor50Seconds', ErrorCode.Generic],
           retryLaterCase,
           unknownCase,
           timeoutCase,

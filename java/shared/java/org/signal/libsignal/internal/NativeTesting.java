@@ -14,6 +14,7 @@ import org.signal.libsignal.protocol.state.SessionStore;
 import org.signal.libsignal.protocol.state.PreKeyStore;
 import org.signal.libsignal.protocol.state.SignedPreKeyStore;
 import org.signal.libsignal.protocol.state.KyberPreKeyStore;
+import org.signal.libsignal.protocol.SignedPublicPreKey;
 import org.signal.libsignal.protocol.groups.state.SenderKeyStore;
 import org.signal.libsignal.protocol.logging.Log;
 import org.signal.libsignal.protocol.logging.SignalProtocolLogger;
@@ -54,6 +55,12 @@ public final class NativeTesting {
   public static native void FakeChatServer_Destroy(long handle);
 
   public static native void OtherTestingHandleType_Destroy(long handle);
+
+  public static native byte[] SessionRecord_GetAliceBaseKey(long obj) throws Exception;
+  public static native byte[] SessionRecord_GetReceiverChainKeyValue(long sessionState, long key) throws Exception;
+  public static native byte[] SessionRecord_GetSenderChainKeyValue(long obj) throws Exception;
+  public static native byte[] SessionRecord_InitializeAliceSession(long identityKeyPrivate, long identityKeyPublic, long basePrivate, long basePublic, long theirIdentityKey, long theirSignedPrekey, long theirRatchetKey) throws Exception;
+  public static native byte[] SessionRecord_InitializeBobSession(long identityKeyPrivate, long identityKeyPublic, long signedPrekeyPrivate, long signedPrekeyPublic, long ephPrivate, long ephPublic, long theirIdentityKey, long theirBaseKey) throws Exception;
 
   public static native String TESTING_BridgedStringMap_dump_to_json(long map);
   public static native void TESTING_CdsiLookupErrorConvert(String errorDescription) throws Exception;
@@ -112,7 +119,11 @@ public final class NativeTesting {
   public static native CompletableFuture<Object> TESTING_PanicOnReturnIo(long asyncRuntime, Object needsCleanup);
   public static native Object TESTING_PanicOnReturnSync(Object needsCleanup);
   public static native byte[][] TESTING_ProcessBytestringArray(ByteBuffer[] input);
+  public static native long TESTING_RegisterAccountResponse_CreateTestValue();
+  public static native void TESTING_RegistrationService_CheckSvr2CredentialsErrorConvert(String errorDescription) throws Exception;
+  public static native Object TESTING_RegistrationService_CheckSvr2CredentialsResponseConvert();
   public static native void TESTING_RegistrationService_CreateSessionErrorConvert(String errorDescription) throws Exception;
+  public static native void TESTING_RegistrationService_RegisterAccountErrorConvert(String errorDescription) throws Exception;
   public static native void TESTING_RegistrationService_RequestVerificationCodeErrorConvert(String errorDescription) throws Exception;
   public static native void TESTING_RegistrationService_ResumeSessionErrorConvert(String errorDescription) throws Exception;
   public static native void TESTING_RegistrationService_SubmitVerificationErrorConvert(String errorDescription) throws Exception;
@@ -124,6 +135,7 @@ public final class NativeTesting {
   public static native int TESTING_RoundTripU32(int input);
   public static native long TESTING_RoundTripU64(long input);
   public static native int TESTING_RoundTripU8(int input);
+  public static native void TESTING_SignedPublicPreKey_CheckBridgesCorrectly(long sourcePublicKey, SignedPublicPreKey signedPreKey);
   public static native int TESTING_TestingHandleType_getValue(long handle);
 
   public static native void TestingHandleType_Destroy(long handle);

@@ -28,8 +28,9 @@ pub enum CiphertextMessage {
     PlaintextContent(PlaintextContent),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, num_enum::TryFromPrimitive)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, derive_more::TryFrom)]
 #[repr(u8)]
+#[try_from(repr)]
 pub enum CiphertextMessageType {
     Whisper = 2,
     PreKey = 3,
@@ -898,7 +899,7 @@ pub fn extract_decryption_error_message_from_serialized_content(
 #[cfg(test)]
 mod tests {
     use rand::rngs::OsRng;
-    use rand::{CryptoRng, Rng};
+    use rand::{CryptoRng, Rng, TryRngCore as _};
 
     use super::*;
     use crate::KeyPair;
@@ -942,7 +943,7 @@ mod tests {
 
     #[test]
     fn test_signal_message_serialize_deserialize() -> Result<()> {
-        let mut csprng = OsRng;
+        let mut csprng = OsRng.unwrap_err();
         let message = create_signal_message(&mut csprng)?;
         let deser_message =
             SignalMessage::try_from(message.as_ref()).expect("should deserialize without error");
@@ -952,7 +953,7 @@ mod tests {
 
     #[test]
     fn test_pre_key_signal_message_serialize_deserialize() -> Result<()> {
-        let mut csprng = OsRng;
+        let mut csprng = OsRng.unwrap_err();
         let identity_key_pair = KeyPair::generate(&mut csprng);
         let base_key_pair = KeyPair::generate(&mut csprng);
         let message = create_signal_message(&mut csprng)?;
@@ -1006,7 +1007,7 @@ mod tests {
 
     #[test]
     fn test_sender_key_message_serialize_deserialize() -> Result<()> {
-        let mut csprng = OsRng;
+        let mut csprng = OsRng.unwrap_err();
         let signature_key_pair = KeyPair::generate(&mut csprng);
         let sender_key_message = SenderKeyMessage::new(
             SENDERKEY_MESSAGE_CURRENT_VERSION,
@@ -1044,7 +1045,7 @@ mod tests {
 
     #[test]
     fn test_decryption_error_message() -> Result<()> {
-        let mut csprng = OsRng;
+        let mut csprng = OsRng.unwrap_err();
         let identity_key_pair = KeyPair::generate(&mut csprng);
         let base_key_pair = KeyPair::generate(&mut csprng);
         let message = create_signal_message(&mut csprng)?;

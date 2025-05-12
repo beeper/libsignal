@@ -12,13 +12,20 @@ use std::fmt;
 use uuid::Uuid;
 
 /// Known types of [ServiceId].
-#[derive(Clone, Copy, Hash, PartialEq, Eq, num_enum::IntoPrimitive, num_enum::TryFromPrimitive)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, derive_more::TryFrom)]
+#[try_from(repr)]
 #[repr(u8)]
 pub enum ServiceIdKind {
     /// An [Aci].
     Aci,
     /// A [Pni].
     Pni,
+}
+
+impl From<ServiceIdKind> for u8 {
+    fn from(value: ServiceIdKind) -> Self {
+        value as u8
+    }
 }
 
 impl fmt::Display for ServiceIdKind {
@@ -333,8 +340,8 @@ mod service_id_tests {
     use std::borrow::Borrow;
 
     use proptest::prelude::*;
+    use rand::rng;
     use rand::seq::SliceRandom;
-    use rand::thread_rng;
 
     use super::*;
 
@@ -620,7 +627,7 @@ mod service_id_tests {
             Pni::from_uuid(test_uuid).into(),
         ];
         let original = ids;
-        ids.shuffle(&mut thread_rng());
+        ids.shuffle(&mut rng());
         ids.sort();
         assert_eq!(original, ids);
     }

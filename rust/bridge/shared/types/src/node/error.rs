@@ -257,6 +257,8 @@ impl DefaultSignalNodeError for zkgroup::ZkGroupVerificationFailure {}
 
 impl DefaultSignalNodeError for zkgroup::ZkGroupDeserializationFailure {}
 
+impl DefaultSignalNodeError for libsignal_net::keytrans::Error {}
+
 impl SignalNodeError for usernames::UsernameError {
     fn into_throwable<'a, C: Context<'a>>(
         self,
@@ -557,8 +559,8 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
 mod registration {
     use libsignal_net::infra::errors::RetryLater;
     use libsignal_net::registration::{
-        CreateSessionError, RegisterAccountError, RegistrationLock, RequestError,
-        RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
+        CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError, RegistrationLock,
+        RequestError, RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
         UpdateSessionError, VerificationCodeNotDeliverable,
     };
 
@@ -710,6 +712,14 @@ mod registration {
                 SubmitVerificationError::SessionNotFound => Self::SessionNotFound,
                 SubmitVerificationError::NotReadyForVerification => Self::NotReadyForVerification,
                 SubmitVerificationError::RetryLater(retry_later) => Self::RetryLater(retry_later),
+            }
+        }
+    }
+
+    impl From<CheckSvr2CredentialsError> for BridgedErrorVariant {
+        fn from(value: CheckSvr2CredentialsError) -> Self {
+            match value {
+                CheckSvr2CredentialsError::CredentialsCouldNotBeParsed => Self::RequestInvalid,
             }
         }
     }

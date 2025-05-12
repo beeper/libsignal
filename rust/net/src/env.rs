@@ -9,6 +9,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
+use boring_signal::ssl::SslVersion;
 use const_str::{hex, ip_addr};
 use http::HeaderValue;
 use libsignal_keytrans::{DeploymentMode, PublicConfig, VerifyingKey, VrfPublicKey};
@@ -25,10 +26,10 @@ use libsignal_net_infra::{
 };
 use nonzero_ext::nonzero;
 use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::certs::{PROXY_G_ROOT_CERTIFICATES, SIGNAL_ROOT_CERTIFICATES};
-use crate::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, SgxPreQuantum};
+use crate::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, Svr2};
 
 const DEFAULT_HTTPS_PORT: NonZeroU16 = nonzero!(443_u16);
 pub const TIMESTAMP_HEADER_NAME: &str = "x-signal-timestamp";
@@ -49,6 +50,7 @@ const DOMAIN_CONFIG_CHAT: DomainConfig = DomainConfig {
         hostname: "chat.signal.org",
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
         confirmation_header_name: Some(TIMESTAMP_HEADER_NAME),
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/service",
@@ -70,6 +72,7 @@ const DOMAIN_CONFIG_CHAT_STAGING: DomainConfig = DomainConfig {
         hostname: "chat.staging.signal.org",
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
         confirmation_header_name: Some(TIMESTAMP_HEADER_NAME),
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/service-staging",
@@ -83,6 +86,7 @@ const DOMAIN_CONFIG_CDSI: DomainConfig = DomainConfig {
         hostname: "cdsi.signal.org",
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/cdsi",
@@ -98,6 +102,7 @@ const DOMAIN_CONFIG_CDSI_STAGING: DomainConfig = DomainConfig {
         hostname: "cdsi.staging.signal.org",
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/cdsi-staging",
@@ -113,6 +118,7 @@ const DOMAIN_CONFIG_SVR2: DomainConfig = DomainConfig {
         hostname: "svr2.signal.org",
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/svr2",
@@ -128,6 +134,7 @@ const DOMAIN_CONFIG_SVR2_STAGING: DomainConfig = DomainConfig {
         hostname: "svr2.staging.signal.org",
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/svr2-staging",
@@ -178,20 +185,22 @@ pub(crate) const ENDPOINT_PARAMS_CDSI_STAGING: EndpointParams<'static, Cdsi> = E
     raft_config: (),
 };
 
-pub(crate) const ENDPOINT_PARAMS_SVR2_STAGING: EndpointParams<'static, SgxPreQuantum> =
-    EndpointParams {
-        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_STAGING),
-        raft_config: attest::constants::RAFT_CONFIG_SVR2_STAGING,
-    };
+pub(crate) const ENDPOINT_PARAMS_SVR2_STAGING: EndpointParams<'static, Svr2> = EndpointParams {
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_STAGING),
+    raft_config: attest::constants::RAFT_CONFIG_SVR2_STAGING,
+};
 
 pub(crate) const ENDPOINT_PARAMS_CDSI_PROD: EndpointParams<'static, Cdsi> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_PREQUANTUM),
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI),
     raft_config: (),
 };
-pub(crate) const ENDPOINT_PARAMS_SVR2_PROD: EndpointParams<'static, SgxPreQuantum> =
+
+// Currently, the production SVR2 is prequantum while we're testing the postquantum
+// handshakes in staging.
+pub(crate) const ENDPOINT_PARAMS_SVR2_PROD_PREQUANTUM: EndpointParams<'static, Svr2> =
     EndpointParams {
-        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_PROD),
-        raft_config: attest::constants::RAFT_CONFIG_SVR2_PROD,
+        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_PROD_PREQUANTUM),
+        raft_config: attest::constants::RAFT_CONFIG_SVR2_PROD_PREQUANTUM,
     };
 
 pub(crate) const KEYTRANS_SIGNING_KEY_MATERIAL_STAGING: &[u8; 32] =
@@ -226,6 +235,8 @@ pub struct ConnectionConfig {
     pub port: NonZeroU16,
     /// Which certificates to use when connecting to the resource.
     pub cert: RootCertificates,
+    /// Which minimum version of TLS to require when connecting to the resource.
+    pub min_tls_version: Option<SslVersion>,
     /// A header to look for that indicates that the resource was reached.
     ///
     /// If this is `Some()`, then the presence of the header in an HTTP response
@@ -288,7 +299,7 @@ impl ConnectionConfig {
     pub fn connection_params_with_fallback(&self) -> Vec<ConnectionParams> {
         let direct = self.direct_connection_params();
         if let Some(proxy) = &self.proxy {
-            let mut rng = thread_rng();
+            let mut rng = rng();
             let [params_a, params_b] = proxy.configs.each_ref().map(|config| {
                 config.shuffled_connection_params(
                     proxy.path_prefix,
@@ -312,6 +323,7 @@ impl ConnectionConfig {
             hostname,
             port,
             cert,
+            min_tls_version,
             confirmation_header_name: _,
             proxy,
         } = self;
@@ -358,10 +370,17 @@ impl ConnectionConfig {
             DomainFrontRouteProvider::new(HttpVersion::Http1_1, domain_front_configs),
             TlsRouteProvider::new(
                 cert.clone(),
+                *min_tls_version,
                 Host::Domain(Arc::clone(&hostname)),
                 DirectTcpRouteProvider::new(hostname, *port),
             ),
         )
+    }
+
+    pub fn config_with_permissive_min_tls_version(&self) -> Self {
+        let mut permissive_config = self.clone();
+        permissive_config.min_tls_version = None;
+        permissive_config
     }
 }
 
@@ -474,7 +493,7 @@ impl From<KeyTransConfig> for PublicConfig {
 
 pub struct Env<'a> {
     pub cdsi: EnclaveEndpoint<'a, Cdsi>,
-    pub svr2: EnclaveEndpoint<'a, SgxPreQuantum>,
+    pub svr2: EnclaveEndpoint<'a, Svr2>,
     pub chat_domain_config: DomainConfig,
     // TODO: make non-optional when the public endpoints are up
     pub keytrans_config: Option<KeyTransConfig>,
@@ -518,7 +537,9 @@ pub const PROD: Env<'static> = Env {
     },
     svr2: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_SVR2,
-        params: ENDPOINT_PARAMS_SVR2_PROD,
+        // Currently, the production SVR2 is prequantum while we're testing the postquantum
+        // handshakes in staging.
+        params: ENDPOINT_PARAMS_SVR2_PROD_PREQUANTUM,
     },
     keytrans_config: None,
 };
@@ -600,6 +621,7 @@ mod test {
             hostname: "host",
             port: PORT,
             cert: RootCertificates::Native,
+            min_tls_version: Some(SslVersion::TLS1_2),
             confirmation_header_name: None,
             proxy: Some(ConnectionProxyConfig {
                 path_prefix: "proxy-prefix",
@@ -637,6 +659,7 @@ mod test {
                     root_certs: RootCertificates::Native,
                     sni: Host::Domain("host".into()),
                     alpn: Some(Alpn::Http1_1),
+                    min_protocol_version: Some(SslVersion::TLS1_2),
                 },
                 inner: TcpRoute {
                     address: UnresolvedHost::from(Arc::from("host")),

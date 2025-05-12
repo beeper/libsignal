@@ -1,13 +1,19 @@
-v0.70.0
+v0.71.0
 
-- Resuming an existing registration session now requires the phone number with for which the session was created.
+- A pre-key message sender's identity is stored after the message is decrypted.
 
-- Make the registration service client available in Java.
+- Java, Node, Swift: changed IdentityKeyStore.saveIdentity to return an enum.
 
-- Enable registering an account via the Node registration service client.
+- Java: Expose account registration via the registration service client.
 
-- Java, Node, Swift: remove items marked as deprecated. This includes functions related to CDSI, HKDF, message backup validation, media sanitization, incremental MACs, and usernames.
+- Node: RegistrationService.registerAccount takes account password as a string.
 
-- Android: Build with NDK 28, the latest stable.
+- keytrans: Bridge to Node
 
-- backups: Validate NotificationProfile::id
+- net: Connections to Signal services (and to Cloudflare's DNS-over-HTTPS server) will now require TLS v1.3, which they would already have been using.
+
+- net: Futures returned by ChatConnection.send() will now return more specific errors on failure
+
+- New SVR2 enclaves for staging and production.
+
+- keytrans: Support multiple auditors

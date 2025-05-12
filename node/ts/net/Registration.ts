@@ -38,6 +38,8 @@ type ResumeSessionArgs = Readonly<{
   e164: string;
 }>;
 
+export type Svr2CredentialResult = 'match' | 'no-match' | 'invalid';
+
 /**
  * A client for the Signal registration service.
  *
@@ -162,8 +164,18 @@ export class RegistrationService {
     return this.sessionState.verified;
   }
 
+  public async checkSvr2Credentials(
+    svr2Tokens: Array<string>
+  ): Promise<Map<string, Svr2CredentialResult>> {
+    return Native.RegistrationService_CheckSvr2Credentials(
+      this.tokioAsyncContext,
+      this,
+      svr2Tokens
+    );
+  }
+
   public async registerAccount(inputs: {
-    accountPassword: Uint8Array;
+    accountPassword: string;
     skipDeviceTransfer: boolean;
     accountAttributes: AccountAttributes;
     aciPublicKey: PublicKey;
@@ -185,10 +197,7 @@ export class RegistrationService {
       pniPqLastResortPreKey,
     } = inputs;
     const args = newNativeHandle(Native.RegisterAccountRequest_Create());
-    Native.RegisterAccountRequest_SetAccountPassword(
-      args,
-      Buffer.from(accountPassword)
-    );
+    Native.RegisterAccountRequest_SetAccountPassword(args, accountPassword);
     if (skipDeviceTransfer) {
       Native.RegisterAccountRequest_SetSkipDeviceTransfer(args);
     }

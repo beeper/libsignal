@@ -36,7 +36,7 @@ impl RefUnwindSafe for RegistrationService where
 pub struct RegisterAccountInner {
     pub message_notification: NewMessageNotification<String>,
     pub device_transfer: Option<SkipDeviceTransfer>,
-    pub account_password: Box<[u8]>,
+    pub account_password: Box<str>,
     pub identity_keys: ForServiceIds<Option<PublicKey>>,
     pub signed_pre_keys: ForServiceIds<Option<SignedPreKeyBody<Box<[u8]>>>>,
     pub pq_last_resort_pre_keys: ForServiceIds<Option<SignedPreKeyBody<Box<[u8]>>>>,
@@ -64,9 +64,9 @@ pub type RegistrationAccountAttributes = AccountAttributes;
 
 bridge_as_handle!(RegistrationService, ffi = false);
 bridge_as_handle!(RegistrationSession, ffi = false);
-bridge_as_handle!(RegisterAccountRequest, ffi = false, jni = false);
-bridge_as_handle!(RegisterAccountResponse, ffi = false, jni = false);
-bridge_as_handle!(RegistrationAccountAttributes, ffi = false, jni = false);
+bridge_as_handle!(RegisterAccountRequest, ffi = false);
+bridge_as_handle!(RegisterAccountResponse, ffi = false);
+bridge_as_handle!(RegistrationAccountAttributes, ffi = false);
 
 /// Precursor to a [`Box<dyn ConnectChat>`](ConnectChat).
 ///

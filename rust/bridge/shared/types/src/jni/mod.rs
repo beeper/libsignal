@@ -65,6 +65,7 @@ pub type JavaByteBufferArray<'a> = JObjectArray<'a>;
 pub type JavaObject<'a> = JObject<'a>;
 pub type JavaUUID<'a> = JObject<'a>;
 pub type JavaCiphertextMessage<'a> = JObject<'a>;
+pub type JavaSignedPublicPreKey<'a> = JObject<'a>;
 pub type JavaMap<'a> = JObject<'a>;
 
 /// Return type marker for `bridge_fn`s that return Result, which gen_java_decl.py will pick out
@@ -522,10 +523,11 @@ impl MessageOnlyExceptionJniError for signal_media::sanitize::webp::ParseErrorRe
 
 mod registration {
     use libsignal_core::try_scoped;
+    use libsignal_net::auth::Auth;
     use libsignal_net::registration::{
-        CreateSessionError, InvalidSessionId, RequestError, RequestVerificationCodeError,
-        ResumeSessionError, SubmitVerificationError, UpdateSessionError,
-        VerificationCodeNotDeliverable,
+        CheckSvr2CredentialsError, CreateSessionError, InvalidSessionId, RegisterAccountError,
+        RegistrationLock, RequestError, RequestVerificationCodeError, ResumeSessionError,
+        SubmitVerificationError, UpdateSessionError, VerificationCodeNotDeliverable,
     };
 
     use super::*;
@@ -681,6 +683,62 @@ mod registration {
                 }
                 SubmitVerificationError::RetryLater(retry_later) => retry_later.to_throwable(env),
             }
+        }
+    }
+
+    impl MessageOnlyExceptionJniError for CheckSvr2CredentialsError {
+        fn exception_class(&self) -> ClassName<'static> {
+            match self {
+                CheckSvr2CredentialsError::CredentialsCouldNotBeParsed => {
+                    ClassName("org.signal.libsignal.net.RegistrationException")
+                }
+            }
+        }
+    }
+
+    impl JniError for RegisterAccountError {
+        fn to_throwable<'a>(
+            &self,
+            env: &mut JNIEnv<'a>,
+        ) -> Result<JThrowable<'a>, BridgeLayerError> {
+            let class_name = match self {
+                RegisterAccountError::RetryLater(retry_later) => {
+                    return retry_later.to_throwable(env)
+                }
+                RegisterAccountError::RegistrationLock(registration_lock) => {
+                    let class_name =
+                        ClassName("org.signal.libsignal.net.RegistrationLockException");
+                    let RegistrationLock {
+                        time_remaining,
+                        svr2_credentials,
+                    } = registration_lock;
+                    let time_remaining_seconds: i64 =
+                        time_remaining.as_secs().try_into().map_err(|_| {
+                            BridgeLayerError::IntegerOverflow(
+                                "RegistrationLock.time_remaining_seconds too large".to_owned(),
+                            )
+                        })?;
+                    let (svr2_username, svr2_password) = try_scoped(|| {
+                        let Auth { username, password } = svr2_credentials;
+                        Ok((env.new_string(username)?, env.new_string(password)?))
+                    })
+                    .check_exceptions(env, "RegisterAccountError::to_throwable")?;
+                    return new_instance(
+                        env,
+                        class_name,
+                        jni_args!((time_remaining_seconds => long, svr2_username => java.lang.String, svr2_password => java.lang.String) -> void),
+                    )
+                    .map(Into::into);
+                }
+                RegisterAccountError::DeviceTransferIsPossibleButNotSkipped => {
+                    ClassName("org.signal.libsignal.net.DeviceTransferPossibleException")
+                }
+                RegisterAccountError::RegistrationRecoveryVerificationFailed => {
+                    ClassName("org.signal.libsignal.net.RegistrationRecoveryFailedException")
+                }
+            };
+
+            make_single_message_throwable(env, &self.to_string(), class_name)
         }
     }
 }

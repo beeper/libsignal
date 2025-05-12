@@ -15,13 +15,16 @@ use libsignal_bridge_types::net::registration::{
     ConnectChatBridge, RegistrationCreateSessionRequest, RegistrationService,
 };
 use libsignal_bridge_types::net::TokioAsyncContext;
+use libsignal_net::auth::Auth;
 use libsignal_net::chat::fake::FakeChatRemote;
 use libsignal_net::chat::ChatConnection;
 use libsignal_net::infra::errors::RetryLater;
 use libsignal_net::registration::{
-    ConnectChat, CreateSessionError, RegistrationSession, RequestError,
+    CheckSvr2CredentialsError, CheckSvr2CredentialsResponse, ConnectChat, CreateSessionError,
+    RegisterAccountError, RegistrationLock, RegistrationSession, RequestError,
     RequestVerificationCodeError, RequestedInformation, ResumeSessionError,
-    SubmitVerificationError, UpdateSessionError, VerificationCodeNotDeliverable,
+    SubmitVerificationError, Svr2CredentialsResult, UpdateSessionError,
+    VerificationCodeNotDeliverable,
 };
 
 use super::make_error_testing_enum;
@@ -37,6 +40,21 @@ pub fn TESTING_RegistrationSessionInfoConvert() -> RegistrationSession {
         next_sms: Some(Duration::from_secs(456)),
         next_verification_attempt: Some(Duration::from_secs(789)),
         requested_information: HashSet::from([RequestedInformation::PushChallenge]),
+    }
+}
+
+#[bridge_fn(ffi = false)]
+pub fn TESTING_RegistrationService_CheckSvr2CredentialsResponseConvert(
+) -> CheckSvr2CredentialsResponse {
+    CheckSvr2CredentialsResponse {
+        matches: [
+            ("username:pass-match", Svr2CredentialsResult::Match),
+            ("username:pass-no-match", Svr2CredentialsResult::NoMatch),
+            ("username:pass-invalid", Svr2CredentialsResult::Invalid),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect(),
     }
 }
 
@@ -109,6 +127,11 @@ type TestingRequestVerificationCodeRequestError =
     TestingRequestError<TestingRequestVerificationCodeError>;
 /// cbindgen:ignore
 type TestingSubmitVerificationRequestError = TestingRequestError<TestingSubmitVerificationError>;
+/// cbindgen:ignore
+type TestingRegisterAccountRequestError = TestingRequestError<TestingRegisterAccountError>;
+/// cbindgen:ignore
+type TestingCheckSvr2CredentialsRequestError =
+    TestingRequestError<TestingCheckSvr2CredentialsError>;
 
 struct TestingRequestError<E>(RequestError<E>);
 
@@ -288,6 +311,66 @@ fn TESTING_RegistrationService_SubmitVerificationErrorConvert(
             }
             TestingSubmitVerificationError::RetryAfter42Seconds => {
                 SubmitVerificationError::RetryLater(RETRY_AFTER_42_SECONDS)
+            }
+        }))
+}
+
+make_error_testing_enum!(
+    enum TestingCheckSvr2CredentialsError for CheckSvr2CredentialsError {
+        CredentialsCouldNotBeParsed => CredentialsCouldNotBeParsed,
+    }
+);
+
+/// Return an error matching the requested description.
+#[bridge_fn(ffi = false)]
+fn TESTING_RegistrationService_CheckSvr2CredentialsErrorConvert(
+    // The stringly-typed API makes the call sites more self-explanatory.
+    error_description: AsType<TestingCheckSvr2CredentialsRequestError, String>,
+) -> Result<(), RequestError<CheckSvr2CredentialsError>> {
+    Err(error_description
+        .into_inner()
+        .map_into_error(|inner| match inner {
+            TestingCheckSvr2CredentialsError::CredentialsCouldNotBeParsed => {
+                CheckSvr2CredentialsError::CredentialsCouldNotBeParsed
+            }
+        }))
+}
+
+make_error_testing_enum!(
+    enum TestingRegisterAccountError for RegisterAccountError {
+        DeviceTransferIsPossibleButNotSkipped => DeviceTransferIsPossibleButNotSkipped,
+        RegistrationRecoveryVerificationFailed => RegistrationRecoveryVerificationFailed,
+        RegistrationLock => RegistrationLockFor50Seconds,
+        RetryLater => RetryAfter42Seconds,
+    }
+);
+
+/// Return an error matching the requested description.
+#[bridge_fn(ffi = false)]
+fn TESTING_RegistrationService_RegisterAccountErrorConvert(
+    // The stringly-typed API makes the call sites more self-explanatory.
+    error_description: AsType<TestingRegisterAccountRequestError, String>,
+) -> Result<(), RequestError<RegisterAccountError>> {
+    Err(error_description
+        .into_inner()
+        .map_into_error(|inner| match inner {
+            TestingRegisterAccountError::RetryAfter42Seconds => {
+                RegisterAccountError::RetryLater(RETRY_AFTER_42_SECONDS)
+            }
+            TestingRegisterAccountError::DeviceTransferIsPossibleButNotSkipped => {
+                RegisterAccountError::DeviceTransferIsPossibleButNotSkipped
+            }
+            TestingRegisterAccountError::RegistrationRecoveryVerificationFailed => {
+                RegisterAccountError::RegistrationRecoveryVerificationFailed
+            }
+            TestingRegisterAccountError::RegistrationLockFor50Seconds => {
+                RegisterAccountError::RegistrationLock(RegistrationLock {
+                    time_remaining: Duration::from_secs(50),
+                    svr2_credentials: Auth {
+                        username: "user".to_owned(),
+                        password: "pass".to_owned(),
+                    },
+                })
             }
         }))
 }

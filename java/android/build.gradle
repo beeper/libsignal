@@ -1,7 +1,7 @@
 import groovy.json.JsonSlurper
 
 plugins {
-    id 'com.android.library' version '8.7.3'
+    id 'com.android.library' version '8.9.0'
     id 'maven-publish'
     id 'signing'
 }
@@ -112,6 +112,7 @@ dependencies {
 
     androidTestImplementation "androidx.test:runner:1.4.0"
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'com.googlecode.json-simple:json-simple:1.1'
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.1.6'
     api project(':client')
 }

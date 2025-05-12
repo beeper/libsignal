@@ -21,6 +21,7 @@ use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
 use crate::net::chat::ChatListener;
 use crate::net::registration::ConnectChatBridge;
+use crate::protocol::KyberPublicKey;
 use crate::support::{Array, AsType, FixedLengthBincodeSerializable, Serialized};
 
 /// Converts arguments from their JNI form to their Rust form.
@@ -762,6 +763,17 @@ impl ResultTypeInfo<'_> for crate::protocol::Timestamp {
     }
 }
 
+/// Reinterprets the bits of the `u64` as a Java `long`. Returns `-1` for `None`.
+///
+/// Note that this is different from the implementation of [`ArgTypeInfo`] for `Option<u64>`.
+impl ResultTypeInfo<'_> for Option<u64> {
+    type ResultType = jlong;
+    fn convert_into(self, _env: &mut JNIEnv) -> Result<Self::ResultType, BridgeLayerError> {
+        // Note that we don't check bounds here.
+        Ok(self.unwrap_or(u64::MAX) as jlong)
+    }
+}
+
 /// Reinterprets the bits of the timestamp's `u64` as a Java `long`.
 ///
 /// Note that this is different from the implementation of [`ArgTypeInfo`] for `Timestamp`.
@@ -865,6 +877,26 @@ impl<'storage, 'param: 'storage, 'context: 'param, const LEN: usize>
     }
 }
 
+impl<'storage, 'param: 'storage, 'context: 'param, const LEN: usize>
+    ArgTypeInfo<'storage, 'param, 'context> for Option<&'storage [u8; LEN]>
+{
+    type ArgType = JByteArray<'context>;
+    type StoredType = Option<AutoElements<'context, 'context, 'param, jbyte>>;
+    fn borrow(
+        env: &mut JNIEnv<'context>,
+        foreign: &'param Self::ArgType,
+    ) -> Result<Self::StoredType, BridgeLayerError> {
+        if foreign.is_null() {
+            Ok(None)
+        } else {
+            <&'storage [u8; LEN]>::borrow(env, foreign).map(Some)
+        }
+    }
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        stored.as_mut().map(ArgTypeInfo::load_from)
+    }
+}
+
 impl<'a, const LEN: usize> ResultTypeInfo<'a> for [u8; LEN] {
     type ResultType = JByteArray<'a>;
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
@@ -885,6 +917,14 @@ impl<'a> ResultTypeInfo<'a> for uuid::Uuid {
                 jlong::from_be_bytes(lsb.try_into().expect("correct length")) => long,
             ) -> void),
         )
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for Option<uuid::Uuid> {
+    type ResultType = JObject<'a>;
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        self.map(|uuid| uuid.convert_into(env))
+            .unwrap_or(Ok(JObject::null()))
     }
 }
 
@@ -1253,6 +1293,83 @@ impl<'a> SimpleArgTypeInfo<'a> for libsignal_net::registration::PushTokenType {
     }
 }
 
+impl<'a> SimpleArgTypeInfo<'a> for libsignal_net::registration::SignedPreKeyBody<Box<[u8]>> {
+    type ArgType = JObject<'a>;
+    fn convert_from(env: &mut JNIEnv<'a>, obj: &Self::ArgType) -> Result<Self, BridgeLayerError> {
+        check_jobject_type(
+            env,
+            obj,
+            ClassName("org.signal.libsignal.protocol.SignedPublicPreKey"),
+        )?;
+
+        let values = try_scoped(|| {
+            let key_id = env.get_field(obj, "id", jni_signature!(int))?.i()?;
+
+            let public_key = env
+                .get_field(
+                    obj,
+                    "publicKey",
+                    jni_signature!(org.signal.libsignal.protocol.SerializablePublicKey),
+                )?
+                .l()?;
+
+            let signature = env
+                .get_field(obj, "signature", jni_signature!([byte]))?
+                .l()?;
+
+            Ok((key_id, public_key, signature.into()))
+        })
+        .check_exceptions(env, "SignedPreKeyBody::convert_from")?;
+
+        let (key_id, public_key, signature) = values;
+
+        let key_id = key_id.try_into().map_err(|_| {
+            BridgeLayerError::IntegerOverflow("id field is out of bounds".to_owned())
+        })?;
+
+        let public_key = {
+            let native_handle = env
+                .call_method(
+                    &public_key,
+                    "unsafeNativeHandleWithoutGuard",
+                    jni_signature!(() -> long),
+                    &[],
+                )
+                .and_then(|k| k.j())
+                .check_exceptions(env, "SignedPreKeyBody::convert_from")?;
+
+            if env
+                .is_instance_of(
+                    &public_key,
+                    jni_class_name!(org.signal.libsignal.protocol.ecc.ECPublicKey),
+                )
+                .expect_no_exceptions()?
+            {
+                SimpleArgTypeInfo::convert_from(env, &native_handle).map(PublicKey::serialize)
+            } else if env
+                .is_instance_of(
+                    &public_key,
+                    jni_class_name!(org.signal.libsignal.protocol.kem.KEMPublicKey),
+                )
+                .expect_no_exceptions()?
+            {
+                SimpleArgTypeInfo::convert_from(env, &native_handle).map(KyberPublicKey::serialize)
+            } else {
+                Err(BridgeLayerError::BadArgument(
+                    "publicKey type is not supported".to_owned(),
+                ))
+            }?
+        };
+        let signature = <Box<[u8]>>::convert_from(env, &signature)?;
+
+        Ok(Self {
+            key_id,
+            public_key,
+            signature,
+        })
+    }
+}
+
 impl<'a, T> ResultTypeInfo<'a> for Serialized<T>
 where
     T: FixedLengthBincodeSerializable + serde::Serialize,
@@ -1411,6 +1528,79 @@ impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RequestedInfor
             jni_class_name!(org.signal.libsignal.net.RegistrationSessionState::RequestedInformation),
             self,
         )
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::RegisterResponseBadge {
+    type ResultType = JObject<'a>;
+
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        let class = find_class(
+            env,
+            ClassName("org.signal.libsignal.net.RegisterAccountResponse$BadgeEntitlement"),
+        )?;
+
+        let Self {
+            id,
+            visible,
+            expiration,
+        } = self;
+
+        let expiration_seconds = expiration.as_secs().convert_into(env)?;
+        try_scoped(|| {
+            let id = env.new_string(id)?;
+
+            new_object(
+                env,
+                class,
+                jni_args!((
+                    id => java.lang.String,
+                    visible => boolean,
+                    expiration_seconds => long
+                ) -> void),
+            )
+        })
+        .check_exceptions(env, "RegisterResponseBadge::convert_into")
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RegisterResponseBadge]> {
+    type ResultType = JObjectArray<'a>;
+
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        make_object_array(
+            env,
+            jni_class_name!(org.signal.libsignal.net.RegisterAccountResponse::BadgeEntitlement),
+            self,
+        )
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::CheckSvr2CredentialsResponse {
+    type ResultType = JObject<'a>;
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        let jobj = new_instance(env, ClassName("java.util.HashMap"), jni_args!(() -> void))?;
+        let jmap = JMap::from_env(env, &jobj)
+            .check_exceptions(env, "CheckSvr2CredentialsResponse::convert_into")?;
+
+        let response_class = find_class(
+            env,
+            ClassName("org.signal.libsignal.net.RegistrationService$Svr2CredentialsResult"),
+        )?;
+        let Self { matches } = self;
+        for (k, v) in matches {
+            let k = k.convert_into(env)?;
+            let name = match v {
+                libsignal_net::registration::Svr2CredentialsResult::Match => "MATCH",
+                libsignal_net::registration::Svr2CredentialsResult::NoMatch => "NO_MATCH",
+                libsignal_net::registration::Svr2CredentialsResult::Invalid => "INVALID",
+            };
+            let v = env.get_static_field(&response_class, name, jni_signature!(org.signal.libsignal.net.RegistrationService::Svr2CredentialsResult))
+            .and_then(|v| v.l())
+                .check_exceptions(env, "Svr2CredentialsResult")?;
+            jmap.put(env, &k, &v).check_exceptions(env, "put")?;
+        }
+        Ok(jobj)
     }
 }
 
@@ -1611,6 +1801,9 @@ macro_rules! jni_arg_type {
     (RegistrationPushTokenType) => {
         ::jni::objects::JObject<'local>
     };
+    (SignedPublicPreKey) => {
+        jni::JavaSignedPublicPreKey<'local>
+    };
     (&mut [u8]) => {
         ::jni::objects::JByteArray<'local>
     };
@@ -1624,6 +1817,9 @@ macro_rules! jni_arg_type {
         ::jni::objects::JObjectArray<'local>
     };
     (Option<Box<[u8]> >) => {
+        ::jni::objects::JByteArray<'local>
+    };
+    (Option<&[u8; $len:expr] >) => {
         ::jni::objects::JByteArray<'local>
     };
     (ServiceId) => {
@@ -1818,6 +2014,12 @@ macro_rules! jni_result_type {
     };
     (Box<[RegistrationSessionRequestedInformation] >) => {
         ::jni::objects::JObjectArray<'local>
+    };
+    (Box<[RegisterResponseBadge] >) => {
+        ::jni::objects::JObjectArray<'local>
+    };
+    (CheckSvr2CredentialsResponse) => {
+        ::jni::objects::JObject<'local>
     };
     (Serialized<$typ:ident>) => {
         ::jni::objects::JByteArray<'local>

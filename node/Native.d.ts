@@ -57,10 +57,16 @@ type SealedSenderMultiRecipientMessage = {
   offsetOfSharedData: number;
 };
 
+enum IdentityChange {
+  // This must be kept in sync with the Rust enum of the same name.
+  NewOrUnchanged = 0,
+  ReplacedExisting = 1,
+}
+
 type IdentityKeyStore = {
   _getIdentityKey(): Promise<PrivateKey>;
   _getLocalRegistrationId(): Promise<number>;
-  _saveIdentity(name: ProtocolAddress, key: PublicKey): Promise<boolean>;
+  _saveIdentity(name: ProtocolAddress, key: PublicKey): Promise<IdentityChange>;
   _isTrustedIdentity(
     name: ProtocolAddress,
     key: PublicKey,
@@ -147,6 +153,11 @@ type RegisterResponseBadge = {
   visible: boolean;
   expirationSeconds: number;
 };
+
+type CheckSvr2CredentialsResponse = Map<
+  string,
+  'match' | 'no-match' | 'invalid'
+>;
 
 type SignedPublicPreKey = {
   keyId: number;
@@ -334,6 +345,12 @@ export function IncrementalMac_CalculateChunkSize(dataSize: number): number;
 export function IncrementalMac_Finalize(mac: Wrapper<IncrementalMac>): Buffer;
 export function IncrementalMac_Initialize(key: Buffer, chunkSize: number): IncrementalMac;
 export function IncrementalMac_Update(mac: Wrapper<IncrementalMac>, bytes: Buffer, offset: number, length: number): Buffer;
+export function KeyTransparency_AciSearchKey(aci: Buffer): Buffer;
+export function KeyTransparency_Distinguished(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, lastDistinguishedTreeHead: Buffer | null): CancellablePromise<Buffer>;
+export function KeyTransparency_E164SearchKey(e164: string): Buffer;
+export function KeyTransparency_Monitor(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Buffer, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Buffer | null, usernameHash: Buffer | null, accountData: Buffer | null, lastDistinguishedTreeHead: Buffer): CancellablePromise<Buffer>;
+export function KeyTransparency_Search(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Buffer, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Buffer | null, usernameHash: Buffer | null, accountData: Buffer | null, lastDistinguishedTreeHead: Buffer): CancellablePromise<SearchResult>;
+export function KeyTransparency_UsernameHashSearchKey(hash: Buffer): Buffer;
 export function KyberKeyPair_Generate(): KyberKeyPair;
 export function KyberKeyPair_GetPublicKey(keyPair: Wrapper<KyberKeyPair>): KyberPublicKey;
 export function KyberKeyPair_GetSecretKey(keyPair: Wrapper<KyberKeyPair>): KyberSecretKey;
@@ -434,7 +451,7 @@ export function ReceiptCredential_CheckValidContents(buffer: Buffer): void;
 export function ReceiptCredential_GetReceiptExpirationTime(receiptCredential: Serialized<ReceiptCredential>): Timestamp;
 export function ReceiptCredential_GetReceiptLevel(receiptCredential: Serialized<ReceiptCredential>): bigint;
 export function RegisterAccountRequest_Create(): RegisterAccountRequest;
-export function RegisterAccountRequest_SetAccountPassword(registerAccount: Wrapper<RegisterAccountRequest>, accountPassword: Buffer): void;
+export function RegisterAccountRequest_SetAccountPassword(registerAccount: Wrapper<RegisterAccountRequest>, accountPassword: string): void;
 export function RegisterAccountRequest_SetIdentityPqLastResortPreKey(registerAccount: Wrapper<RegisterAccountRequest>, identityType: number, pqLastResortPreKey: SignedPublicPreKey): void;
 export function RegisterAccountRequest_SetIdentityPublicKey(registerAccount: Wrapper<RegisterAccountRequest>, identityType: number, identityKey: Wrapper<PublicKey>): void;
 export function RegisterAccountRequest_SetIdentitySignedPreKey(registerAccount: Wrapper<RegisterAccountRequest>, identityType: number, signedPreKey: SignedPublicPreKey): void;
@@ -449,6 +466,7 @@ export function RegisterAccountResponse_GetStorageCapable(response: Wrapper<Regi
 export function RegisterAccountResponse_GetUsernameHash(response: Wrapper<RegisterAccountResponse>): Buffer | null;
 export function RegisterAccountResponse_GetUsernameLinkHandle(response: Wrapper<RegisterAccountResponse>): Uuid | null;
 export function RegistrationAccountAttributes_Create(recoveryPassword: Buffer, aciRegistrationId: number, pniRegistrationId: number, registrationLock: string | null, unidentifiedAccessKey: Buffer | null, unrestrictedUnidentifiedAccess: boolean, capabilities: string[], discoverableByPhoneNumber: boolean): RegistrationAccountAttributes;
+export function RegistrationService_CheckSvr2Credentials(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, svrTokens: string[]): CancellablePromise<CheckSvr2CredentialsResponse>;
 export function RegistrationService_CreateSession(asyncRuntime: Wrapper<TokioAsyncContext>, createSession: RegistrationCreateSessionRequest, connectChat: ConnectChatBridge): CancellablePromise<RegistrationService>;
 export function RegistrationService_RegisterAccount(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, registerAccount: Wrapper<RegisterAccountRequest>, accountAttributes: Wrapper<RegistrationAccountAttributes>): CancellablePromise<RegisterAccountResponse>;
 export function RegistrationService_RegistrationSession(service: Wrapper<RegistrationService>): RegistrationSession;
@@ -479,6 +497,11 @@ export function SealedSender_DecryptToUsmc(ctext: Buffer, identityStore: Identit
 export function SealedSender_Encrypt(destination: Wrapper<ProtocolAddress>, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore): Promise<Buffer>;
 export function SealedSender_MultiRecipientEncrypt(recipients: Wrapper<ProtocolAddress>[], recipientSessions: Wrapper<SessionRecord>[], excludedRecipients: Buffer, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore): Promise<Buffer>;
 export function SealedSender_MultiRecipientMessageForSingleRecipient(encodedMultiRecipientMessage: Buffer): Buffer;
+export function SearchResult_GetAccountData(res: Wrapper<SearchResult>): Buffer;
+export function SearchResult_GetAciForE164(res: Wrapper<SearchResult>): Buffer | null;
+export function SearchResult_GetAciForUsernameHash(res: Wrapper<SearchResult>): Buffer | null;
+export function SearchResult_GetAciIdentityKey(res: Wrapper<SearchResult>): PublicKey;
+export function SearchResult_GetTimestamp(res: Wrapper<SearchResult>): bigint;
 export function SenderCertificate_Deserialize(data: Buffer): SenderCertificate;
 export function SenderCertificate_GetCertificate(obj: Wrapper<SenderCertificate>): Buffer;
 export function SenderCertificate_GetDeviceId(obj: Wrapper<SenderCertificate>): number;
@@ -633,7 +656,11 @@ export function TESTING_PanicOnReturnAsync(_needsCleanup: null): Promise<null>;
 export function TESTING_PanicOnReturnIo(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _needsCleanup: null): CancellablePromise<null>;
 export function TESTING_PanicOnReturnSync(_needsCleanup: null): null;
 export function TESTING_ProcessBytestringArray(input: Buffer[]): Buffer[];
+export function TESTING_RegisterAccountResponse_CreateTestValue(): RegisterAccountResponse;
+export function TESTING_RegistrationService_CheckSvr2CredentialsErrorConvert(errorDescription: string): void;
+export function TESTING_RegistrationService_CheckSvr2CredentialsResponseConvert(): CheckSvr2CredentialsResponse;
 export function TESTING_RegistrationService_CreateSessionErrorConvert(errorDescription: string): void;
+export function TESTING_RegistrationService_RegisterAccountErrorConvert(errorDescription: string): void;
 export function TESTING_RegistrationService_RequestVerificationCodeErrorConvert(errorDescription: string): void;
 export function TESTING_RegistrationService_ResumeSessionErrorConvert(errorDescription: string): void;
 export function TESTING_RegistrationService_SubmitVerificationErrorConvert(errorDescription: string): void;
@@ -646,6 +673,7 @@ export function TESTING_RoundTripU32(input: number): number;
 export function TESTING_RoundTripU64(input: bigint): bigint;
 export function TESTING_RoundTripU8(input: number): number;
 export function TESTING_ServerMessageAck_Create(): ServerMessageAck;
+export function TESTING_SignedPublicPreKey_CheckBridgesCorrectly(sourcePublicKey: Wrapper<PublicKey>, signedPreKey: SignedPublicPreKey): void;
 export function TESTING_TestingHandleType_getValue(handle: Wrapper<TestingHandleType>): number;
 export function TokioAsyncContext_cancel(context: Wrapper<TokioAsyncContext>, rawCancellationId: bigint): void;
 export function TokioAsyncContext_new(): TokioAsyncContext;
@@ -734,6 +762,7 @@ interface RegistrationService { readonly __type: unique symbol; }
 interface RegistrationSession { readonly __type: unique symbol; }
 interface SanitizedMetadata { readonly __type: unique symbol; }
 interface SealedSenderDecryptionResult { readonly __type: unique symbol; }
+interface SearchResult { readonly __type: unique symbol; }
 interface SenderCertificate { readonly __type: unique symbol; }
 interface SenderKeyDistributionMessage { readonly __type: unique symbol; }
 interface SenderKeyMessage { readonly __type: unique symbol; }

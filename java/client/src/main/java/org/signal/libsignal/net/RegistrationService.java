@@ -6,10 +6,17 @@
 package org.signal.libsignal.net;
 
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import org.signal.libsignal.internal.CalledFromNative;
 import org.signal.libsignal.internal.CompletableFuture;
 import org.signal.libsignal.internal.Native;
 import org.signal.libsignal.internal.NativeHandleGuard;
 import org.signal.libsignal.internal.NativeTesting;
+import org.signal.libsignal.protocol.ServiceId;
+import org.signal.libsignal.protocol.SignedPublicPreKey;
+import org.signal.libsignal.protocol.ecc.ECPublicKey;
+import org.signal.libsignal.protocol.kem.KEMPublicKey;
 import org.signal.libsignal.protocol.util.Pair;
 
 /**
@@ -43,6 +50,13 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
   public static enum VerificationTransport {
     SMS,
     VOICE;
+  }
+
+  @CalledFromNative
+  public static enum Svr2CredentialsResult {
+    MATCH,
+    NO_MATCH,
+    INVALID,
   }
 
   /**
@@ -192,6 +206,31 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
                         asyncContextHandle, nativeHandle, captchaValue)));
   }
 
+  /**
+   * Check that the given list of SVR credentials is valid.
+   *
+   * <p>If the request succeeds, the returned future resolves with a map of submitted credential to
+   * check result.
+   *
+   * <p>On failure, the future completes exceptionally with one of the previously listed exception
+   * types.
+   */
+  public CompletableFuture<Map<String, Svr2CredentialsResult>> checkSvr2Credentials(
+      String[] svrTokens) {
+    return guardedMap(
+            nativeHandle ->
+                tokioAsyncContext.guardedMap(
+                    asyncContextHandle ->
+                        Native.RegistrationService_CheckSvr2Credentials(
+                            asyncContextHandle, nativeHandle, svrTokens)))
+        .thenApply(
+            result -> {
+              @SuppressWarnings("unchecked")
+              var resultMap = (Map<String, Svr2CredentialsResult>) result;
+              return resultMap;
+            });
+  }
+
   /** Get the ID for this registration validation session. */
   public String getSessionId() {
     return guardedMap(Native::RegistrationService_SessionId);
@@ -203,6 +242,110 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
         nativeHandle ->
             new RegistrationSessionState(
                 Native.RegistrationService_RegistrationSession(nativeHandle)));
+  }
+
+  /** Account attributes sent as part of a {@link #registerAccount} request. */
+  public static class AccountAttributes extends NativeHandleGuard.SimpleOwner {
+    public AccountAttributes(
+        byte[] recoveryPassword,
+        int aciRegistrationId,
+        int pniRegistrationId,
+        String registrationLock,
+        byte[] unidentifiedAccessKey,
+        boolean unrestrictedUnidentifiedAccess,
+        Set<String> capabilities,
+        boolean discoverableByPhoneNumber) {
+      super(
+          Native.RegistrationAccountAttributes_Create(
+              recoveryPassword,
+              aciRegistrationId,
+              pniRegistrationId,
+              registrationLock,
+              unidentifiedAccessKey,
+              unrestrictedUnidentifiedAccess,
+              capabilities.toArray(String[]::new),
+              discoverableByPhoneNumber));
+    }
+
+    protected void release(long nativeHandle) {
+      Native.RegistrationAccountAttributes_Destroy(nativeHandle);
+    }
+  }
+
+  /**
+   * Send a register account request.
+   *
+   * <p>The returned future resolves to a {@code RegisterAccountResponse} if the request is
+   * successful. If not, the future resolves with
+   *
+   * <ul>
+   *   <li>{@code RegistrationLockException}
+   *   <li>{@code DeviceTransferPossibleException}
+   *   <li>{@code RegistrationRecoveryFailedException}
+   * </ul>
+   *
+   * or one of the previously listed exception types.
+   */
+  public CompletableFuture<RegisterAccountResponse> registerAccount(
+      String accountPassword,
+      boolean skipDeviceTransfer,
+      AccountAttributes accountAttributes,
+      String gcmPushToken,
+      ECPublicKey aciPublicKey,
+      ECPublicKey pniPublicKey,
+      SignedPublicPreKey<ECPublicKey> aciSignedPreKey,
+      SignedPublicPreKey<ECPublicKey> pniSignedPreKey,
+      SignedPublicPreKey<KEMPublicKey> aciPqLastResortPreKey,
+      SignedPublicPreKey<KEMPublicKey> pniPqLastResortPreKey) {
+
+    var request =
+        new NativeHandleGuard.SimpleOwner(Native.RegisterAccountRequest_Create()) {
+          protected void release(long nativeHandle) {
+            Native.RegisterAccountRequest_Destroy(nativeHandle);
+          }
+        };
+
+    final int ACI = ServiceId.Kind.ACI.ordinal();
+    final int PNI = ServiceId.Kind.PNI.ordinal();
+
+    request.guardedRun(
+        requestHandle -> {
+          Native.RegisterAccountRequest_SetAccountPassword(requestHandle, accountPassword);
+          Native.RegisterAccountRequest_SetGcmPushToken(requestHandle, gcmPushToken);
+          aciPublicKey.guardedRun(
+              handle ->
+                  Native.RegisterAccountRequest_SetIdentityPublicKey(requestHandle, ACI, handle));
+          pniPublicKey.guardedRun(
+              handle ->
+                  Native.RegisterAccountRequest_SetIdentityPublicKey(requestHandle, PNI, handle));
+
+          Native.RegisterAccountRequest_SetIdentitySignedPreKey(
+              requestHandle, ACI, aciSignedPreKey);
+          Native.RegisterAccountRequest_SetIdentitySignedPreKey(
+              requestHandle, PNI, pniSignedPreKey);
+
+          Native.RegisterAccountRequest_SetIdentityPqLastResortPreKey(
+              requestHandle, ACI, aciPqLastResortPreKey);
+          Native.RegisterAccountRequest_SetIdentityPqLastResortPreKey(
+              requestHandle, PNI, pniPqLastResortPreKey);
+
+          if (skipDeviceTransfer) {
+            Native.RegisterAccountRequest_SetSkipDeviceTransfer(requestHandle);
+          }
+        });
+
+    return tokioAsyncContext
+        .guardedMap(
+            tokioContext ->
+                accountAttributes.guardedMap(
+                    attributesHandle ->
+                        this.guardedMap(
+                            service ->
+                                request.guardedMap(
+                                    register ->
+                                        Native.RegistrationService_RegisterAccount(
+                                            tokioContext, service, register, attributesHandle)))))
+        .thenApply(responseHandle -> new RegisterAccountResponse(responseHandle));
   }
 
   static Pair<FakeChatServer, CompletableFuture<RegistrationService>> fakeCreateSession(
