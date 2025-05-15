@@ -6,10 +6,9 @@
 #![allow(clippy::missing_safety_doc)]
 #![warn(clippy::unwrap_used)]
 
-use std::ffi::{c_char, c_uchar, c_uint, CString};
+use std::ffi::{c_char, c_uchar, CString};
 use std::panic::AssertUnwindSafe;
 
-use futures_util::FutureExt;
 use libsignal_bridge::ffi::*;
 #[cfg(feature = "libsignal-bridge-testing")]
 #[allow(unused_imports)]
@@ -50,6 +49,21 @@ pub unsafe extern "C" fn signal_free_list_of_strings(buffer: OwnedBufferOf<CStri
         signal_free_string(s);
     }
     drop(strings);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_free_list_of_register_response_badges(
+    buffer: OwnedBufferOf<FfiRegisterResponseBadge>,
+) {
+    for badge in buffer.into_box() {
+        let FfiRegisterResponseBadge {
+            id,
+            visible,
+            expiration_secs,
+        } = badge;
+        signal_free_string(id);
+        let _: (bool, f64) = (visible, expiration_secs);
+    }
 }
 
 #[no_mangle]
@@ -176,6 +190,61 @@ pub unsafe extern "C" fn signal_error_get_unknown_fields(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn signal_error_get_registration_error_not_deliverable(
+    err: *const SignalFfiError,
+    out_reason: *mut *const c_char,
+    out_permanent: *mut bool,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+
+        let libsignal_net::registration::VerificationCodeNotDeliverable {
+            reason,
+            permanent_failure,
+        } = err
+            .provide_registration_code_not_deliverable()
+            .map_err(|_| {
+                SignalProtocolError::InvalidArgument(format!(
+                    "cannot get registration error from error ({err})"
+                ))
+            })?;
+        write_result_to(out_reason, reason.as_str())?;
+        write_result_to(out_permanent, *permanent_failure)?;
+        Ok(())
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_registration_lock(
+    err: *const SignalFfiError,
+    out_time_remaining_seconds: *mut u64,
+    out_svr2_username: *mut *const c_char,
+    out_svr2_password: *mut *const c_char,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+
+        let libsignal_net::registration::RegistrationLock {
+            time_remaining,
+            svr2_credentials:
+                libsignal_net::auth::Auth {
+                    username: svr2_username,
+                    password: svr2_password,
+                },
+        } = err.provide_registration_lock().map_err(|_| {
+            SignalProtocolError::InvalidArgument(format!(
+                "cannot get registration error from error ({err})"
+            ))
+        })?;
+        write_result_to(out_time_remaining_seconds, time_remaining.as_secs())?;
+        write_result_to(out_svr2_username, svr2_username.as_str())?;
+        write_result_to(out_svr2_password, svr2_password.as_str())?;
+        Ok(())
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn signal_error_free(err: *mut SignalFfiError) {
     if !err.is_null() {
         let _boxed_err = Box::from_raw(err);
@@ -193,68 +262,6 @@ pub unsafe extern "C" fn signal_identitykeypair_deserialize(
         let identity_key_pair = IdentityKeyPair::try_from(input)?;
         write_result_to(public_key, *identity_key_pair.public_key())?;
         write_result_to(private_key, *identity_key_pair.private_key())?;
-        Ok(())
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn signal_sealed_session_cipher_decrypt(
-    out: *mut OwnedBufferOf<c_uchar>,
-    sender_e164: *mut *const c_char,
-    sender_uuid: *mut *const c_char,
-    sender_device_id: *mut u32,
-    ctext: BorrowedSliceOf<c_uchar>,
-    trust_root: ConstPointer<PublicKey>,
-    timestamp: u64,
-    local_e164: *const c_char,
-    local_uuid: *const c_char,
-    local_device_id: c_uint,
-    session_store: ConstPointer<FfiSessionStoreStruct>,
-    identity_store: ConstPointer<FfiIdentityKeyStoreStruct>,
-    prekey_store: ConstPointer<FfiPreKeyStoreStruct>,
-    signed_prekey_store: ConstPointer<FfiSignedPreKeyStoreStruct>,
-) -> *mut SignalFfiError {
-    run_ffi_safe(|| {
-        let mut kyber_pre_key_store = InMemKyberPreKeyStore::new();
-        let ctext = ctext.as_slice()?;
-        let trust_root = native_handle_cast::<PublicKey>(trust_root.into_inner())?;
-        let mut identity_store = identity_store
-            .into_inner()
-            .as_ref()
-            .ok_or(NullPointerError)?;
-        let mut session_store = session_store
-            .into_inner()
-            .as_ref()
-            .ok_or(NullPointerError)?;
-        let mut prekey_store = prekey_store.into_inner().as_ref().ok_or(NullPointerError)?;
-        let signed_prekey_store = signed_prekey_store
-            .into_inner()
-            .as_ref()
-            .ok_or(NullPointerError)?;
-
-        let local_e164 = Option::convert_from(local_e164)?;
-        let local_uuid = Option::convert_from(local_uuid)?.ok_or(NullPointerError)?;
-
-        let decrypted = sealed_sender_decrypt(
-            ctext,
-            trust_root,
-            Timestamp::from_epoch_millis(timestamp),
-            local_e164,
-            local_uuid,
-            local_device_id.into(),
-            &mut identity_store,
-            &mut session_store,
-            &mut prekey_store,
-            &signed_prekey_store,
-            &mut kyber_pre_key_store,
-        )
-        .now_or_never()
-        .expect("synchronous")?;
-
-        write_result_to(sender_e164, decrypted.sender_e164)?;
-        write_result_to(sender_uuid, decrypted.sender_uuid)?;
-        write_result_to(sender_device_id, u32::from(decrypted.device_id))?;
-        write_result_to(out, decrypted.message)?;
         Ok(())
     })
 }

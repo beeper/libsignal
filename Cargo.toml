@@ -35,7 +35,7 @@ default-members = [
 resolver = "2" # so that our dev-dependency features don't leak into products
 
 [workspace.package]
-version = "0.71.0"
+version = "0.72.1"
 rust-version = "1.80.1"
 authors = ["Signal Messenger LLC"]
 license = "AGPL-3.0-only"
@@ -189,12 +189,12 @@ test-log = "0.2.16"
 testing_logger = "0.1.1"
 thiserror = "2.0.11"
 tls-parser = "0.12.2"
-tokio = "1"
+tokio = "1.45"
 tokio-socks = "0.5.2"
 tokio-stream = "0.1.14"
-tokio-tungstenite = "0.23.0"
+tokio-tungstenite = "0.26.0"
 tokio-util = "0.7.9"
-tungstenite = "0.23.0"
+tungstenite = "0.26.0"
 url = "2.4.1"
 uuid = "1.1.2"
 visibility = "0.1.1"

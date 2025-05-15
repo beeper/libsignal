@@ -235,6 +235,46 @@ internal func checkError(_ error: SignalFfiErrorRef?) throws {
             errorMessage: errStr,
             unknownFields: MessageBackupUnknownFields(fields: unknownFields)
         )
+    case SignalErrorCodeRegistrationUnknown:
+        throw RegistrationError.unknown(errStr)
+    case SignalErrorCodeRegistrationInvalidSessionId:
+        throw RegistrationError.invalidSessionId(errStr)
+    case SignalErrorCodeRegistrationRequestNotValid:
+        throw RegistrationError.requestNotValid(errStr)
+    case SignalErrorCodeRegistrationSessionNotFound:
+        throw RegistrationError.sessionNotFound(errStr)
+    case SignalErrorCodeRegistrationNotReadyForVerification:
+        throw RegistrationError.notReadyForVerification(errStr)
+    case SignalErrorCodeRegistrationSendVerificationCodeFailed:
+        throw RegistrationError.sendVerificationFailed(errStr)
+    case SignalErrorCodeRegistrationCodeNotDeliverable:
+        var permanent = false
+        let message = try invokeFnReturningString {
+            signal_error_get_registration_error_not_deliverable(error, $0, &permanent)
+        }
+        throw RegistrationError.codeNotDeliverable(message: message, permanentFailure: permanent)
+    case SignalErrorCodeRegistrationSessionUpdateRejected:
+        throw RegistrationError.sessionUpdateRejected(errStr)
+    case SignalErrorCodeRegistrationCredentialsCouldNotBeParsed:
+        throw RegistrationError.credentialsCouldNotBeParsed(errStr)
+    case SignalErrorCodeRegistrationDeviceTransferPossible:
+        throw RegistrationError.deviceTransferPossible(errStr)
+    case SignalErrorCodeRegistrationRecoveryVerificationFailed:
+        throw RegistrationError.recoveryVerificationFailed(errStr)
+    case SignalErrorCodeRegistrationLock:
+        var timeRemaining: UInt64 = 0
+        var svr2Password = ""
+        let svr2Username = try invokeFnReturningString { svr2Username in
+            var bridgedPassword: UnsafePointer<CChar>? = nil
+            let err = signal_error_get_registration_lock(error, &timeRemaining, svr2Username, &bridgedPassword)
+            if err == nil {
+                svr2Password = String(cString: bridgedPassword!)
+                signal_free_string(bridgedPassword)
+            }
+            return err
+        }
+
+        throw RegistrationError.registrationLock(timeRemaining: TimeInterval(timeRemaining), svr2Username: svr2Username, svr2Password: svr2Password)
     default:
         throw SignalError.unknown(errType, errStr)
     }

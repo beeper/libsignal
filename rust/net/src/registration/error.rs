@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use libsignal_net_infra::errors::{LogSafeDisplay, RetryLater};
 
@@ -32,6 +33,7 @@ pub enum CreateSessionError {
     /// {0}
     RetryLater(#[from] RetryLater),
 }
+impl LogSafeDisplay for CreateSessionError {}
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
@@ -42,6 +44,7 @@ pub enum ResumeSessionError {
     /// session not found
     SessionNotFound,
 }
+impl LogSafeDisplay for ResumeSessionError {}
 
 /// Error response to a request made on an established session.
 ///
@@ -57,7 +60,7 @@ pub(super) enum SessionRequestError {
     UnrecognizedStatus {
         status: StatusCode,
         response_headers: HeaderMap,
-        response_body: Option<Box<[u8]>>,
+        response_body: Option<Bytes>,
     },
 }
 
@@ -70,6 +73,7 @@ pub enum UpdateSessionError {
     /// {0}
     RetryLater(#[from] RetryLater),
 }
+impl LogSafeDisplay for UpdateSessionError {}
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
@@ -88,6 +92,7 @@ pub enum RequestVerificationCodeError {
     /// {0}
     RetryLater(#[from] RetryLater),
 }
+impl LogSafeDisplay for RequestVerificationCodeError {}
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
@@ -102,6 +107,7 @@ pub enum SubmitVerificationError {
     /// {0}
     RetryLater(#[from] RetryLater),
 }
+impl LogSafeDisplay for SubmitVerificationError {}
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
@@ -110,6 +116,7 @@ pub enum CheckSvr2CredentialsError {
     /// provided list of SVR2 credentials could not be parsed.
     CredentialsCouldNotBeParsed,
 }
+impl LogSafeDisplay for CheckSvr2CredentialsError {}
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
@@ -124,6 +131,7 @@ pub enum RegisterAccountError {
     /// registration lock is enabled
     RegistrationLock(RegistrationLock),
 }
+impl LogSafeDisplay for RegisterAccountError {}
 
 /// Convert [`RequestError<SessionRequestError>`] into a typed version.
 ///
@@ -498,7 +506,7 @@ mod test {
                         }
                     }))
                     .unwrap()
-                    .into_boxed_slice(),
+                    .into(),
                 )
             }
             429 => {
@@ -514,7 +522,7 @@ mod test {
                         "permanentFailure": true
                     }))
                     .unwrap()
-                    .into_boxed_slice(),
+                    .into(),
                 )
             }
             _ => {}

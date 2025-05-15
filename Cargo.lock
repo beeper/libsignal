@@ -2267,6 +2267,7 @@ name = "libsignal-bridge-testing"
 version = "0.1.0"
 dependencies = [
  "attest",
+ "bytes",
  "const-str",
  "futures-util",
  "hex",
@@ -2301,6 +2302,7 @@ dependencies = [
  "async-trait",
  "atomic-take",
  "attest",
+ "bytes",
  "derive-where",
  "derive_more 2.0.1",
  "device-transfer",
@@ -2361,10 +2363,9 @@ dependencies = [
 
 [[package]]
 name = "libsignal-ffi"
-version = "0.71.0"
+version = "0.72.1"
 dependencies = [
  "cpufeatures",
- "futures-util",
  "hex",
  "libsignal-bridge",
  "libsignal-bridge-testing",
@@ -2379,14 +2380,14 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni"
-version = "0.71.0"
+version = "0.72.1"
 dependencies = [
  "libsignal-jni-impl",
 ]
 
 [[package]]
 name = "libsignal-jni-impl"
-version = "0.71.0"
+version = "0.72.1"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -2403,7 +2404,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni-testing"
-version = "0.71.0"
+version = "0.72.1"
 dependencies = [
  "jni",
  "libsignal-bridge-testing",
@@ -2557,8 +2558,8 @@ dependencies = [
  "tokio",
  "tokio-boring",
  "tokio-stream",
- "tokio-tungstenite 0.23.1",
- "tungstenite 0.23.0",
+ "tokio-tungstenite 0.26.2",
+ "tungstenite 0.26.2",
  "url",
  "uuid",
  "visibility",
@@ -2619,9 +2620,9 @@ dependencies = [
  "tokio-boring",
  "tokio-socks",
  "tokio-stream",
- "tokio-tungstenite 0.23.1",
+ "tokio-tungstenite 0.26.2",
  "tokio-util",
- "tungstenite 0.23.0",
+ "tungstenite 0.26.2",
  "url",
  "visibility",
  "warp",
@@ -2629,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-node"
-version = "0.71.0"
+version = "0.72.1"
 dependencies = [
  "cmake",
  "futures",
@@ -4733,9 +4734,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.44.2"
+version = "1.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6b88822cbe49de4185e3a4cbf8321dd487cf5fe0c5c65695fef6346371e9c48"
+checksum = "2513ca694ef9ede0fb23fe71a4ee4107cb102b9dc1930f6d0fd77aae068ae165"
 dependencies = [
  "backtrace",
  "bytes",
@@ -4816,14 +4817,14 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.23.1"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6989540ced10490aaf14e6bad2e3d33728a2813310a0c71d1574304c49631cd"
+checksum = "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084"
 dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tungstenite 0.23.0",
+ "tungstenite 0.26.2",
 ]
 
 [[package]]
@@ -4950,19 +4951,18 @@ dependencies = [
 
 [[package]]
 name = "tungstenite"
-version = "0.23.0"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e2e2ce1e47ed2994fd43b04c8f618008d4cabdd5ee34027cf14f9d918edd9c8"
+checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
 dependencies = [
- "byteorder",
  "bytes",
  "data-encoding",
  "http 1.3.1",
  "httparse",
  "log",
- "rand 0.8.5",
+ "rand 0.9.0",
  "sha1",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "url",
  "utf-8",
 ]

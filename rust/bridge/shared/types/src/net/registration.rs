@@ -11,8 +11,8 @@ use futures_util::TryFutureExt as _;
 use libsignal_net::registration::{
     self as net_registration, ConnectChat, CreateSession, CreateSessionError, ForServiceIds,
     NewMessageNotification, ProvidedAccountAttributes, PushTokenType, RegisterAccountResponse,
-    RegistrationSession, RequestError, ResumeSessionError, SessionId, SignedPreKeyBody,
-    SkipDeviceTransfer, UnidentifiedAccessKey,
+    RegistrationSession, RequestError, RequestedInformation, ResumeSessionError, SessionId,
+    SignedPreKeyBody, SkipDeviceTransfer, UnidentifiedAccessKey,
 };
 use libsignal_protocol::PublicKey;
 
@@ -50,7 +50,7 @@ pub struct AccountAttributes {
     pub aci_registration_id: u16,
     pub pni_registration_id: u16,
     pub registration_lock: Option<String>,
-    pub unidentified_access_key: Option<UnidentifiedAccessKey>,
+    pub unidentified_access_key: UnidentifiedAccessKey,
     pub unrestricted_unidentified_access: bool,
     pub capabilities: HashSet<String>,
     pub discoverable_by_phone_number: bool,
@@ -61,17 +61,22 @@ pub struct AccountAttributes {
 pub type RegistrationCreateSessionRequest = CreateSession;
 pub type RegistrationPushTokenType = PushTokenType;
 pub type RegistrationAccountAttributes = AccountAttributes;
+pub type RegistrationSessionRequestedInformation = RequestedInformation;
 
-bridge_as_handle!(RegistrationService, ffi = false);
-bridge_as_handle!(RegistrationSession, ffi = false);
-bridge_as_handle!(RegisterAccountRequest, ffi = false);
-bridge_as_handle!(RegisterAccountResponse, ffi = false);
-bridge_as_handle!(RegistrationAccountAttributes, ffi = false);
+// Alias the type exposed across the bridge since the macros don't support
+// templates well.
+pub type SignedPublicPreKey = SignedPreKeyBody<Box<[u8]>>;
+
+bridge_as_handle!(RegistrationService);
+bridge_as_handle!(RegistrationSession);
+bridge_as_handle!(RegisterAccountRequest);
+bridge_as_handle!(RegisterAccountResponse);
+bridge_as_handle!(RegistrationAccountAttributes);
 
 /// Precursor to a [`Box<dyn ConnectChat>`](ConnectChat).
 ///
 /// Functionally a `FnOnce(Handle) -> Box<dyn ConnectChat>` but named for clarity.
-pub trait ConnectChatBridge: Send {
+pub trait ConnectChatBridge: Send + UnwindSafe {
     /// Converts `self` into a `ConnectChat` impl.
     ///
     /// The provided runtime handle can be used to spawn tasks needed by the
@@ -128,7 +133,7 @@ impl<'a> From<&'a AccountAttributes> for ProvidedAccountAttributes<'a> {
             pni_registration_id: *pni_registration_id,
             name: None,
             registration_lock: registration_lock.as_deref(),
-            unidentified_access_key: unidentified_access_key.as_ref(),
+            unidentified_access_key,
             unrestricted_unidentified_access: *unrestricted_unidentified_access,
             capabilities: capabilities.iter().map(String::as_str).collect(),
             discoverable_by_phone_number: *discoverable_by_phone_number,

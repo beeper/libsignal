@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use libsignal_bridge_macros::*;
 use libsignal_bridge_types::net::chat::{
@@ -44,16 +45,16 @@ bridge_as_handle!(FakeChatRemoteEnd);
 bridge_handle_fns!(FakeChatRemoteEnd, clone = false);
 bridge_as_handle!(FakeChatSentRequest, mut = true);
 bridge_handle_fns!(FakeChatSentRequest, clone = false);
-bridge_as_handle!(FakeChatServer, ffi = false);
-bridge_handle_fns!(FakeChatServer, ffi = false);
-bridge_as_handle!(FakeChatResponse, ffi = false);
-bridge_handle_fns!(FakeChatResponse, ffi = false);
+bridge_as_handle!(FakeChatServer);
+bridge_handle_fns!(FakeChatServer, clone = false);
+bridge_as_handle!(FakeChatResponse);
+bridge_handle_fns!(FakeChatResponse, clone = false);
 
 impl std::panic::RefUnwindSafe for FakeChatServer {}
 impl std::panic::RefUnwindSafe for FakeChatConnection {}
 impl std::panic::RefUnwindSafe for FakeChatRemoteEnd {}
 
-#[bridge_fn(ffi = false)]
+#[bridge_fn]
 fn TESTING_FakeChatServer_Create() -> FakeChatServer {
     let (fake_chat_remote_tx, fake_chat_remote_rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -63,7 +64,7 @@ fn TESTING_FakeChatServer_Create() -> FakeChatServer {
     }
 }
 
-#[bridge_io(TokioAsyncContext, ffi = false)]
+#[bridge_io(TokioAsyncContext)]
 async fn TESTING_FakeChatServer_GetNextRemote(server: &FakeChatServer) -> FakeChatRemoteEnd {
     let remote = server
         .remote_end
@@ -130,7 +131,7 @@ fn TESTING_FakeChatRemoteEnd_SendRawServerResponse(chat: &FakeChatRemoteEnd, byt
         .expect("chat task finished")
 }
 
-#[bridge_fn(ffi = false)]
+#[bridge_fn]
 fn TESTING_FakeChatRemoteEnd_SendServerResponse(
     chat: &FakeChatRemoteEnd,
     response: &FakeChatResponse,
@@ -168,7 +169,7 @@ async fn TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(
     let http_request = HttpRequest {
         method: verb.unwrap().as_str().try_into().unwrap(),
         path: path.unwrap().try_into().unwrap(),
-        body: body.map(Vec::into_boxed_slice),
+        body,
         headers: headers
             .into_iter()
             .map(|header| {
@@ -201,7 +202,7 @@ fn TESTING_FakeChatSentRequest_RequestId(request: &FakeChatSentRequest) -> u64 {
 #[bridge_fn]
 fn TESTING_ChatResponseConvert(body_present: bool) -> ChatResponse {
     let body = match body_present {
-        true => Some(b"content".to_vec().into_boxed_slice()),
+        true => Some(Bytes::from_static(b"content")),
         false => None,
     };
     let mut headers = HeaderMap::new();
@@ -253,15 +254,11 @@ fn TESTING_ChatRequestGetHeaderValue(request: &HttpRequest, header_name: String)
 }
 
 #[bridge_fn]
-fn TESTING_ChatRequestGetBody(request: &HttpRequest) -> Vec<u8> {
-    request
-        .body
-        .clone()
-        .map(|b| b.into_vec())
-        .unwrap_or_default()
+fn TESTING_ChatRequestGetBody(request: &HttpRequest) -> &[u8] {
+    request.body.as_deref().unwrap_or_default()
 }
 
-#[bridge_fn(ffi = false)]
+#[bridge_fn]
 fn TESTING_FakeChatResponse_Create(
     id: u64,
     status: u16,

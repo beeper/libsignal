@@ -16,14 +16,24 @@ ANDROID_LIB_DIR=java/android/src/main/jniLibs
 DESKTOP_LIB_DIR=java/client/src/main/resources
 SERVER_LIB_DIR=java/server/src/main/resources
 
-export CARGO_PROFILE_RELEASE_DEBUG=1 # enable line tables
-export RUSTFLAGS="--cfg aes_armv8 ${RUSTFLAGS:-}" # Enable ARMv8 cryptography acceleration when available
+# Fetch dependencies first, so we can use them in computing later options.
+cargo fetch
+
+export CARGO_PROFILE_RELEASE_DEBUG=1 # Enable line tables
+RUSTFLAGS="--cfg aes_armv8 ${RUSTFLAGS:-}" # Enable ARMv8 cryptography acceleration when available
+RUSTFLAGS="$(rust_remap_path_options) ${RUSTFLAGS:-}" # Strip absolute paths
+export RUSTFLAGS
 
 DEBUG_LEVEL_LOGS=
+JNI_TYPE_TAGGING=
 while [ "${1:-}" != "" ]; do
     case "${1:-}" in
         --debug-level-logs )
             DEBUG_LEVEL_LOGS=1
+            shift
+            ;;
+        --jni-type-tagging )
+            JNI_TYPE_TAGGING=1
             shift
             ;;
         -* )
@@ -37,6 +47,9 @@ done
 
 if [[ -z "${DEBUG_LEVEL_LOGS:-}" ]]; then
     FEATURES+=("log/release_max_level_info")
+fi
+if [[ -n "${JNI_TYPE_TAGGING:-}" ]]; then
+    FEATURES+=("libsignal-bridge-types/jni-type-tagging")
 fi
 
 # usage: check_for_debug_level_logs_if_needed lib_dir
