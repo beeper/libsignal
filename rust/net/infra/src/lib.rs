@@ -109,19 +109,31 @@ impl HttpRequestDecoratorSeq {
     }
 }
 
+/// The fully general version of [`AsStaticHttpHeader`], where the name of the header may depend on the
+/// value.
 pub trait AsHttpHeader {
+    fn as_header(&self) -> (HeaderName, HeaderValue);
+}
+
+/// A common form for values that are passed in HTTP headers.
+///
+/// If the header name depends on the value, implement [`AsHttpHeader`] instead.
+pub trait AsStaticHttpHeader: AsHttpHeader {
     const HEADER_NAME: HeaderName;
 
     fn header_value(&self) -> HeaderValue;
+}
 
+impl<T: AsStaticHttpHeader> AsHttpHeader for T {
     fn as_header(&self) -> (HeaderName, HeaderValue) {
         (Self::HEADER_NAME, self.header_value())
     }
 }
 
-impl<T: AsHttpHeader> From<T> for HttpRequestDecorator {
-    fn from(value: T) -> Self {
-        HttpRequestDecorator::header(T::HEADER_NAME, value.header_value())
+impl<T: AsHttpHeader> From<&'_ T> for HttpRequestDecorator {
+    fn from(value: &'_ T) -> Self {
+        let (name, value) = value.as_header();
+        HttpRequestDecorator::header(name, value)
     }
 }
 
@@ -660,7 +672,7 @@ pub(crate) mod test {
             let builder = Request::get(input);
             let builder = HttpRequestDecorator::PathPrefix("/chat").decorate_request(builder);
             let (parts, _) = builder.body(()).unwrap().into_parts();
-            assert_eq!(expected_path, parts.uri.path(), "for input [{}]", input)
+            assert_eq!(expected_path, parts.uri.path(), "for input [{input}]")
         }
     }
 

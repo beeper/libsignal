@@ -7,17 +7,64 @@ import Foundation
 import SignalFfi
 
 public enum RegistrationError: Error {
+    /// The session ID is not valid.
+    ///
+    /// Thrown when attempting to make a request, or when a response is received with a structurally
+    /// invalid validation session ID.
     case invalidSessionId(String)
+    /// A sent request was not structurally valid.
+    ///
+    /// This indicates a mismatch between the server and client JSON schema or a bug in the registration service client.
     case requestNotValid(String)
+    /// The session is already verified or not in a state to request a code because requested information
+    /// hasn't been provided yet.
+    ///
+    /// When the websocket transport is in use, this corresponds to a `HTTP 409` response to a POST request to `/v1/verification/session/{sessionId}/code`.
     case notReadyForVerification(String)
+    /// No session with the specified ID could be found.
+    ///
+    /// When the websocket transport is in use, this corresponds to a `HTTP 404` response to requests to endpoints with the `/v1/verification/session` prefix.
     case sessionNotFound(String)
+    /// The request to send a verification code with the given transport could not be fulfilled, but may
+    /// succeed with a different transport.
+    ///
+    /// When the websocket transport is in use, this corresponds to a `HTTP 418` response to a POST request to `/v1/verification/session/{sessionId/code`.
     case sendVerificationFailed(String)
+    /// The attempt to send a verification code failed because an external service (e.g. the SMS
+    /// provider) refused to deliver the code.
+    ///
+    /// When the websocket transport is in use, this corresponds to a `HTTP 440` response to a POST request to `/v1/verification/session/{sessionId}/code`.
+    ///
+    /// - Parameter message: The server-provided reason for the failure.
+    ///   This will likely be one of "providerUnavailable", "providerRejected", or "illegalArgument".
+    /// - Parameter permanentFailure: Indicates whether the failure is permanent, as opposed to temporary.
+    ///   A client may try again in response to a temporary failure after a reasonable delay.
     case codeNotDeliverable(message: String, permanentFailure: Bool)
+    /// The information provided was not accepted (e.g push challenge or captcha verification failed).
+    ///
+    /// When the websocket transport is in use, this corresponds to an `HTTP 403` response to a POST request to `/v1/verification/session/{sessionId}`.
     case sessionUpdateRejected(String)
+    /// The returned list of SVR2 credentials could not be parsed.
+    ///
+    /// When the websocket transport is in use, this corresponds to an `HTTP 422` response to a POST request to `/v2/backup/auth/check`.
     case credentialsCouldNotBeParsed(String)
+    /// A device transfer is possible and was not explicitly skipped.
+    ///
+    /// When the websocket transport is in use, this corresponds to an `HTTP 409` response to a POST request to `/v1/registration`.
     case deviceTransferPossible(String)
+    /// Registration recovery password verification failed.
+    ///
+    /// When the websocket transport is in use, this corresponds to an `HTTP 403` response to a POST request to `/v1/registration`.
     case recoveryVerificationFailed(String)
+    /// A registration request was made for an account that has registration lock enabled.
+    ///
+    /// When the websocket transport is in use, this corresponds to a `HTTP 423` response to a POST request to `/v1/registration`.
+    ///
+    /// - Parameter timeRemaining: How much time is remaining before the existing registration lock expires.
+    /// - Parameter svr2Username: The SVR username to use to recover the secret used to derive the registration lock password.
+    /// - Parameter svr2Password: The SVR password to use to recover the secret used to derive the registration lock password.
     case registrationLock(timeRemaining: TimeInterval, svr2Username: String, svr2Password: String)
+    /// An unknow error occurred during registration.
     case unknown(String)
 }
 
@@ -46,13 +93,14 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
     /// Asynchronously connects to the registration session and requests a new session.
     /// If successful, returns an initialized ``RegistrationService``. Otherwise an error is thrown.
     ///
+    /// With the websocket transport, this makes a POST request to `/v1/verification/session`.
+    ///
     /// - Throws: On failure, throws one of
     ///   - ``RegistrationError`` if the request fails with a known error response.
     ///   - ``SignalError/rateLimitedError(retryAfter:message:)`` if the server requests a retry later.
     ///   - Some other `SignalError` if the request can't be completed.
     public static func createSession(
         _ net: Net,
-        connectionTimeoutMillis: UInt32?,
         e164: String,
         pushToken: String?,
         mcc: String? = nil,
@@ -65,7 +113,6 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
                 SignalFfiRegistrationCreateSessionRequest.withNativeStruct(
                     e164: e164, pushToken: pushToken, mcc: mcc, mnc: mnc
                 ) { request in
-
                     withUnsafePointer(to: connectChatBridge) { connectChatBridge in
                         signal_registration_service_create_session(
                             promise,
@@ -85,6 +132,8 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
     /// Asynchronously connects to the registration session and requests a new session.
     /// If successful, returns an initialized ``RegistrationService``. Otherwise an error is thrown.
     ///
+    /// With the websocket transport, this makes a GET request to `/v1/verification/session/{sessionId}`.
+    ///
     /// - Throws: On failure, throws one of
     ///   - ``RegistrationError/sessionNotFound(_:)`` if the session can't be resumed.
     ///   - A different ``RegistrationError`` if the request fails with another known error response.
@@ -92,7 +141,6 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
     ///   - Some other `SignalError` if the request can't be completed.
     public static func resumeSession(
         _ net: Net,
-        connectionTimeoutMillis: UInt32?,
         sessionId: String,
         number: String
     ) async throws -> RegistrationService {
@@ -117,6 +165,8 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
 
     /// Request a push challenge sent to the provided APN token.
     ///
+    /// With the websocket transport, this makes a PATCH request to `/v1/verification/session/{sessionId}`.
+    ///
     /// - Throws: On failure, throws one of
     ///   - ``RegistrationError`` if the request fails with a known error response.
     ///   - ``SignalError/rateLimitedError(retryAfter:message:)`` if the server requests a retry later.
@@ -130,6 +180,8 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
     }
 
     /// Submit the result of a push challenge.
+    ///
+    /// With the websocket transport, this makes a PATCH request to `/v1/verification/session/{sessionId}`.
     ///
     /// - Throws: On failure, throws one of
     ///   - ``RegistrationError`` if the request fails with a known error response.
@@ -145,10 +197,12 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
 
     /// Request that a verification code be sent via the given transport method.
     /// Submit the result of a push challenge.
+
+    /// With the websocket transport, this makes a POST request to `/v1/verification/session/{sessionId}/code`.
     ///
     /// - Throws: On failure, throws one of
-    ///   - ``RegistrationError/sendVerificationFailed(message:permanentFailure:)`` if the code couldn't be sent.
-    ///   - ``RegistrationError/codeNotDeliverable(_:)`` if the code couldn't be delivered.
+    ///   - ``RegistrationError/sendVerificationFailed(_:)`` if the code couldn't be sent.
+    ///   - ``RegistrationError/codeNotDeliverable(message:permanentFailure:)`` if the code couldn't be delivered.
     ///   - A different ``RegistrationError`` if the request fails with another known error response.
     ///   - ``SignalError/rateLimitedError(retryAfter:message:)`` if the server requests a retry later.
     ///   - Some other `SignalError` if the request can't be completed.
@@ -171,8 +225,10 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
 
     /// Submit a received verification code.
     ///
+    /// With the websocket transport, this makes a PUT request to `/v1/verification/session/{sessionId}`/code.
+    ///
     /// - Throws: On failure, throws one of
-    ///   - ``RegistrationError/notReadyForVerification`` if uncompleted challenges remain.
+    ///   - ``RegistrationError/notReadyForVerification(_:)`` if uncompleted challenges remain.
     ///   - A different ``RegistrationError`` if the request fails with another known error response.
     ///   - ``SignalError/rateLimitedError(retryAfter:message:)`` if the server requests a retry later.
     ///   - Some other `SignalError` if the request can't be completed.
@@ -187,6 +243,8 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
     }
 
     /// Submit the result of a completed captcha challenge.
+    ///
+    /// With the websocket transport, this makes a PATCH request to `/v1/verification/session/{sessionId}`.
     ///
     /// - Throws: On failure, throws one of
     ///   - ``RegistrationError`` if the request fails with a recognized error response.
@@ -206,6 +264,8 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
     ///
     /// # Return
     /// If the request succeeds, returns a map of submitted credential to check result.
+    ///
+    /// With the websocket transport, this makes a POST request to `/v2/backup/auth/check`.
     ///
     /// - Throws: On failure, throws one of
     ///   - ``RegistrationError`` if the request fails with a recognized error response.
@@ -253,7 +313,7 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
     /// If the request succeeds, returns a ``RegisterAccountResponse``.
     ///
     /// - Throws: On failure, throws one of
-    ///   - ``RegistrationError/registrationLock(_:)``
+    ///   - ``RegistrationError/registrationLock(timeRemaining:svr2Username:svr2Password:)``
     ///   - ``RegistrationError/deviceTransferPossible(_:)``
     ///   - ``RegistrationError/recoveryVerificationFailed(_:)``
     ///   - A different ``RegistrationError`` if the request fails with another known error response.
@@ -288,6 +348,70 @@ public class RegistrationService: NativeHandleOwner<SignalMutPointerRegistration
                 request.withNativeHandle { request in
                     accountAttributes.withNativeHandle { accountAttributes in
                         signal_registration_service_register_account(promise, asyncContext.const(), registrationService.const(), request.const(), accountAttributes.const())
+                    }
+                }
+            }
+        }
+
+        return RegisterAccountResponse(owned: NonNull(response)!)
+    }
+
+    /// Send a request to re-register the account.
+    ///
+    /// This is a `class` method because it uses the account's recovery password to authenticate instead of a verification session.
+    ///
+    /// # Return
+    /// If the request succeeds, returns a ``RegisterAccountResponse``.
+    ///
+    /// - Throws: On failure, throws one of
+    ///   - ``RegistrationError/registrationLock(timeRemaining:svr2Username:svr2Password:)``
+    ///   - ``RegistrationError/deviceTransferPossible(_:)``
+    ///   - ``RegistrationError/recoveryVerificationFailed(_:)``
+    ///   - A different ``RegistrationError`` if the request fails with another known error response.
+    ///   - ``SignalError/rateLimitedError(retryAfter:message:)`` if the server requests a retry later.
+    ///   - Some other `SignalError` if the request can't be completed.
+    public class func reregisterAccount(
+        _ net: Net,
+        e164: String,
+        accountPassword: String,
+        skipDeviceTransfer: Bool,
+        accountAttributes: RegisterAccountAttributes,
+        apnPushToken: String?,
+        aciPublicKey: PublicKey,
+        pniPublicKey: PublicKey,
+        aciSignedPreKey: SignedPublicPreKey<PublicKey>,
+        pniSignedPreKey: SignedPublicPreKey<PublicKey>,
+        aciPqLastResortPreKey: SignedPublicPreKey<KEMPublicKey>,
+        pniPqLastResortPreKey: SignedPublicPreKey<KEMPublicKey>
+    ) async throws -> RegisterAccountResponse {
+        let request = RegisterAccountRequst.create(
+            apnPushToken: apnPushToken,
+            accountPassword: accountPassword,
+            skipDeviceTransfer: skipDeviceTransfer,
+            aciIdentityKey: aciPublicKey,
+            pniIdentityKey: pniPublicKey,
+            aciSignedPreKey: aciSignedPreKey,
+            pniSignedPreKey: pniSignedPreKey,
+            aciPqSignedPreKey: aciPqLastResortPreKey,
+            pniPqSignedPreKey: pniPqLastResortPreKey
+        )
+
+        var connectChatBridge = SignalFfiConnectChatBridgeStruct.forManager(net.connectionManager)
+
+        let response = try await net.asyncContext.invokeAsyncFunction { promise, asyncContext in
+            request.withNativeHandle { request in
+                accountAttributes.withNativeHandle { accountAttributes in
+                    withUnsafePointer(to: &connectChatBridge) { connectChatBridge in
+                        e164.withCString { e164 in
+                            signal_registration_service_reregister_account(
+                                promise,
+                                asyncContext.const(),
+                                SignalConstPointerFfiConnectChatBridgeStruct(raw: connectChatBridge),
+                                e164,
+                                request.const(),
+                                accountAttributes.const()
+                            )
+                        }
                     }
                 }
             }
@@ -543,7 +667,6 @@ private class RegisterAccountRequst: NativeHandleOwner<SignalMutPointerRegisterA
         } }
         failOnError {
             try request.withNativeHandle { native in
-
                 try checkError(accountPassword.withCString {
                     signal_register_account_request_set_account_password(native.const(), $0)
                 })
@@ -584,7 +707,7 @@ private class RegisterAccountRequst: NativeHandleOwner<SignalMutPointerRegisterA
 /// Account attributes sent as part of a ``RegistrationService/registerAccount(accountPassword:skipDeviceTransfer:accountAttributes:apnPushToken:aciPublicKey:pniPublicKey:aciSignedPreKey:pniSignedPreKey:aciPqLastResortPreKey:pniPqLastResortPreKey:)`` request.
 public class RegisterAccountAttributes: NativeHandleOwner<SignalMutPointerRegistrationAccountAttributes> {
     /// Constructs the set of attributes to pass to the server.
-    /// - Throws: ``SignalError.invalidArgument`` if the `unidentifiedAccessKey` is not 16 bytes.
+    /// - Throws: ``SignalError/invalidArgument(_:)`` if the `unidentifiedAccessKey` is not 16 bytes.
     public convenience init(
         recoveryPassword: Data,
         aciRegistrationId: UInt16,

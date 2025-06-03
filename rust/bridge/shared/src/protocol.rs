@@ -64,7 +64,7 @@ fn HKDF_DeriveSecrets(
     hkdf::Hkdf::<sha2::Sha256>::new(salt, ikm)
         .expand(label, &mut buffer)
         .map_err(|_| {
-            SignalProtocolError::InvalidArgument(format!("output too long ({})", output_length))
+            SignalProtocolError::InvalidArgument(format!("output too long ({output_length})"))
         })?;
     Ok(buffer)
 }
@@ -534,7 +534,7 @@ fn DecryptionErrorMessage_ForOriginalMessage(
     original_sender_device_id: u32,
 ) -> Result<DecryptionErrorMessage> {
     let original_type = CiphertextMessageType::try_from(original_type).map_err(|_| {
-        SignalProtocolError::InvalidArgument(format!("unknown message type {}", original_type))
+        SignalProtocolError::InvalidArgument(format!("unknown message type {original_type}"))
     })?;
     DecryptionErrorMessage::for_original(
         original_bytes,
@@ -582,8 +582,8 @@ fn PreKeyBundle_New(
     signed_prekey: &PublicKey,
     signed_prekey_signature: &[u8],
     identity_key: &PublicKey,
-    kyber_prekey_id: Option<u32>,
-    kyber_prekey: Option<&KyberPublicKey>,
+    kyber_prekey_id: u32,
+    kyber_prekey: &KyberPublicKey,
     kyber_prekey_signature: &[u8],
 ) -> Result<PreKeyBundle> {
     let identity_key = IdentityKey::new(*identity_key);
@@ -598,7 +598,7 @@ fn PreKeyBundle_New(
         }
     };
 
-    let bundle = PreKeyBundle::new(
+    Ok(PreKeyBundle::new(
         registration_id,
         device_id.into(),
         prekey,
@@ -606,16 +606,12 @@ fn PreKeyBundle_New(
         *signed_prekey,
         signed_prekey_signature.to_vec(),
         identity_key,
-    )?;
-    match (kyber_prekey_id, kyber_prekey, kyber_prekey_signature) {
-        (Some(id), Some(public), signature) if !signature.is_empty() => {
-            Ok(bundle.with_kyber_pre_key(id.into(), public.clone(), signature.to_vec()))
-        }
-        (None, None, &[]) => Ok(bundle),
-        _ => Err(SignalProtocolError::InvalidArgument(
-            "All or none Kyber pre key arguments must be set".to_owned(),
-        )),
-    }
+    )?
+    .with_kyber_pre_key(
+        kyber_prekey_id.into(),
+        kyber_prekey.clone(),
+        kyber_prekey_signature.to_vec(),
+    ))
 }
 
 #[bridge_fn]
@@ -630,19 +626,28 @@ bridge_get!(PreKeyBundle::signed_pre_key_id -> u32);
 bridge_get!(PreKeyBundle::pre_key_id -> Option<u32>);
 bridge_get!(PreKeyBundle::pre_key_public -> Option<PublicKey>);
 bridge_get!(PreKeyBundle::signed_pre_key_public -> PublicKey);
-bridge_get!(PreKeyBundle::kyber_pre_key_id -> Option<u32>);
+
 #[bridge_fn]
-fn PreKeyBundle_GetKyberPreKeyPublic(bundle: &PreKeyBundle) -> Result<Option<KyberPublicKey>> {
-    bundle
-        .kyber_pre_key_public()
-        .map(|maybe_key| maybe_key.cloned())
+fn PreKeyBundle_GetKyberPreKeyId(bundle: &PreKeyBundle) -> Result<u32> {
+    Ok(bundle
+        .kyber_pre_key_id()?
+        .expect("all bridged PreKeyBundles have a Kyber key")
+        .into())
+}
+
+#[bridge_fn]
+fn PreKeyBundle_GetKyberPreKeyPublic(bundle: &PreKeyBundle) -> Result<KyberPublicKey> {
+    Ok(bundle
+        .kyber_pre_key_public()?
+        .expect("all bridged PreKeyBundles have a Kyber key")
+        .clone())
 }
 
 #[bridge_fn]
 fn PreKeyBundle_GetKyberPreKeySignature(bundle: &PreKeyBundle) -> Result<&[u8]> {
-    bundle
-        .kyber_pre_key_signature()
-        .map(|maybe_sig| maybe_sig.unwrap_or(&[]))
+    Ok(bundle
+        .kyber_pre_key_signature()?
+        .expect("all bridged PreKeyBundles have a Kyber key"))
 }
 
 bridge_deserialize!(SignedPreKeyRecord::deserialize);
@@ -856,7 +861,7 @@ fn UnidentifiedSenderMessageContentNewFromContentAndType(
     group_id: &[u8],
 ) -> Result<UnidentifiedSenderMessageContent> {
     let message_type = CiphertextMessageType::try_from(message_type).map_err(|_| {
-        SignalProtocolError::InvalidArgument(format!("unknown message type {}", message_type))
+        SignalProtocolError::InvalidArgument(format!("unknown message type {message_type}"))
     })?;
 
     UnidentifiedSenderMessageContent::new(

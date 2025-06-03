@@ -7,7 +7,7 @@ use http::uri::PathAndQuery;
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use libsignal_core::{Aci, Pni, ServiceIdKind};
 use libsignal_net_infra::errors::{LogSafeDisplay, RetryLater};
-use libsignal_net_infra::{extract_retry_later, AsHttpHeader};
+use libsignal_net_infra::{extract_retry_later, AsHttpHeader as _, AsStaticHttpHeader};
 use libsignal_protocol::{GenericSignedPreKey, PublicKey};
 use serde_with::{
     serde_as, skip_serializing_none, DurationMilliSeconds, DurationSeconds, FromInto,
@@ -354,7 +354,7 @@ impl RegistrationLock {
     }
 }
 
-impl AsHttpHeader for LanguageList<'_> {
+impl AsStaticHttpHeader for LanguageList<'_> {
     const HEADER_NAME: HeaderName = http::header::ACCEPT_LANGUAGE;
 
     fn header_value(&self) -> HeaderValue {
@@ -470,16 +470,14 @@ impl<T> ForServiceIds<T> {
         }
     }
 
-    #[cfg(test)]
-    fn get(&self, kind: ServiceIdKind) -> &T {
+    pub fn get(&self, kind: ServiceIdKind) -> &T {
         match kind {
             ServiceIdKind::Aci => &self.aci,
             ServiceIdKind::Pni => &self.pni,
         }
     }
 
-    #[cfg(test)]
-    fn generate(mut f: impl FnMut(libsignal_core::ServiceIdKind) -> T) -> Self {
+    pub fn generate(mut f: impl FnMut(libsignal_core::ServiceIdKind) -> T) -> Self {
         ForServiceIds {
             aci: f(libsignal_core::ServiceIdKind::Aci),
             pni: f(libsignal_core::ServiceIdKind::Pni),

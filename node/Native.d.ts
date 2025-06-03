@@ -349,7 +349,7 @@ export function KeyTransparency_AciSearchKey(aci: Buffer): Buffer;
 export function KeyTransparency_Distinguished(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, lastDistinguishedTreeHead: Buffer | null): CancellablePromise<Buffer>;
 export function KeyTransparency_E164SearchKey(e164: string): Buffer;
 export function KeyTransparency_Monitor(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Buffer, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Buffer | null, usernameHash: Buffer | null, accountData: Buffer | null, lastDistinguishedTreeHead: Buffer): CancellablePromise<Buffer>;
-export function KeyTransparency_Search(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Buffer, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Buffer | null, usernameHash: Buffer | null, accountData: Buffer | null, lastDistinguishedTreeHead: Buffer): CancellablePromise<SearchResult>;
+export function KeyTransparency_Search(asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Buffer, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Buffer | null, usernameHash: Buffer | null, accountData: Buffer | null, lastDistinguishedTreeHead: Buffer): CancellablePromise<Buffer>;
 export function KeyTransparency_UsernameHashSearchKey(hash: Buffer): Buffer;
 export function KyberKeyPair_Generate(): KyberKeyPair;
 export function KyberKeyPair_GetPublicKey(keyPair: Wrapper<KyberKeyPair>): KyberPublicKey;
@@ -389,8 +389,8 @@ export function PlaintextContent_GetBody(obj: Wrapper<PlaintextContent>): Buffer
 export function PlaintextContent_Serialize(obj: Wrapper<PlaintextContent>): Buffer;
 export function PreKeyBundle_GetDeviceId(obj: Wrapper<PreKeyBundle>): number;
 export function PreKeyBundle_GetIdentityKey(p: Wrapper<PreKeyBundle>): PublicKey;
-export function PreKeyBundle_GetKyberPreKeyId(obj: Wrapper<PreKeyBundle>): number | null;
-export function PreKeyBundle_GetKyberPreKeyPublic(bundle: Wrapper<PreKeyBundle>): KyberPublicKey | null;
+export function PreKeyBundle_GetKyberPreKeyId(bundle: Wrapper<PreKeyBundle>): number;
+export function PreKeyBundle_GetKyberPreKeyPublic(bundle: Wrapper<PreKeyBundle>): KyberPublicKey;
 export function PreKeyBundle_GetKyberPreKeySignature(bundle: Wrapper<PreKeyBundle>): Buffer;
 export function PreKeyBundle_GetPreKeyId(obj: Wrapper<PreKeyBundle>): number | null;
 export function PreKeyBundle_GetPreKeyPublic(obj: Wrapper<PreKeyBundle>): PublicKey | null;
@@ -398,7 +398,7 @@ export function PreKeyBundle_GetRegistrationId(obj: Wrapper<PreKeyBundle>): numb
 export function PreKeyBundle_GetSignedPreKeyId(obj: Wrapper<PreKeyBundle>): number;
 export function PreKeyBundle_GetSignedPreKeyPublic(obj: Wrapper<PreKeyBundle>): PublicKey;
 export function PreKeyBundle_GetSignedPreKeySignature(obj: Wrapper<PreKeyBundle>): Buffer;
-export function PreKeyBundle_New(registrationId: number, deviceId: number, prekeyId: number | null, prekey: Wrapper<PublicKey> | null, signedPrekeyId: number, signedPrekey: Wrapper<PublicKey>, signedPrekeySignature: Buffer, identityKey: Wrapper<PublicKey>, kyberPrekeyId: number | null, kyberPrekey: Wrapper<KyberPublicKey> | null, kyberPrekeySignature: Buffer): PreKeyBundle;
+export function PreKeyBundle_New(registrationId: number, deviceId: number, prekeyId: number | null, prekey: Wrapper<PublicKey> | null, signedPrekeyId: number, signedPrekey: Wrapper<PublicKey>, signedPrekeySignature: Buffer, identityKey: Wrapper<PublicKey>, kyberPrekeyId: number, kyberPrekey: Wrapper<KyberPublicKey>, kyberPrekeySignature: Buffer): PreKeyBundle;
 export function PreKeyRecord_Deserialize(data: Buffer): PreKeyRecord;
 export function PreKeyRecord_GetId(obj: Wrapper<PreKeyRecord>): number;
 export function PreKeyRecord_GetPrivateKey(obj: Wrapper<PreKeyRecord>): PrivateKey;
@@ -472,6 +472,7 @@ export function RegistrationService_RegisterAccount(asyncRuntime: Wrapper<TokioA
 export function RegistrationService_RegistrationSession(service: Wrapper<RegistrationService>): RegistrationSession;
 export function RegistrationService_RequestPushChallenge(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, pushToken: string, pushTokenType: RegistrationPushTokenType): CancellablePromise<void>;
 export function RegistrationService_RequestVerificationCode(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, transport: string, client: string, languages: string[]): CancellablePromise<void>;
+export function RegistrationService_ReregisterAccount(asyncRuntime: Wrapper<TokioAsyncContext>, connectChat: ConnectChatBridge, number: string, registerAccount: Wrapper<RegisterAccountRequest>, accountAttributes: Wrapper<RegistrationAccountAttributes>): CancellablePromise<RegisterAccountResponse>;
 export function RegistrationService_ResumeSession(asyncRuntime: Wrapper<TokioAsyncContext>, sessionId: string, number: string, connectChat: ConnectChatBridge): CancellablePromise<RegistrationService>;
 export function RegistrationService_SessionId(service: Wrapper<RegistrationService>): string;
 export function RegistrationService_SubmitCaptcha(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, captchaValue: string): CancellablePromise<void>;
@@ -497,11 +498,6 @@ export function SealedSender_DecryptToUsmc(ctext: Buffer, identityStore: Identit
 export function SealedSender_Encrypt(destination: Wrapper<ProtocolAddress>, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore): Promise<Buffer>;
 export function SealedSender_MultiRecipientEncrypt(recipients: Wrapper<ProtocolAddress>[], recipientSessions: Wrapper<SessionRecord>[], excludedRecipients: Buffer, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore): Promise<Buffer>;
 export function SealedSender_MultiRecipientMessageForSingleRecipient(encodedMultiRecipientMessage: Buffer): Buffer;
-export function SearchResult_GetAccountData(res: Wrapper<SearchResult>): Buffer;
-export function SearchResult_GetAciForE164(res: Wrapper<SearchResult>): Buffer | null;
-export function SearchResult_GetAciForUsernameHash(res: Wrapper<SearchResult>): Buffer | null;
-export function SearchResult_GetAciIdentityKey(res: Wrapper<SearchResult>): PublicKey;
-export function SearchResult_GetTimestamp(res: Wrapper<SearchResult>): bigint;
 export function SenderCertificate_Deserialize(data: Buffer): SenderCertificate;
 export function SenderCertificate_GetCertificate(obj: Wrapper<SenderCertificate>): Buffer;
 export function SenderCertificate_GetDeviceId(obj: Wrapper<SenderCertificate>): number;
@@ -634,14 +630,16 @@ export function TESTING_FakeChatSentRequest_TakeHttpRequest(request: Wrapper<Fak
 export function TESTING_FakeChatServer_Create(): FakeChatServer;
 export function TESTING_FakeChatServer_GetNextRemote(asyncRuntime: Wrapper<TokioAsyncContext>, server: Wrapper<FakeChatServer>): CancellablePromise<FakeChatRemoteEnd>;
 export function TESTING_FakeRegistrationSession_CreateSession(asyncRuntime: Wrapper<TokioAsyncContext>, createSession: RegistrationCreateSessionRequest, chat: Wrapper<FakeChatServer>): CancellablePromise<RegistrationService>;
+export function TESTING_FutureCancellationCounter_Create(initialValue: number): TestingFutureCancellationCounter;
+export function TESTING_FutureCancellationCounter_WaitForCount(asyncRuntime: Wrapper<TokioAsyncContext>, count: Wrapper<TestingFutureCancellationCounter>, target: number): CancellablePromise<void>;
 export function TESTING_FutureFailure(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _input: number): CancellablePromise<number>;
+export function TESTING_FutureIncrementOnCancel(asyncRuntime: Wrapper<TokioAsyncContext>, _guard: TestingFutureCancellationGuard): CancellablePromise<void>;
 export function TESTING_FutureProducesOtherPointerType(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, input: string): CancellablePromise<OtherTestingHandleType>;
 export function TESTING_FutureProducesPointerType(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, input: number): CancellablePromise<TestingHandleType>;
 export function TESTING_FutureSuccess(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, input: number): CancellablePromise<number>;
 export function TESTING_InputStreamReadIntoZeroLengthSlice(capsAlphabetInput: InputStream): Promise<Buffer>;
 export function TESTING_JoinStringArray(array: string[], joinWith: string): string;
 export function TESTING_NonSuspendingBackgroundThreadRuntime_New(): NonSuspendingBackgroundThreadRuntime;
-export function TESTING_OnlyCompletesByCancellation(asyncRuntime: Wrapper<TokioAsyncContext>): CancellablePromise<void>;
 export function TESTING_OtherTestingHandleType_getValue(handle: Wrapper<OtherTestingHandleType>): string;
 export function TESTING_PanicInBodyAsync(_input: null): Promise<void>;
 export function TESTING_PanicInBodyIo(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _input: null): CancellablePromise<void>;
@@ -675,6 +673,7 @@ export function TESTING_RoundTripU8(input: number): number;
 export function TESTING_ServerMessageAck_Create(): ServerMessageAck;
 export function TESTING_SignedPublicPreKey_CheckBridgesCorrectly(sourcePublicKey: Wrapper<PublicKey>, signedPreKey: SignedPublicPreKey): void;
 export function TESTING_TestingHandleType_getValue(handle: Wrapper<TestingHandleType>): number;
+export function TESTING_TokioAsyncFuture(asyncRuntime: Wrapper<TokioAsyncContext>, input: number): CancellablePromise<number>;
 export function TokioAsyncContext_cancel(context: Wrapper<TokioAsyncContext>, rawCancellationId: bigint): void;
 export function TokioAsyncContext_new(): TokioAsyncContext;
 export function UnauthenticatedChatConnection_connect(asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>): CancellablePromise<UnauthenticatedChatConnection>;
@@ -762,7 +761,6 @@ interface RegistrationService { readonly __type: unique symbol; }
 interface RegistrationSession { readonly __type: unique symbol; }
 interface SanitizedMetadata { readonly __type: unique symbol; }
 interface SealedSenderDecryptionResult { readonly __type: unique symbol; }
-interface SearchResult { readonly __type: unique symbol; }
 interface SenderCertificate { readonly __type: unique symbol; }
 interface SenderKeyDistributionMessage { readonly __type: unique symbol; }
 interface SenderKeyMessage { readonly __type: unique symbol; }
@@ -775,6 +773,7 @@ interface SessionRecord { readonly __type: unique symbol; }
 interface SgxClientState { readonly __type: unique symbol; }
 interface SignalMessage { readonly __type: unique symbol; }
 interface SignedPreKeyRecord { readonly __type: unique symbol; }
+interface TestingFutureCancellationCounter { readonly __type: unique symbol; }
 interface TestingHandleType { readonly __type: unique symbol; }
 interface TokioAsyncContext { readonly __type: unique symbol; }
 interface UnauthenticatedChatConnection { readonly __type: unique symbol; }

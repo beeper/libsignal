@@ -51,6 +51,74 @@ public class FutureTest {
   }
 
   @Test
+  public void testFutureFromRustCancel() {
+    TokioAsyncContext context = new TokioAsyncContext();
+    org.signal.libsignal.internal.CompletableFuture<Integer> testFuture =
+        context
+            .guardedMap(
+                (nativeContextHandle) ->
+                    NativeTesting.TESTING_TokioAsyncFuture(nativeContextHandle, 21))
+            .makeCancelable(context);
+    if (testFuture.cancel(true)) {
+      ExecutionException e = assertThrows(ExecutionException.class, () -> testFuture.get());
+      assertTrue(
+          "Expected CancellationException as cause",
+          e.getCause() instanceof java.util.concurrent.CancellationException);
+      assertTrue(testFuture.isCancelled());
+    } else {
+      // The future completed before we could cancel it.
+      // Oppurtunitically, let's just check that the future completed as expected.
+      try {
+        assertEquals(63, (int) testFuture.get());
+        assertFalse(testFuture.isCancelled());
+      } catch (ExecutionException | InterruptedException e) {
+        fail("testFuture.get() threw an unexpected exception: " + e.getMessage());
+      }
+    }
+    assertTrue(testFuture.isDone());
+  }
+
+  @Test(timeout = 5000)
+  @SuppressWarnings("unchecked")
+  public void testFutureOnlyCompletesByCancellation() throws Exception {
+    TokioAsyncContext context = new TokioAsyncContext();
+    var counter =
+        new NativeHandleGuard.SimpleOwner(
+            NativeTesting.TESTING_FutureCancellationCounter_Create(0)) {
+          @Override
+          protected void release(long nativeHandle) {
+            NativeTesting.TestingFutureCancellationCounter_Destroy(nativeHandle);
+          }
+        };
+    org.signal.libsignal.internal.CompletableFuture<Integer> testFuture =
+        context
+            .guardedMap(
+                (nativeContextHandle) ->
+                    counter.guardedMap(
+                        counterHandle ->
+                            NativeTesting.TESTING_FutureIncrementOnCancel(
+                                nativeContextHandle, counterHandle)))
+            .makeCancelable(context);
+    assertTrue(testFuture.cancel(true));
+    ExecutionException e = assertThrows(ExecutionException.class, () -> testFuture.get());
+    assertTrue(
+        "Expected CancellationException as cause",
+        e.getCause() instanceof java.util.concurrent.CancellationException);
+    assertTrue(testFuture.isCancelled());
+    assertTrue(testFuture.isDone());
+
+    // Hangs if the count never gets incremented.
+    context
+        .guardedMap(
+            (nativeContextHandle) ->
+                counter.guardedMap(
+                    counterHandle ->
+                        NativeTesting.TESTING_FutureCancellationCounter_WaitForCount(
+                            nativeContextHandle, counterHandle, 1)))
+        .get();
+  }
+
+  @Test
   public void testCapturedStackTraceInException() throws Exception {
     Future future = NativeTesting.TESTING_FutureFailure(ioRuntime, 21);
     ExecutionException e = assertThrows(ExecutionException.class, () -> future.get());

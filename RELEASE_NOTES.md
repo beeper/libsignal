@@ -1,5 +1,5 @@
-v0.72.1
+v0.73.2
 
-- Fixes a regression introduced in v0.68.1 where incoming PreKey messages would fail to decrypt if the local device had archived the corresponding session.
+- Android: Fix bug which can cause CompletableFuture to be stripped by ProGuard/R8.
 
-- Bridge registration service client to Swift.
+- keytrans: Bridge to ffi

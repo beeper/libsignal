@@ -8,6 +8,7 @@ package org.signal.libsignal.net;
 import org.signal.libsignal.internal.CompletableFuture;
 import org.signal.libsignal.internal.NativeHandleGuard;
 import org.signal.libsignal.internal.NativeTesting;
+import org.signal.libsignal.internal.TokioAsyncContext;
 
 class FakeChatServer extends NativeHandleGuard.SimpleOwner {
   private TokioAsyncContext tokioContext;
@@ -19,6 +20,10 @@ class FakeChatServer extends NativeHandleGuard.SimpleOwner {
   private FakeChatServer(TokioAsyncContext tokioContext, long nativeHandle) {
     super(nativeHandle);
     this.tokioContext = tokioContext;
+  }
+
+  public TokioAsyncContext getTokioContext() {
+    return this.tokioContext;
   }
 
   public CompletableFuture<FakeChatRemote> getNextRemote() {

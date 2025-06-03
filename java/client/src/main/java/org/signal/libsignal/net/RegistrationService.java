@@ -13,11 +13,11 @@ import org.signal.libsignal.internal.CompletableFuture;
 import org.signal.libsignal.internal.Native;
 import org.signal.libsignal.internal.NativeHandleGuard;
 import org.signal.libsignal.internal.NativeTesting;
+import org.signal.libsignal.internal.TokioAsyncContext;
 import org.signal.libsignal.protocol.ServiceId;
 import org.signal.libsignal.protocol.SignedPublicPreKey;
 import org.signal.libsignal.protocol.ecc.ECPublicKey;
 import org.signal.libsignal.protocol.kem.KEMPublicKey;
-import org.signal.libsignal.protocol.util.Pair;
 
 /**
  * A client for the the registration service.
@@ -27,14 +27,14 @@ import org.signal.libsignal.protocol.util.Pair;
  * a new, or continue with an old session respectively.
  *
  * <p>{@link CompletableFuture}s returned by methods on this class can complete exceptionally with
- * any of the following exception types, in addition to those listed in the method documentation:
+ * any of the following exception types, in addition to any listed in the per-method documentation:
  *
  * <ul>
  *   <li>{@link RegistrationSessionNotFoundException} if the server rejects the session ID,
  *   <li>{@link ChatServiceException} if a request times out after being sent to the server,
  *   <li>{@link RetryLaterException} if the server responds with an HTTP 429,
  *   <li>{@link RegistrationSessionIdInvalidException} if the session ID is invalid,
- *   <li>{@link RegistrationException} for other unexpected error responses,
+ *   <li>{@link RegistrationException} for other unexpected error responses
  * </ul>
  */
 public class RegistrationService extends NativeHandleGuard.SimpleOwner {
@@ -65,8 +65,12 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
    * <p>Returns a {@code CompletableFuture} that, on success, completes with an instance of this
    * class bound to the created session.
    *
-   * <p>On failure, the future completes exceptionally with one of the previously listed exception
-   * types.
+   * <p>On failure, the future completes exceptionally.
+   *
+   * <p>With the websocket transport, this makes a POST request to {@code /v1/verification/session}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the types of exceptions that can be
+   *     thrown
    */
   public static CompletableFuture<RegistrationService> createSession(
       Network network, CreateSession createSession) {
@@ -85,8 +89,13 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
    * <p>Returns a {@code CompletableFuture} that, on success, completes with an instance of this
    * class bound to the resumed session.
    *
-   * <p>On failure, the future completes exceptionally with one of the previously listed exception
-   * types.
+   * <p>On failure, the future completes exceptionally.
+   *
+   * <p>With the websocket transport, this makes a GET request to {@code
+   * /v1/verification/session/{sessionId}}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the types of exceptions that can be
+   *     thrown
    */
   public static CompletableFuture<RegistrationService> resumeSession(
       Network network, String sessionId, String number) {
@@ -104,8 +113,13 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
    *
    * <p>The returned future resolves with {@code null} if the request is successful.
    *
-   * <p>On failure, the future completes exceptionally with one of the previously listed exception
-   * types.
+   * <p>On failure, the future completes exceptionally.
+   *
+   * <p>With the websocket transport, this makes a PATCH request to {@code
+   * /v1/verification/session/{sessionId}}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the types of exceptions that can be
+   *     thrown
    */
   public CompletableFuture<Void> requestPushChallenge(String fcmPushToken) {
     return guardedMap(
@@ -121,8 +135,13 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
    *
    * <p>The returned future resolves with {@code null} if the request is successful.
    *
-   * <p>On failure, the future completes exceptionally with one of the previously listed exception
-   * types.
+   * <p>On failure, the future completes exceptionally.
+   *
+   * <p>With the websocket transport, this makes a PATCH request to {@code
+   * /v1/verification/session/{sessionId}}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the types of exceptions that can be
+   *     thrown
    */
   public CompletableFuture<Void> submitPushChallenge(String pushChallenge) {
     return guardedMap(
@@ -146,7 +165,13 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
    *   <li>{@link RegistrationCodeNotDeliverableException}
    * </ul>
    *
-   * or one of the previously listed exception types.
+   * in addition to the list of common exception types.
+   *
+   * <p>With the websocket transport, this makes a POST request to {@code
+   * /v1/verification/session/{sessionId}/code}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the common types of exceptions that
+   *     can be thrown
    */
   public CompletableFuture<Void> requestVerificationCode(
       VerificationTransport transport, String client, Locale locale) {
@@ -177,7 +202,13 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
    *   <li>{@link RegistrationSessionNotReadyException}
    * </ul>
    *
-   * or one of the previously listed exception types.
+   * in addition to the list of common exception types.
+   *
+   * <p>With the websocket transport, this makes a PUT request to {@code
+   * /v1/verification/session/{sessionId}/code}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the common types of exceptions that
+   *     can be thrown
    */
   public CompletableFuture<Void> submitVerificationCode(String code) {
     return guardedMap(
@@ -193,9 +224,13 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
    *
    * <p>The returned future resolves with {@code null} if the request is successful.
    *
-   * <p>On failure, the future completes exceptionally with one of {@link RegistrationException},
-   * {@link RegistrationSessionIdInvalidException}, or {@link ChatServiceException} (if the request
-   * times out).
+   * <p>On failure, the future completes exceptionally.
+   *
+   * <p>With the websocket transport, this makes a PATCH request to {@code
+   * /v1/verification/session/{sessionId}}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the types of exceptions that can be
+   *     thrown
    */
   public CompletableFuture<Void> submitCaptcha(String captchaValue) {
     return guardedMap(
@@ -212,8 +247,12 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
    * <p>If the request succeeds, the returned future resolves with a map of submitted credential to
    * check result.
    *
-   * <p>On failure, the future completes exceptionally with one of the previously listed exception
-   * types.
+   * <p>On failure, the future completes exceptionally.
+   *
+   * <p>With the websocket transport, this makes a POST request to {@code /v2/backup/auth/check}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the types of exceptions that can be
+   *     thrown
    */
   public CompletableFuture<Map<String, Svr2CredentialsResult>> checkSvr2Credentials(
       String[] svrTokens) {
@@ -275,16 +314,21 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
   /**
    * Send a register account request.
    *
-   * <p>The returned future resolves to a {@code RegisterAccountResponse} if the request is
+   * <p>The returned future resolves to a {@link RegisterAccountResponse} if the request is
    * successful. If not, the future resolves with
    *
    * <ul>
-   *   <li>{@code RegistrationLockException}
-   *   <li>{@code DeviceTransferPossibleException}
-   *   <li>{@code RegistrationRecoveryFailedException}
+   *   <li>{@link RegistrationLockException}
+   *   <li>{@link DeviceTransferPossibleException}
+   *   <li>{@link RegistrationRecoveryFailedException}
    * </ul>
    *
-   * or one of the previously listed exception types.
+   * in addition to the list of common exception types.
+   *
+   * <p>With the websocket transport, this makes a POST request to {@code /v1/registration}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the common types of exceptions that
+   *     can be thrown
    */
   public CompletableFuture<RegisterAccountResponse> registerAccount(
       String accountPassword,
@@ -299,40 +343,16 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
       SignedPublicPreKey<KEMPublicKey> pniPqLastResortPreKey) {
 
     var request =
-        new NativeHandleGuard.SimpleOwner(Native.RegisterAccountRequest_Create()) {
-          protected void release(long nativeHandle) {
-            Native.RegisterAccountRequest_Destroy(nativeHandle);
-          }
-        };
-
-    final int ACI = ServiceId.Kind.ACI.ordinal();
-    final int PNI = ServiceId.Kind.PNI.ordinal();
-
-    request.guardedRun(
-        requestHandle -> {
-          Native.RegisterAccountRequest_SetAccountPassword(requestHandle, accountPassword);
-          Native.RegisterAccountRequest_SetGcmPushToken(requestHandle, gcmPushToken);
-          aciPublicKey.guardedRun(
-              handle ->
-                  Native.RegisterAccountRequest_SetIdentityPublicKey(requestHandle, ACI, handle));
-          pniPublicKey.guardedRun(
-              handle ->
-                  Native.RegisterAccountRequest_SetIdentityPublicKey(requestHandle, PNI, handle));
-
-          Native.RegisterAccountRequest_SetIdentitySignedPreKey(
-              requestHandle, ACI, aciSignedPreKey);
-          Native.RegisterAccountRequest_SetIdentitySignedPreKey(
-              requestHandle, PNI, pniSignedPreKey);
-
-          Native.RegisterAccountRequest_SetIdentityPqLastResortPreKey(
-              requestHandle, ACI, aciPqLastResortPreKey);
-          Native.RegisterAccountRequest_SetIdentityPqLastResortPreKey(
-              requestHandle, PNI, pniPqLastResortPreKey);
-
-          if (skipDeviceTransfer) {
-            Native.RegisterAccountRequest_SetSkipDeviceTransfer(requestHandle);
-          }
-        });
+        new RegisterAccountRequest(
+            accountPassword,
+            skipDeviceTransfer,
+            gcmPushToken,
+            aciPublicKey,
+            pniPublicKey,
+            aciSignedPreKey,
+            pniSignedPreKey,
+            aciPqLastResortPreKey,
+            pniPqLastResortPreKey);
 
     return tokioAsyncContext
         .guardedMap(
@@ -348,20 +368,133 @@ public class RegistrationService extends NativeHandleGuard.SimpleOwner {
         .thenApply(responseHandle -> new RegisterAccountResponse(responseHandle));
   }
 
-  static Pair<FakeChatServer, CompletableFuture<RegistrationService>> fakeCreateSession(
-      TokioAsyncContext asyncContext, CreateSession createSession) {
-    var fakeServer = new FakeChatServer(asyncContext);
-    var createSessionFut =
-        asyncContext
-            .guardedMap(
-                tokioContext ->
-                    fakeServer.guardedMap(
-                        fakeChat ->
-                            NativeTesting.TESTING_FakeRegistrationSession_CreateSession(
-                                tokioContext, createSession, fakeChat)))
-            .thenApply(registration -> new RegistrationService(registration, asyncContext));
+  /**
+   * Send a request to re-register an account.
+   *
+   * <p>This is a static method since it uses the recovery password to authenticate instead of a
+   * verification session. The returned future resolves to a {@link RegisterAccountResponse} if the
+   * request is successful. If not, the future resolves with
+   *
+   * <ul>
+   *   <li>{@link RegistrationLockException}
+   *   <li>{@link DeviceTransferPossibleException}
+   *   <li>{@link RegistrationRecoveryFailedException}
+   * </ul>
+   *
+   * in addition to the list of common exception types.
+   *
+   * <p>With the websocket transport, this makes a POST request to {@code /v1/registration}.
+   *
+   * @see RegistrationService {@code RegistrationService} lists the common types of exceptions that
+   *     can be thrown
+   */
+  public static CompletableFuture<RegisterAccountResponse> reregisterAccount(
+      Network network,
+      String number,
+      String accountPassword,
+      boolean skipDeviceTransfer,
+      AccountAttributes accountAttributes,
+      String gcmPushToken,
+      ECPublicKey aciPublicKey,
+      ECPublicKey pniPublicKey,
+      SignedPublicPreKey<ECPublicKey> aciSignedPreKey,
+      SignedPublicPreKey<ECPublicKey> pniSignedPreKey,
+      SignedPublicPreKey<KEMPublicKey> aciPqLastResortPreKey,
+      SignedPublicPreKey<KEMPublicKey> pniPqLastResortPreKey) {
 
-    return new Pair<>(fakeServer, createSessionFut);
+    var request =
+        new RegisterAccountRequest(
+            accountPassword,
+            skipDeviceTransfer,
+            gcmPushToken,
+            aciPublicKey,
+            pniPublicKey,
+            aciSignedPreKey,
+            pniSignedPreKey,
+            aciPqLastResortPreKey,
+            pniPqLastResortPreKey);
+
+    var tokioAsyncContext = network.getAsyncContext();
+
+    return tokioAsyncContext
+        .guardedMap(
+            tokioContext ->
+                accountAttributes.guardedMap(
+                    attributesHandle ->
+                        request.guardedMap(
+                            register ->
+                                Native.RegistrationService_ReregisterAccount(
+                                    tokioContext,
+                                    network.getConnectionManager(),
+                                    number,
+                                    register,
+                                    attributesHandle))))
+        .thenApply(responseHandle -> new RegisterAccountResponse(responseHandle));
+  }
+
+  /** Test-only; sends a {@link CreateSession} request to a {@FakeChatServer} to start a session. */
+  static CompletableFuture<RegistrationService> fakeCreateSession(
+      FakeChatServer fakeServer, CreateSession createSession) {
+    var asyncContext = fakeServer.getTokioContext();
+    return asyncContext
+        .guardedMap(
+            tokioContext ->
+                fakeServer.guardedMap(
+                    fakeChat ->
+                        NativeTesting.TESTING_FakeRegistrationSession_CreateSession(
+                            tokioContext, createSession, fakeChat)))
+        .thenApply(registration -> new RegistrationService(registration, asyncContext));
+  }
+
+  private static class RegisterAccountRequest extends NativeHandleGuard.SimpleOwner {
+    public RegisterAccountRequest() {
+      super(Native.RegisterAccountRequest_Create());
+    }
+
+    public RegisterAccountRequest(
+        String accountPassword,
+        boolean skipDeviceTransfer,
+        String gcmPushToken,
+        ECPublicKey aciPublicKey,
+        ECPublicKey pniPublicKey,
+        SignedPublicPreKey<ECPublicKey> aciSignedPreKey,
+        SignedPublicPreKey<ECPublicKey> pniSignedPreKey,
+        SignedPublicPreKey<KEMPublicKey> aciPqLastResortPreKey,
+        SignedPublicPreKey<KEMPublicKey> pniPqLastResortPreKey) {
+      this();
+      final int ACI = ServiceId.Kind.ACI.ordinal();
+      final int PNI = ServiceId.Kind.PNI.ordinal();
+
+      this.guardedRun(
+          requestHandle -> {
+            Native.RegisterAccountRequest_SetAccountPassword(requestHandle, accountPassword);
+            Native.RegisterAccountRequest_SetGcmPushToken(requestHandle, gcmPushToken);
+            aciPublicKey.guardedRun(
+                handle ->
+                    Native.RegisterAccountRequest_SetIdentityPublicKey(requestHandle, ACI, handle));
+            pniPublicKey.guardedRun(
+                handle ->
+                    Native.RegisterAccountRequest_SetIdentityPublicKey(requestHandle, PNI, handle));
+
+            Native.RegisterAccountRequest_SetIdentitySignedPreKey(
+                requestHandle, ACI, aciSignedPreKey);
+            Native.RegisterAccountRequest_SetIdentitySignedPreKey(
+                requestHandle, PNI, pniSignedPreKey);
+
+            Native.RegisterAccountRequest_SetIdentityPqLastResortPreKey(
+                requestHandle, ACI, aciPqLastResortPreKey);
+            Native.RegisterAccountRequest_SetIdentityPqLastResortPreKey(
+                requestHandle, PNI, pniPqLastResortPreKey);
+
+            if (skipDeviceTransfer) {
+              Native.RegisterAccountRequest_SetSkipDeviceTransfer(requestHandle);
+            }
+          });
+    }
+
+    protected void release(long nativeHandle) {
+      Native.RegisterAccountRequest_Destroy(nativeHandle);
+    }
   }
 
   private TokioAsyncContext tokioAsyncContext;

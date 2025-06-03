@@ -1,13 +1,21 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
 plugins {
     id "base"
     id "signing"
     id "com.diffplug.spotless" version "6.20.0"
     id "io.github.gradle-nexus.publish-plugin" version "2.0.0"
+    id "org.jetbrains.kotlin.jvm" version "2.1.0"
 }
 
 allprojects {
-    version = "0.72.1"
+    version = "0.73.2"
     group   = "org.signal"
+
+    tasks.withType(KotlinCompile).configureEach {
+        compilerOptions.jvmTarget = JvmTarget.JVM_17
+    }
 }
 
 subprojects {
@@ -33,6 +41,11 @@ subprojects {
 
     apply plugin: "com.diffplug.spotless"
     spotless {
+        kotlin {
+            target('**/*.kt')
+            targetExclude("**/acknowledgments/**")
+            ktlint()
+        }
         java {
             target('**/*.java')
             targetExclude('**/Native.java', '**/NativeTesting.java')
@@ -52,8 +65,9 @@ task makeJniLibrariesDesktop(type:Exec) {
 
   def debugLevelLogsFlag = project.hasProperty('debugLevelLogs') ? ['--debug-level-logs'] : []
   def jniTypeTaggingFlag = project.hasProperty('jniTypeTagging') ? ['--jni-type-tagging'] : []
+  def debugFlag = project.hasProperty('debugRust') ? ['--debug'] : []
   // Explicitly specify 'bash' for Windows compatibility.
-  commandLine 'bash', './build_jni.sh', *debugLevelLogsFlag, *jniTypeTaggingFlag, 'desktop'
+  commandLine 'bash', './build_jni.sh', *debugLevelLogsFlag, *jniTypeTaggingFlag, *debugFlag, 'desktop'
 }
 
 task makeJniLibrariesServer(type:Exec) {
@@ -62,9 +76,10 @@ task makeJniLibrariesServer(type:Exec) {
 
   def debugLevelLogsFlag = project.hasProperty('debugLevelLogs') ? ['--debug-level-logs'] : []
   def jniTypeTaggingFlag = project.hasProperty('jniTypeTagging') ? ['--jni-type-tagging'] : []
+  def debugFlag = project.hasProperty('debugRust') ? ['--debug'] : []
   def target = project.hasProperty('crossCompileServer') ? 'server-all' : 'server'
-
-  commandLine 'bash', './build_jni.sh', *debugLevelLogsFlag, *jniTypeTaggingFlag, target
+  // Explicitly specify 'bash' for Windows compatibility.
+  commandLine 'bash', './build_jni.sh', *debugLevelLogsFlag, *jniTypeTaggingFlag, *debugFlag, target
 }
 
 task cargoClean(type:Exec) {

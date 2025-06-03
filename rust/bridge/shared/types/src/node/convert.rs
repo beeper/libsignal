@@ -263,7 +263,7 @@ impl SimpleArgTypeInfo for crate::protocol::Timestamp {
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         let value = foreign.value(cx);
         if !can_convert_js_number_to_int(value, 0.0..=MAX_SAFE_JS_INTEGER) {
-            return cx.throw_range_error(format!("cannot convert {} to Timestamp (u64)", value));
+            return cx.throw_range_error(format!("cannot convert {value} to Timestamp (u64)"));
         }
         Ok(Self::from_epoch_millis(value as u64))
     }
@@ -278,7 +278,7 @@ impl SimpleArgTypeInfo for crate::zkgroup::Timestamp {
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         let value = foreign.value(cx);
         if !can_convert_js_number_to_int(value, 0.0..=MAX_SAFE_JS_INTEGER) {
-            return cx.throw_range_error(format!("cannot convert {} to Timestamp (u64)", value));
+            return cx.throw_range_error(format!("cannot convert {value} to Timestamp (u64)"));
         }
         Ok(Self::from_epoch_seconds(value as u64))
     }
@@ -1408,20 +1408,9 @@ impl<'a, Borrowed: Deref<Target: BridgeHandle> + 'a> BorrowedJsBoxedBridgeHandle
     ) -> NeonResult<Self> {
         let js_boxed_bridge_handle: Handle<'a, DefaultJsBox<JsBoxContentsFor<Borrowed::Target>>> =
             wrapper.get(cx, NATIVE_HANDLE_PROPERTY)?;
-        let js_box_contents: &JsBoxContentsFor<Borrowed::Target> = &js_boxed_bridge_handle;
-        // FIXME: Workaround for https://github.com/neon-bindings/neon/issues/678
-        // The lifetime of the boxed contents is necessarily longer than the lifetime of any handles
-        // referring to it, i.e. longer than 'a. However, Deref'ing a Handle can only give us a
-        // reference whose lifetime matches a *particular* handle. Therefore, we unsafely (in the
-        // compiler sense) extend the lifetime to be the lifetime of the context, as given by the
-        // Handle. (We also know the object can't move because the compiler can't know how many JS
-        // references there are referring to the JsBox, any of which another thread could
-        // be dereferencing.)
-        let js_box_contents_with_extended_lifetime: &'a JsBoxContentsFor<Borrowed::Target> =
-            unsafe { extend_lifetime(js_box_contents) };
         Ok(Self {
             _owned: js_boxed_bridge_handle,
-            borrowed: borrow(js_box_contents_with_extended_lifetime),
+            borrowed: borrow(js_boxed_bridge_handle.as_inner()),
         })
     }
 }

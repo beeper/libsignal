@@ -8,6 +8,7 @@ use std::future::Future;
 use futures_util::{AsyncReadExt as _, FutureExt};
 use io::{AsyncInput, InputStream};
 use libsignal_bridge_macros::*;
+use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::support::*;
 use libsignal_bridge_types::*;
 use libsignal_protocol::SignalProtocolError;
@@ -71,6 +72,35 @@ async fn TESTING_FutureSuccess(input: u8) -> i32 {
 #[bridge_io(NonSuspendingBackgroundThreadRuntime)]
 async fn TESTING_FutureFailure(_input: u8) -> Result<i32, SignalProtocolError> {
     Err(SignalProtocolError::InvalidArgument("failure".to_string()))
+}
+
+bridge_handle_fns!(TestingFutureCancellationCounter, clone = false);
+
+#[bridge_fn]
+fn TESTING_FutureCancellationCounter_Create(initial_value: u8) -> TestingFutureCancellationCounter {
+    TestingFutureCancellationCounter(tokio::sync::Semaphore::new(initial_value.into()).into())
+}
+
+#[bridge_io(TokioAsyncContext)]
+async fn TESTING_FutureCancellationCounter_WaitForCount(
+    count: &TestingFutureCancellationCounter,
+    target: u8,
+) {
+    let _permits = count
+        .0
+        .acquire_many(target.into())
+        .await
+        .expect("not closed");
+}
+
+#[bridge_io(TokioAsyncContext)]
+async fn TESTING_FutureIncrementOnCancel(_guard: TestingFutureCancellationGuard) {
+    std::future::pending().await
+}
+
+#[bridge_io(TokioAsyncContext)]
+async fn TESTING_TokioAsyncFuture(input: u8) -> i32 {
+    i32::from(input) * 3
 }
 
 #[derive(Clone)]
