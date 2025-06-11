@@ -47,11 +47,7 @@ fn has_dns64_prefix(addr: &Ipv6Addr) -> bool {
     /// From "RFC 6052: IPv6 Addressing of IPv4/IPv6 Translators", Section 2.1:  Well-Known Prefix
     const DNS64_WELL_KNOWN_PREFIX: [u8; 12] = {
         let octs = const_str::ip_addr!(v6, "64:ff9b::").octets();
-        // TODO: Use `Option.unwrap()` when MSRV >= 1.83
-        match octs.first_chunk() {
-            Some(p) => *p,
-            None => unreachable!(), // 16-byte array can’t be too short
-        }
+        *octs.first_chunk().unwrap()
     };
 
     addr.octets().starts_with(&DNS64_WELL_KNOWN_PREFIX)
@@ -227,11 +223,7 @@ impl DnsResolver {
                 std::net::IpAddr::V4(ip) => (vec![ip], vec![]),
                 std::net::IpAddr::V6(ip) => (vec![], vec![ip]),
             };
-            return Ok(LookupResult {
-                source: super::DnsSource::Static,
-                ipv4,
-                ipv6,
-            });
+            return Ok(LookupResult { ipv4, ipv6 });
         }
         match self.start_or_join_lookup(hostname).val().await {
             Ok(r) => r,
@@ -376,7 +368,6 @@ mod test {
     use crate::dns::dns_lookup::DnsLookupRequest;
     use crate::dns::{DnsLookup, DnsResolver, Error, LookupResult, StaticDnsMap};
     use crate::utils::{sleep_and_catch_up, timed};
-    use crate::DnsSource;
 
     const IPV4: Ipv4Addr = ip_addr!(v4, "192.0.2.1");
     const IPV6: Ipv6Addr = ip_addr!(v6, "3fff::1");
@@ -392,19 +383,19 @@ mod test {
 
     impl From<Ipv4Addr> for LookupResult {
         fn from(value: Ipv4Addr) -> Self {
-            LookupResult::new(DnsSource::Test, vec![value], vec![])
+            LookupResult::new(vec![value], vec![])
         }
     }
 
     impl From<Ipv6Addr> for LookupResult {
         fn from(value: Ipv6Addr) -> Self {
-            LookupResult::new(DnsSource::Test, vec![], vec![value])
+            LookupResult::new(vec![], vec![value])
         }
     }
 
     impl From<(Ipv4Addr, Ipv6Addr)> for LookupResult {
         fn from(value: (Ipv4Addr, Ipv6Addr)) -> Self {
-            LookupResult::new(DnsSource::Test, vec![value.0], vec![value.1])
+            LookupResult::new(vec![value.0], vec![value.1])
         }
     }
 

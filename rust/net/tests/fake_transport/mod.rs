@@ -17,15 +17,12 @@ use libsignal_net::connect_state::{
     SUGGESTED_CONNECT_CONFIG,
 };
 use libsignal_net::env::{ConnectionConfig, DomainConfig, UserAgent};
-use libsignal_net::infra::connection_manager::MultiRouteConnectionManager;
 use libsignal_net::infra::dns::lookup_result::LookupResult;
 use libsignal_net::infra::dns::DnsResolver;
 use libsignal_net::infra::errors::TransportConnectError;
 use libsignal_net::infra::host::Host;
 use libsignal_net::infra::route::{ConnectorFactory, DirectOrProxyProvider, DEFAULT_HTTPS_PORT};
-use libsignal_net::infra::{
-    AsyncDuplexStream, DnsSource, EnableDomainFronting, EndpointConnection,
-};
+use libsignal_net::infra::{AsyncDuplexStream, EnableDomainFronting, RECOMMENDED_WS2_CONFIG};
 use libsignal_net_infra::route::{Connector, TransportRoute, UsePreconnect};
 use libsignal_net_infra::testutil::no_network_change_events;
 use tokio::time::Duration;
@@ -164,7 +161,6 @@ pub struct FakeDeps {
     connect_state: std::sync::Mutex<ConnectState<ReplacingConnectorFactory>>,
     pub dns_resolver: DnsResolver,
     chat_domain_config: DomainConfig,
-    endpoint_connection: EndpointConnection<MultiRouteConnectionManager>,
     resolved_names: HashMap<&'static str, LookupResult>,
 }
 
@@ -173,13 +169,6 @@ impl FakeDeps {
         chat_domain_config: &DomainConfig,
     ) -> (Self, UnboundedReceiverStream<FakeTargetAndStream>) {
         let (transport_connector, incoming_streams) = FakeTransportConnector::new([]);
-        let endpoint_connection = libsignal_net::chat::endpoint_connection(
-            &chat_domain_config.connect,
-            &UserAgent::with_libsignal_version("libsignal test"),
-            true,
-            &chat::EnforceMinimumTls::Yes,
-            &no_network_change_events(),
-        );
 
         let connector_factory =
             ReplacingConnectorFactory(transport_connector.clone(), DefaultConnectorFactory);
@@ -190,7 +179,6 @@ impl FakeDeps {
         (
             Self {
                 transport_connector,
-                endpoint_connection,
                 connect_state,
                 dns_resolver,
                 chat_domain_config: chat_domain_config.clone(),
@@ -208,7 +196,6 @@ impl FakeDeps {
         &self,
     ) -> Result<PendingChatConnection<impl AsyncDuplexStream>, chat::ConnectError> {
         let Self {
-            endpoint_connection,
             connect_state,
             dns_resolver,
             transport_connector: _,
@@ -219,7 +206,7 @@ impl FakeDeps {
             local_idle_timeout,
             remote_idle_ping_timeout,
             remote_idle_disconnect_timeout: _,
-        } = endpoint_connection.config.ws2_config();
+        } = RECOMMENDED_WS2_CONFIG;
         let connection_resources = ConnectionResources {
             connect_state,
             dns_resolver,
@@ -236,7 +223,7 @@ impl FakeDeps {
                 None,
             ),
             &UserAgent::with_libsignal_version("test"),
-            chat::ws2::Config {
+            chat::ws::Config {
                 local_idle_timeout,
                 remote_idle_timeout: remote_idle_ping_timeout,
                 initial_request_id: 0,
@@ -283,10 +270,7 @@ fn fake_ips_for_names(domain_config: &DomainConfig) -> HashMap<&'static str, Loo
         .map(|(name, index)| {
             let mut segments = BASE_IP_ADDR.segments();
             *segments.last_mut().unwrap() = index;
-            (
-                name,
-                LookupResult::new(DnsSource::Test, vec![], vec![segments.into()]),
-            )
+            (name, LookupResult::new(vec![], vec![segments.into()]))
         })
         .collect()
 }

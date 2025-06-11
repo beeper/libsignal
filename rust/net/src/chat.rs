@@ -10,18 +10,14 @@ use std::time::Duration;
 use ::http::uri::PathAndQuery;
 use ::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use bytes::Bytes;
-use libsignal_net_infra::connection_manager::MultiRouteConnectionManager;
 use libsignal_net_infra::route::{
     Connector, HttpsTlsRoute, RouteProvider, RouteProviderExt, ThrottlingConnector, TransportRoute,
     UnresolvedHttpsServiceRoute, UnresolvedWebsocketServiceRoute, UsePreconnect, WebSocketRoute,
     WebSocketRouteFragment,
 };
-use libsignal_net_infra::timeouts::ONE_ROUTE_CONNECTION_TIMEOUT;
-use libsignal_net_infra::utils::NetworkChangeEvent;
 use libsignal_net_infra::ws::StreamWithResponseHeaders;
 use libsignal_net_infra::{
-    make_ws_config, AsHttpHeader as _, AsStaticHttpHeader, Connection, EndpointConnection, IpType,
-    TransportInfo,
+    AsHttpHeader as _, AsStaticHttpHeader, Connection, IpType, TransportInfo,
 };
 use tokio_tungstenite::WebSocketStream;
 
@@ -29,7 +25,7 @@ use crate::auth::Auth;
 use crate::connect_state::{
     ConnectionResources, DefaultTransportConnector, RouteInfo, WebSocketTransportConnectorFactory,
 };
-use crate::env::{add_user_agent_header, ConnectionConfig, UserAgent};
+use crate::env::UserAgent;
 use crate::proto;
 
 mod error;
@@ -39,7 +35,6 @@ pub mod fake;
 pub mod noise;
 pub mod server_requests;
 pub mod ws;
-pub mod ws2;
 
 pub type MessageProto = proto::chat_websocket::WebSocketMessage;
 pub type RequestProto = proto::chat_websocket::WebSocketRequestMessage;
@@ -137,38 +132,6 @@ impl AsStaticHttpHeader for ReceiveStories {
     }
 }
 
-pub enum EnforceMinimumTls {
-    Yes,
-    No,
-}
-
-pub fn endpoint_connection(
-    connection_config: &ConnectionConfig,
-    user_agent: &UserAgent,
-    include_fallback: bool,
-    enforce_minimum_tls: &EnforceMinimumTls,
-    network_change_event: &NetworkChangeEvent,
-) -> EndpointConnection<MultiRouteConnectionManager> {
-    let connection_config = match enforce_minimum_tls {
-        EnforceMinimumTls::No => &connection_config.config_with_permissive_min_tls_version(),
-        EnforceMinimumTls::Yes => connection_config,
-    };
-    let chat_endpoint = PathAndQuery::from_static(crate::env::constants::WEB_SOCKET_PATH);
-    let chat_connection_params = if include_fallback {
-        connection_config.connection_params_with_fallback()
-    } else {
-        vec![connection_config.direct_connection_params()]
-    };
-    let chat_connection_params = add_user_agent_header(chat_connection_params, user_agent);
-    let chat_ws_config = make_ws_config(chat_endpoint, ONE_ROUTE_CONNECTION_TIMEOUT);
-    EndpointConnection::new_multi(
-        chat_connection_params,
-        ONE_ROUTE_CONNECTION_TIMEOUT,
-        chat_ws_config,
-        network_change_event,
-    )
-}
-
 /// Information about an established connection.
 #[derive(Clone, Debug)]
 pub struct ConnectionInfo {
@@ -177,7 +140,7 @@ pub struct ConnectionInfo {
 }
 
 pub struct ChatConnection {
-    inner: self::ws2::Chat,
+    inner: self::ws::Chat,
     connection_info: ConnectionInfo,
 }
 
@@ -191,7 +154,7 @@ type ChatTransportConnection =
 pub struct PendingChatConnection<T = ChatTransportConnection> {
     connection: WebSocketStream<T>,
     connect_response_headers: http::HeaderMap,
-    ws_config: ws2::Config,
+    ws_config: ws::Config,
     route_info: RouteInfo,
     log_tag: Arc<str>,
 }
@@ -209,7 +172,7 @@ impl ChatConnection {
         connection_resources: ConnectionResources<'_, TC>,
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
         user_agent: &UserAgent,
-        ws_config: self::ws2::Config,
+        ws_config: self::ws::Config,
         auth: Option<AuthenticatedChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection, ConnectError>
@@ -235,7 +198,7 @@ impl ChatConnection {
         connection_resources: ConnectionResources<'_, TC>,
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
         user_agent: &UserAgent,
-        ws_config: self::ws2::Config,
+        ws_config: self::ws::Config,
         auth: Option<AuthenticatedChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection<TC::Connection>, ConnectError>
@@ -303,7 +266,7 @@ impl ChatConnection {
     pub fn finish_connect(
         tokio_runtime: tokio::runtime::Handle,
         pending: PendingChatConnection,
-        listener: ws2::EventListener,
+        listener: ws::EventListener,
     ) -> Self {
         let PendingChatConnection {
             connection,
@@ -317,7 +280,7 @@ impl ChatConnection {
                 route_info,
                 transport_info: connection.transport_info(),
             },
-            inner: ws2::Chat::new(
+            inner: ws::Chat::new(
                 tokio_runtime,
                 connection,
                 connect_response_headers,
@@ -386,7 +349,7 @@ pub mod test_support {
     use libsignal_net_infra::EnableDomainFronting;
 
     use super::*;
-    use crate::chat::{ws2, ChatConnection};
+    use crate::chat::{ws, ChatConnection};
     use crate::connect_state::{
         ConnectState, DefaultConnectorFactory, PreconnectingFactory, SUGGESTED_CONNECT_CONFIG,
     };
@@ -417,7 +380,7 @@ pub mod test_support {
         );
         let user_agent = UserAgent::with_libsignal_version("test_simple_chat_connection");
 
-        let ws_config = ws2::Config {
+        let ws_config = ws::Config {
             initial_request_id: 0,
             local_idle_timeout: Duration::from_secs(60),
             remote_idle_timeout: Duration::from_secs(60),
@@ -445,7 +408,7 @@ pub mod test_support {
         .await?;
 
         // Just a no-op listener.
-        let listener: ws2::EventListener = Box::new(|_event| {});
+        let listener: ws::EventListener = Box::new(|_event| {});
 
         let tokio_runtime = tokio::runtime::Handle::try_current().expect("can get tokio runtime");
         let chat_connection = ChatConnection::finish_connect(tokio_runtime, pending, listener);
@@ -702,7 +665,7 @@ pub(crate) mod test {
                 },
             }],
             &UserAgent::with_libsignal_version("test"),
-            ws2::Config {
+            ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,
@@ -799,7 +762,7 @@ pub(crate) mod test {
             make_connection_resources(),
             routes.clone(),
             &UserAgent::with_libsignal_version("test"),
-            ws2::Config {
+            ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,
@@ -819,7 +782,7 @@ pub(crate) mod test {
             make_connection_resources(),
             routes.clone(),
             &UserAgent::with_libsignal_version("test"),
-            ws2::Config {
+            ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,

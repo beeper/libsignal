@@ -6,7 +6,6 @@
 use std::future::Future;
 use std::panic::UnwindSafe;
 
-use libsignal_net_infra::route::Captures;
 use static_assertions::assert_impl_all;
 
 mod error;
@@ -253,10 +252,8 @@ impl<'c> RegistrationService<'c> {
         request: R,
         // Write this as `impl Future` so we can include the `Send` bound, which
         // lets us surface errors earlier.
-    ) -> impl Future<Output = Result<(), RequestError<SessionRequestError>>>
-           + Send
-           + Captures<&'_ ()>
-           + Captures<&'c ()> {
+    ) -> impl Future<Output = Result<(), RequestError<SessionRequestError>>> + Send + use<'_, 'c, R>
+    {
         // Delegate to a non-templated function to reduce code size cost.
         async fn submit_request_impl(
             this: &mut RegistrationService<'_>,
@@ -336,7 +333,7 @@ mod testutil {
     use tokio::sync::{mpsc, oneshot};
 
     use crate::chat::fake::FakeChatRemote;
-    use crate::chat::ws2::ListenerEvent;
+    use crate::chat::ws::ListenerEvent;
     use crate::chat::{ChatConnection, ConnectError as ChatConnectError};
     use crate::registration::ConnectChat;
 
@@ -352,7 +349,7 @@ mod testutil {
             Self(Some(value))
         }
 
-        pub(super) fn into_listener(mut self) -> crate::chat::ws2::EventListener
+        pub(super) fn into_listener(mut self) -> crate::chat::ws::EventListener
         where
             T: Send + 'static,
         {

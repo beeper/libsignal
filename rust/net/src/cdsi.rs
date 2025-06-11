@@ -523,7 +523,9 @@ mod test {
     use libsignal_net_infra::ws2::attested::testutil::{
         run_attested_server, AttestedServerOutput, FAKE_ATTESTATION,
     };
-    use libsignal_net_infra::{AsStaticHttpHeader as _, EnableDomainFronting};
+    use libsignal_net_infra::{
+        AsStaticHttpHeader as _, EnableDomainFronting, RECOMMENDED_WS2_CONFIG,
+    };
     use nonzero_ext::nonzero;
     use tokio_stream::wrappers::UnboundedReceiverStream;
     use tungstenite::protocol::frame::coding::CloseCode;
@@ -534,7 +536,6 @@ mod test {
     use super::*;
     use crate::auth::Auth;
     use crate::connect_state::{ConnectState, SUGGESTED_CONNECT_CONFIG};
-    use crate::enclave::EnclaveEndpointConnection;
 
     #[test]
     fn parse_lookup_response_entries() {
@@ -548,8 +549,7 @@ mod test {
         // Generate a sequence of triples by repeating the above data a few times.
         const NUM_REPEATS: usize = 4;
         let e164_pni_aci_triples =
-            std::iter::repeat([e164_bytes.as_slice(), &PNI_BYTES, &ACI_BYTES])
-                .take(NUM_REPEATS)
+            std::iter::repeat_n([e164_bytes.as_slice(), &PNI_BYTES, &ACI_BYTES], NUM_REPEATS)
                 .flatten()
                 .flatten()
                 .cloned()
@@ -986,12 +986,7 @@ mod test {
         });
 
         let env = crate::env::PROD;
-        let ws2_config = EnclaveEndpointConnection::new(
-            &env.cdsi,
-            Duration::from_secs(10),
-            &no_network_change_events(),
-        )
-        .ws2_config();
+        let ws2_config = RECOMMENDED_WS2_CONFIG;
         let auth = Auth {
             username: "username".to_string(),
             password: "password".to_string(),
@@ -1013,7 +1008,8 @@ mod test {
                 confirmation_header_name: None,
             },
             DirectOrProxyProvider::maybe_proxied(
-                env.cdsi.route_provider(EnableDomainFronting::No),
+                env.cdsi
+                    .enclave_websocket_provider(EnableDomainFronting::No),
                 None,
             ),
             ws2_config,

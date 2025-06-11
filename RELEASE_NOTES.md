@@ -1,5 +1,3 @@
-v0.73.2
+v0.74.1
 
-- Android: Fix bug which can cause CompletableFuture to be stripped by ProGuard/R8.
-
-- keytrans: Bridge to ffi
+-   backups: Add integrityCheck to LocatorInfo
