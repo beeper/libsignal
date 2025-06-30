@@ -24,29 +24,34 @@ public class PrivateKey: ClonableHandleOwner<SignalMutPointerPrivateKey>, @unche
         }
     }
 
-    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerPrivateKey, currentHandle: SignalConstPointerPrivateKey) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(
+        _ newHandle: inout SignalMutPointerPrivateKey,
+        currentHandle: SignalConstPointerPrivateKey
+    ) -> SignalFfiErrorRef? {
         return signal_privatekey_clone(&newHandle, currentHandle)
     }
 
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerPrivateKey>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerPrivateKey>
+    ) -> SignalFfiErrorRef? {
         return signal_privatekey_destroy(handle.pointer)
     }
 
-    public func serialize() -> [UInt8] {
+    public func serialize() -> Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_privatekey_serialize($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public func generateSignature<Bytes: ContiguousBytes>(message: Bytes) -> [UInt8] {
+    public func generateSignature<Bytes: ContiguousBytes>(message: Bytes) -> Data {
         return withNativeHandle { nativeHandle in
             message.withUnsafeBorrowedBuffer { messageBuffer in
                 failOnError {
-                    try invokeFnReturningArray {
+                    try invokeFnReturningData {
                         signal_privatekey_sign($0, nativeHandle.const(), messageBuffer)
                     }
                 }
@@ -54,10 +59,10 @@ public class PrivateKey: ClonableHandleOwner<SignalMutPointerPrivateKey>, @unche
         }
     }
 
-    public func keyAgreement(with other: PublicKey) -> [UInt8] {
-        return withNativeHandles(self, other) { nativeHandle, otherHandle in
-            failOnError {
-                try invokeFnReturningArray {
+    public func keyAgreement(with other: PublicKey) -> Data {
+        return failOnError {
+            try withAllBorrowed(self, other) { nativeHandle, otherHandle in
+                try invokeFnReturningData {
                     signal_privatekey_agree($0, nativeHandle.const(), otherHandle.const())
                 }
             }

@@ -76,11 +76,7 @@ extension SignalCPromiseOwnedBufferOfc_uchar: PromiseStruct {
 ///
 /// Not for direct use, see Completer instead.
 private class CompleterBase {
-#if compiler(>=6.0)
     typealias RawCompletion = @Sendable (_ error: SignalFfiErrorRef?, _ valuePtr: sending UnsafeRawPointer?) -> Void
-#else
-    typealias RawCompletion = @Sendable (_ error: SignalFfiErrorRef?, _ valuePtr: UnsafeRawPointer?) -> Void
-#endif
 
     let completeUnsafe: RawCompletion
 
@@ -124,11 +120,9 @@ private class Completer<Promise: PromiseStruct>: CompleterBase {
     /// You must ensure that either the callback is called, or the result is passed to
     /// ``cleanUpUncompletedPromiseStruct(_:)``.
     func makePromiseStruct() -> Promise {
-#if compiler(>=6.0)
-        typealias RawPromiseCallback = @convention(c) (_ error: SignalFfiErrorRef?, _ value: sending UnsafeRawPointer?, _ context: UnsafeRawPointer?) -> Void
-#else
-        typealias RawPromiseCallback = @convention(c) (_ error: SignalFfiErrorRef?, _ value: UnsafeRawPointer?, _ context: UnsafeRawPointer?) -> Void
-#endif
+        typealias RawPromiseCallback = @convention(c) (
+            _ error: SignalFfiErrorRef?, _ value: sending UnsafeRawPointer?, _ context: UnsafeRawPointer?
+        ) -> Void
         let completeOpaque: RawPromiseCallback = { error, value, context in
             let completer: CompleterBase = Unmanaged.fromOpaque(context!).takeRetainedValue()
             completer.completeUnsafe(error, value)
@@ -142,8 +136,14 @@ private class Completer<Promise: PromiseStruct>: CompleterBase {
         // we know that Rust is already enforcing that the `bridge_fn` result is allowed to hop threads (Send),
         // and that it won't use or escape the C representation of that result besides passing it to the callback.
         // So first we build a promise struct---it doesn't matter which one---by reinterpreting the callback...
-        typealias RawPointerPromiseCallback = @convention(c) (_ error: SignalFfiErrorRef?, _ value: UnsafePointer<UnsafeRawPointer?>?, _ context: UnsafeRawPointer?) -> Void
-        let rawPromiseStruct = SignalCPromiseRawPointer(complete: unsafeBitCast(completeOpaque, to: RawPointerPromiseCallback.self), context: Unmanaged.passRetained(self).toOpaque(), cancellation_id: 0)
+        typealias RawPointerPromiseCallback = @convention(c) (
+            _ error: SignalFfiErrorRef?, _ value: UnsafePointer<UnsafeRawPointer?>?, _ context: UnsafeRawPointer?
+        ) -> Void
+        let rawPromiseStruct = SignalCPromiseRawPointer(
+            complete: unsafeBitCast(completeOpaque, to: RawPointerPromiseCallback.self),
+            context: Unmanaged.passRetained(self).toOpaque(),
+            cancellation_id: 0
+        )
 
         // ...And then we reinterpret the entire struct, because all promise structs *also* have the same layout.
         // (Which we at least check a little bit here.)

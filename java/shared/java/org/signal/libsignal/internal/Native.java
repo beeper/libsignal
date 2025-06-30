@@ -171,7 +171,7 @@ public final class Native {
   public static native void AuthCredentialWithPni_CheckValidContents(byte[] bytes) throws Exception;
 
   public static native void AuthenticatedChatConnection_Destroy(long handle);
-  public static native CompletableFuture<Long> AuthenticatedChatConnection_connect(long asyncRuntime, long connectionManager, String username, String password, boolean receiveStories);
+  public static native CompletableFuture<Long> AuthenticatedChatConnection_connect(long asyncRuntime, long connectionManager, String username, String password, boolean receiveStories, Object[] languages);
   public static native CompletableFuture AuthenticatedChatConnection_disconnect(long asyncRuntime, long chat);
   public static native void AuthenticatedChatConnection_init_listener(long chat, BridgeChatListener listener);
   public static native CompletableFuture<Void> AuthenticatedChatConnection_preconnect(long asyncRuntime, long connectionManager);
@@ -303,7 +303,7 @@ public final class Native {
   public static native byte[] ECPrivateKey_Sign(long key, byte[] message) throws Exception;
 
   public static native int ECPublicKey_Compare(long key1, long key2);
-  public static native long ECPublicKey_Deserialize(byte[] data, int offset) throws Exception;
+  public static native long ECPublicKey_Deserialize(byte[] data, int offset, int length) throws Exception;
   public static native void ECPublicKey_Destroy(long handle);
   public static native boolean ECPublicKey_Equals(long lhs, long rhs);
   public static native byte[] ECPublicKey_GetPublicKeyBytes(long obj) throws Exception;
@@ -414,7 +414,7 @@ public final class Native {
   public static native long KyberPreKeyRecord_GetTimestamp(long obj) throws Exception;
   public static native long KyberPreKeyRecord_New(int id, long timestamp, long keyPair, byte[] signature);
 
-  public static native long KyberPublicKey_DeserializeWithOffset(byte[] data, int offset) throws Exception;
+  public static native long KyberPublicKey_DeserializeWithOffsetLength(byte[] data, int offset, int length) throws Exception;
   public static native void KyberPublicKey_Destroy(long handle);
   public static native boolean KyberPublicKey_Equals(long lhs, long rhs);
   public static native byte[] KyberPublicKey_Serialize(long obj) throws Exception;
@@ -474,9 +474,9 @@ public final class Native {
   public static native void PreKeyBundle_Destroy(long handle);
   public static native int PreKeyBundle_GetDeviceId(long obj) throws Exception;
   public static native long PreKeyBundle_GetIdentityKey(long p) throws Exception;
-  public static native int PreKeyBundle_GetKyberPreKeyId(long bundle) throws Exception;
+  public static native int PreKeyBundle_GetKyberPreKeyId(long obj) throws Exception;
   public static native long PreKeyBundle_GetKyberPreKeyPublic(long bundle) throws Exception;
-  public static native byte[] PreKeyBundle_GetKyberPreKeySignature(long bundle) throws Exception;
+  public static native byte[] PreKeyBundle_GetKyberPreKeySignature(long obj) throws Exception;
   public static native int PreKeyBundle_GetPreKeyId(long obj) throws Exception;
   public static native long PreKeyBundle_GetPreKeyPublic(long obj) throws Exception;
   public static native int PreKeyBundle_GetRegistrationId(long obj) throws Exception;
@@ -527,7 +527,7 @@ public final class Native {
   public static native void ProtocolAddress_Destroy(long handle);
   public static native int ProtocolAddress_DeviceId(long obj);
   public static native String ProtocolAddress_Name(long obj);
-  public static native long ProtocolAddress_New(String name, int deviceId);
+  public static native long ProtocolAddress_New(String name, int deviceId) throws Exception;
 
   public static native void ReceiptCredentialPresentation_CheckValidContents(byte[] buffer) throws Exception;
   public static native long ReceiptCredentialPresentation_GetReceiptExpirationTime(byte[] presentation);
@@ -742,7 +742,7 @@ public final class Native {
   public static native long TokioAsyncContext_new();
 
   public static native void UnauthenticatedChatConnection_Destroy(long handle);
-  public static native CompletableFuture<Long> UnauthenticatedChatConnection_connect(long asyncRuntime, long connectionManager);
+  public static native CompletableFuture<Long> UnauthenticatedChatConnection_connect(long asyncRuntime, long connectionManager, Object[] languages);
   public static native CompletableFuture UnauthenticatedChatConnection_disconnect(long asyncRuntime, long chat);
   public static native long UnauthenticatedChatConnection_info(long chat);
   public static native void UnauthenticatedChatConnection_init_listener(long chat, BridgeChatListener listener);

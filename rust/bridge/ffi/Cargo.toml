@@ -27,12 +27,14 @@ libsignal-bridge = { workspace = true, features = ["ffi"] }
 libsignal-bridge-testing = { workspace = true, features = ["ffi"], optional = true }
 libsignal-core = { workspace = true }
 libsignal-net = { workspace = true }
+libsignal-net-chat = { workspace = true }
 libsignal-protocol = { workspace = true }
 signal-media = { workspace = true }
 
 hex = { workspace = true }
 log = { workspace = true }
 log-panics = { workspace = true, features = ["with-backtrace"] }
+paste = { workspace = true }
 zerocopy = { workspace = true }
 
 [target.aarch64-apple-ios.dependencies]

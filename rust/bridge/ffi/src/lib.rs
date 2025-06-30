@@ -15,6 +15,7 @@ use libsignal_bridge::ffi::*;
 use libsignal_bridge_testing::*;
 use libsignal_core::try_scoped;
 use libsignal_protocol::*;
+use paste::paste;
 
 pub mod logging;
 
@@ -133,36 +134,19 @@ pub unsafe extern "C" fn signal_error_get_type(err: *const SignalFfiError) -> u3
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn signal_error_get_retry_after_seconds(
+pub unsafe extern "C" fn signal_error_get_invalid_protocol_address(
     err: *const SignalFfiError,
-    out: *mut u32,
+    name_out: *mut *const c_char,
+    device_id_out: *mut u32,
 ) -> *mut SignalFfiError {
     let err = AssertUnwindSafe(err);
     run_ffi_safe(|| {
         let err = err.as_ref().ok_or(NullPointerError)?;
-        let value = err.provide_retry_after_seconds().map_err(|_| {
-            SignalProtocolError::InvalidArgument(format!(
-                "cannot get retry_after_seconds from error ({err})"
-            ))
+        let (name, device_id) = err.provide_invalid_address().map_err(|_| {
+            SignalProtocolError::InvalidArgument(format!("cannot get address from error ({err})"))
         })?;
-        write_result_to(out, value)
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn signal_error_get_tries_remaining(
-    err: *const SignalFfiError,
-    out: *mut u32,
-) -> *mut SignalFfiError {
-    let err = AssertUnwindSafe(err);
-    run_ffi_safe(|| {
-        let err = err.as_ref().ok_or(NullPointerError)?;
-        let value = err.provide_tries_remaining().map_err(|_| {
-            SignalProtocolError::InvalidArgument(format!(
-                "cannot get tries_remaining from error ({err})"
-            ))
-        })?;
-        write_result_to(out, value)
+        write_result_to(name_out, name)?;
+        write_result_to(device_id_out, device_id)
     })
 }
 
@@ -196,7 +180,7 @@ pub unsafe extern "C" fn signal_error_get_registration_error_not_deliverable(
     run_ffi_safe(|| {
         let err = err.as_ref().ok_or(NullPointerError)?;
 
-        let libsignal_net::registration::VerificationCodeNotDeliverable {
+        let libsignal_net_chat::api::registration::VerificationCodeNotDeliverable {
             reason,
             permanent_failure,
         } = err
@@ -222,7 +206,7 @@ pub unsafe extern "C" fn signal_error_get_registration_lock(
     run_ffi_safe(|| {
         let err = err.as_ref().ok_or(NullPointerError)?;
 
-        let libsignal_net::registration::RegistrationLock {
+        let libsignal_net_chat::api::registration::RegistrationLock {
             time_remaining,
             svr2_credentials:
                 libsignal_net::auth::Auth {
@@ -237,6 +221,79 @@ pub unsafe extern "C" fn signal_error_get_registration_lock(
         write_result_to(out_time_remaining_seconds, time_remaining.as_secs())?;
         write_result_to(out_svr2_username, svr2_username.as_str())?;
         write_result_to(out_svr2_password, svr2_password.as_str())?;
+        Ok(())
+    })
+}
+
+macro_rules! get_named_u32_from_err_impl {
+    ($name:ident) => {
+        paste! {
+            #[no_mangle]
+            pub unsafe extern "C" fn [< signal_error_get_ $name >](
+                err: *const SignalFfiError,
+                out: *mut u32,
+            ) -> *mut SignalFfiError {
+                let err = AssertUnwindSafe(err);
+                run_ffi_safe(|| {
+                    let err = err.as_ref().ok_or(NullPointerError)?;
+                    let value = err.[< provide_ $name >]().map_err(|_| {
+                        SignalProtocolError::InvalidArgument(format!(
+                            "cannot get $name from error ({err})"
+                        ))
+                    })?;
+                    write_result_to(out, value)
+                })
+            }
+        }
+    };
+    // Similar to the above, only adds an extra .map(...) step to extract the final u32
+    ($name:ident, $field:ident, $c_name:ident) => {
+        paste! {
+            #[no_mangle]
+            pub unsafe extern "C" fn [< signal_error_get_ $c_name >](
+                err: *const SignalFfiError,
+                out: *mut u32,
+            ) -> *mut SignalFfiError {
+                let err = AssertUnwindSafe(err);
+                run_ffi_safe(|| {
+                    let err = err.as_ref().ok_or(NullPointerError)?;
+                    let value = err.[< provide_ $name >]()
+                        .map(|x| x.$field)
+                        .map_err(|_| {
+                            SignalProtocolError::InvalidArgument(format!(
+                                "cannot get $name from error ({err})"
+                        ))}
+                    )?;
+                    write_result_to(out, value)
+                })
+            }
+        }
+    };
+}
+
+get_named_u32_from_err_impl!(fingerprint_versions, ours, our_fingerprint_version);
+get_named_u32_from_err_impl!(fingerprint_versions, theirs, their_fingerprint_version);
+get_named_u32_from_err_impl!(retry_after_seconds);
+get_named_u32_from_err_impl!(tries_remaining);
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_rate_limit_challenge(
+    err: *const SignalFfiError,
+    out_token: *mut *const c_char,
+    out_options: *mut OwnedBufferOf<c_uchar>,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+
+        let libsignal_net_chat::api::RateLimitChallenge { token, options } =
+            err.provide_rate_limit_challenge().map_err(|_| {
+                SignalProtocolError::InvalidArgument(format!(
+                    "cannot get rate limit challenge error from error ({err})"
+                ))
+            })?;
+        write_result_to(out_token, token.as_str())?;
+        write_result_to(out_options, options.as_slice())?;
         Ok(())
     })
 }

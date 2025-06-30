@@ -70,7 +70,7 @@ describe('Registration types', () => {
     );
     expect(response.usernameHash).to.deep.eq(Buffer.from('username-hash'));
     expect(response.usernameLinkHandle).to.deep.eq(
-      Buffer.from(Array(16).fill(0x55))
+      Uint8Array.from(Array(16).fill(0x55))
     );
     expect(response.storageCapable).to.eq(true);
     expect(response.entitlementBadges).to.deep.eq([
@@ -119,6 +119,21 @@ describe('Registration types', () => {
       },
     ];
     const timeoutCase: [string, ErrorCode] = ['Timeout', ErrorCode.IoError];
+    const serverSideErrorCase: [string, object] = [
+      'ServerSideError',
+      {
+        code: ErrorCode.Generic,
+        message: 'server-side error, retryable with backoff',
+      },
+    ];
+    const rateLimitChallengeCase: [string, object] = [
+      'PushChallenge',
+      {
+        code: ErrorCode.RateLimitChallengeError,
+        token: 'token',
+        options: new Set(['pushChallenge']),
+      },
+    ];
     const cases: Array<{
       operationName: string;
       convertFn: (_: string) => void;
@@ -132,6 +147,8 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
+          serverSideErrorCase,
+          rateLimitChallengeCase,
         ],
       },
       {
@@ -142,6 +159,8 @@ describe('Registration types', () => {
           ['SessionNotFound', ErrorCode.Generic],
           unknownCase,
           timeoutCase,
+          serverSideErrorCase,
+          rateLimitChallengeCase,
         ],
       },
       {
@@ -152,6 +171,7 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
+          serverSideErrorCase,
         ],
       },
       {
@@ -167,6 +187,7 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
+          serverSideErrorCase,
         ],
       },
       {
@@ -180,6 +201,7 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
+          serverSideErrorCase,
         ],
       },
       {
@@ -190,6 +212,7 @@ describe('Registration types', () => {
           ['CredentialsCouldNotBeParsed', ErrorCode.Generic],
           unknownCase,
           timeoutCase,
+          serverSideErrorCase,
         ],
       },
       {
@@ -203,6 +226,7 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
+          serverSideErrorCase,
         ],
       },
     ];
@@ -212,7 +236,7 @@ describe('Registration types', () => {
         testCases.forEach(([name, expectation]) => {
           expect(convertFn.bind(Native, name))
             .throws(LibSignalErrorBase)
-            .to.include(
+            .to.deep.include(
               expectation instanceof Object
                 ? expectation
                 : { code: expectation }
@@ -292,7 +316,7 @@ describe('Registration client', () => {
       expect(secondRequest.path).to.eq(
         '/v1/verification/session/fake-session-A/code'
       );
-      expect(secondRequest.body.toString()).to.eq(
+      expect(new TextDecoder().decode(secondRequest.body)).to.eq(
         '{"transport":"voice","client":"libsignal test"}'
       );
       expect(secondRequest.headers).to.deep.eq(

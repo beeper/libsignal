@@ -7,7 +7,7 @@ import Foundation
 import SignalFfi
 
 public class ServerPublicParams: NativeHandleOwner<SignalMutPointerServerPublicParams> {
-    public convenience init(contents: [UInt8]) throws {
+    public convenience init(contents: Data) throws {
         var handle = SignalMutPointerServerPublicParams()
         try contents.withUnsafeBorrowedBuffer {
             try checkError(signal_server_public_params_deserialize(&handle, $0))
@@ -34,27 +34,31 @@ public class ServerPublicParams: NativeHandleOwner<SignalMutPointerServerPublicP
         }
     }
 
-    public func verifySignature(message: [UInt8], notarySignature: NotarySignature) throws {
+    public func verifySignature(message: Data, notarySignature: NotarySignature) throws {
         try withNativeHandle { contents in
             try message.withUnsafeBorrowedBuffer { message in
                 try notarySignature.withUnsafePointerToSerialized { notarySignature in
-                    try checkError(signal_server_public_params_verify_signature(contents.const(), message, notarySignature))
+                    try checkError(
+                        signal_server_public_params_verify_signature(contents.const(), message, notarySignature)
+                    )
                 }
             }
         }
     }
 
-    public func serialize() -> [UInt8] {
+    public func serialize() -> Data {
         return failOnError {
             try withNativeHandle { handle in
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_server_public_params_serialize($0, handle.const())
                 }
             }
         }
     }
 
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerServerPublicParams>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerServerPublicParams>
+    ) -> SignalFfiErrorRef? {
         signal_server_public_params_destroy(handle.pointer)
     }
 }

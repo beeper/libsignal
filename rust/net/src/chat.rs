@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use std::borrow::Borrow;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,15 +11,14 @@ use std::time::Duration;
 use ::http::uri::PathAndQuery;
 use ::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use bytes::Bytes;
+use either::Either;
 use libsignal_net_infra::route::{
     Connector, HttpsTlsRoute, RouteProvider, RouteProviderExt, ThrottlingConnector, TransportRoute,
     UnresolvedHttpsServiceRoute, UnresolvedWebsocketServiceRoute, UsePreconnect, WebSocketRoute,
     WebSocketRouteFragment,
 };
 use libsignal_net_infra::ws::StreamWithResponseHeaders;
-use libsignal_net_infra::{
-    AsHttpHeader as _, AsStaticHttpHeader, Connection, IpType, TransportInfo,
-};
+use libsignal_net_infra::{AsHttpHeader, AsStaticHttpHeader, Connection, IpType, TransportInfo};
 use tokio_tungstenite::WebSocketStream;
 
 use crate::auth::Auth;
@@ -54,12 +54,12 @@ pub struct DebugInfo {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(test, derive(PartialEq))]
+#[cfg_attr(any(test, feature = "test-util"), derive(PartialEq))]
 pub struct Request {
     pub method: ::http::Method,
-    pub body: Option<Bytes>,
-    pub headers: HeaderMap,
     pub path: PathAndQuery,
+    pub headers: HeaderMap,
+    pub body: Option<Bytes>,
 }
 
 #[derive(Clone, Debug)]
@@ -67,8 +67,8 @@ pub struct Request {
 pub struct Response {
     pub status: StatusCode,
     pub message: Option<String>,
-    pub body: Option<Bytes>,
     pub headers: HeaderMap,
+    pub body: Option<Bytes>,
 }
 
 #[derive(Debug)]
@@ -132,6 +132,28 @@ impl AsStaticHttpHeader for ReceiveStories {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LanguageList(pub HeaderValue);
+
+impl LanguageList {
+    pub fn parse(
+        languages: &[impl Borrow<str>],
+    ) -> Result<Option<Self>, http::header::InvalidHeaderValue> {
+        if languages.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self(languages.join(", ").parse()?)))
+    }
+}
+
+impl AsStaticHttpHeader for LanguageList {
+    const HEADER_NAME: HeaderName = http::header::ACCEPT_LANGUAGE;
+
+    fn header_value(&self) -> HeaderValue {
+        self.0.clone()
+    }
+}
+
 /// Information about an established connection.
 #[derive(Clone, Debug)]
 pub struct ConnectionInfo {
@@ -163,6 +185,36 @@ pub struct PendingChatConnection<T = ChatTransportConnection> {
 pub struct AuthenticatedChatHeaders {
     pub auth: Auth,
     pub receive_stories: ReceiveStories,
+    pub languages: Option<LanguageList>,
+}
+
+pub struct UnauthenticatedChatHeaders {
+    pub languages: Option<LanguageList>,
+}
+
+#[derive(derive_more::From)]
+pub enum ChatHeaders {
+    Auth(AuthenticatedChatHeaders),
+    Unauth(UnauthenticatedChatHeaders),
+}
+
+impl ChatHeaders {
+    fn iter_headers(self) -> impl Iterator<Item = (HeaderName, HeaderValue)> {
+        match self {
+            ChatHeaders::Auth(AuthenticatedChatHeaders {
+                auth,
+                receive_stories,
+                languages,
+            }) => Either::Left(
+                [auth.as_header(), receive_stories.as_header()]
+                    .into_iter()
+                    .chain(languages.as_ref().map(AsHttpHeader::as_header)),
+            ),
+            ChatHeaders::Unauth(UnauthenticatedChatHeaders { languages }) => {
+                Either::Right(languages.as_ref().map(AsHttpHeader::as_header).into_iter())
+            }
+        }
+    }
 }
 
 pub type ChatServiceRoute = UnresolvedWebsocketServiceRoute;
@@ -173,7 +225,7 @@ impl ChatConnection {
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
         user_agent: &UserAgent,
         ws_config: self::ws::Config,
-        auth: Option<AuthenticatedChatHeaders>,
+        headers: Option<ChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection, ConnectError>
     where
@@ -187,7 +239,7 @@ impl ChatConnection {
             http_route_provider,
             user_agent,
             ws_config,
-            auth,
+            headers,
             log_tag,
         )
         .await
@@ -199,21 +251,16 @@ impl ChatConnection {
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
         user_agent: &UserAgent,
         ws_config: self::ws::Config,
-        auth: Option<AuthenticatedChatHeaders>,
+        headers: Option<ChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection<TC::Connection>, ConnectError>
     where
         TC: WebSocketTransportConnectorFactory<UsePreconnect<TransportRoute>>,
     {
-        let should_preconnect = auth.is_some();
-        let headers = auth
+        let should_preconnect = matches!(headers, Some(ChatHeaders::Auth(_)));
+        let headers = headers
             .into_iter()
-            .flat_map(
-                |AuthenticatedChatHeaders {
-                     auth,
-                     receive_stories,
-                 }| [auth.as_header(), receive_stories.as_header()],
-            )
+            .flat_map(ChatHeaders::iter_headers)
             .chain([user_agent.as_header()]);
         let ws_fragment = WebSocketRouteFragment {
             ws_config: Default::default(),
@@ -345,6 +392,7 @@ pub mod test_support {
     use std::time::Duration;
 
     use libsignal_net_infra::dns::DnsResolver;
+    use libsignal_net_infra::route::ConnectionProxyConfig;
     use libsignal_net_infra::testutil::no_network_change_events;
     use libsignal_net_infra::EnableDomainFronting;
 
@@ -359,6 +407,7 @@ pub mod test_support {
     pub async fn simple_chat_connection(
         env: &Env<'static>,
         enable_domain_fronting: EnableDomainFronting,
+        proxy: Option<ConnectionProxyConfig>,
         filter_routes: impl Fn(&UnresolvedHttpsServiceRoute) -> bool,
     ) -> Result<ChatConnection, ConnectError> {
         let dns_resolver = DnsResolver::new_with_static_fallback(
@@ -370,7 +419,7 @@ pub mod test_support {
             env.chat_domain_config
                 .connect
                 .route_provider(enable_domain_fronting),
-            None,
+            proxy,
         )
         .filter_routes(filter_routes);
 
@@ -756,6 +805,7 @@ pub(crate) mod test {
                 password: "****".into(),
             },
             receive_stories: ReceiveStories(true),
+            languages: None,
         };
 
         let err = ChatConnection::start_connect_with_transport(
@@ -768,7 +818,7 @@ pub(crate) mod test {
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
-            Some(auth_headers.clone()),
+            Some(auth_headers.clone().into()),
             "fake chat",
         )
         .await
@@ -788,7 +838,7 @@ pub(crate) mod test {
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
-            Some(auth_headers),
+            Some(auth_headers.into()),
             "fake chat",
         )
         .await

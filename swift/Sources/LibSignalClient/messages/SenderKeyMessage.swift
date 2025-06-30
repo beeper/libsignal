@@ -7,7 +7,9 @@ import Foundation
 import SignalFfi
 
 public class SenderKeyMessage: NativeHandleOwner<SignalMutPointerSenderKeyMessage> {
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerSenderKeyMessage>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerSenderKeyMessage>
+    ) -> SignalFfiErrorRef? {
         return signal_sender_key_message_destroy(handle.pointer)
     }
 
@@ -49,20 +51,20 @@ public class SenderKeyMessage: NativeHandleOwner<SignalMutPointerSenderKeyMessag
         }
     }
 
-    public func serialize() -> [UInt8] {
+    public func serialize() -> Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_sender_key_message_serialize($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public var ciphertext: [UInt8] {
+    public var ciphertext: Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_sender_key_message_get_cipher_text($0, nativeHandle.const())
                 }
             }
@@ -71,8 +73,10 @@ public class SenderKeyMessage: NativeHandleOwner<SignalMutPointerSenderKeyMessag
 
     public func verifySignature(against key: PublicKey) throws -> Bool {
         var result = false
-        try withNativeHandles(self, key) { messageHandle, keyHandle in
-            try checkError(signal_sender_key_message_verify_signature(&result, messageHandle.const(), keyHandle.const()))
+        try withAllBorrowed(self, key) { messageHandle, keyHandle in
+            try checkError(
+                signal_sender_key_message_verify_signature(&result, messageHandle.const(), keyHandle.const())
+            )
         }
         return result
     }

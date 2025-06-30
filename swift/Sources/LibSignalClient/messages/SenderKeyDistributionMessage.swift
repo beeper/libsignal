@@ -7,7 +7,9 @@ import Foundation
 import SignalFfi
 
 public class SenderKeyDistributionMessage: NativeHandleOwner<SignalMutPointerSenderKeyDistributionMessage> {
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerSenderKeyDistributionMessage>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerSenderKeyDistributionMessage>
+    ) -> SignalFfiErrorRef? {
         return signal_sender_key_distribution_message_destroy(handle.pointer)
     }
 
@@ -21,19 +23,21 @@ public class SenderKeyDistributionMessage: NativeHandleOwner<SignalMutPointerSen
         try sender.withNativeHandle { senderHandle in
             try withUnsafePointer(to: distributionId.uuid) { distributionId in
                 try withSenderKeyStore(store, context) {
-                    try checkError(signal_sender_key_distribution_message_create(
-                        &result,
-                        senderHandle.const(),
-                        distributionId,
-                        $0
-                    ))
+                    try checkError(
+                        signal_sender_key_distribution_message_create(
+                            &result,
+                            senderHandle.const(),
+                            distributionId,
+                            $0
+                        )
+                    )
                 }
             }
         }
         self.init(owned: NonNull(result)!)
     }
 
-    public convenience init(bytes: [UInt8]) throws {
+    public convenience init(bytes: Data) throws {
         var result = SignalMutPointerSenderKeyDistributionMessage()
         try bytes.withUnsafeBorrowedBuffer {
             try checkError(signal_sender_key_distribution_message_deserialize(&result, $0))
@@ -81,20 +85,20 @@ public class SenderKeyDistributionMessage: NativeHandleOwner<SignalMutPointerSen
         }
     }
 
-    public func serialize() -> [UInt8] {
+    public func serialize() -> Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_sender_key_distribution_message_serialize($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public var chainKey: [UInt8] {
+    public var chainKey: Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_sender_key_distribution_message_get_chain_key($0, nativeHandle.const())
                 }
             }

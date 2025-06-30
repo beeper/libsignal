@@ -1,4 +1,4 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.0
 
 //
 // Copyright 2020-2021 Signal Messenger, LLC.
@@ -18,10 +18,10 @@ let package = Package(
         .library(
             name: "LibSignalClient",
             targets: ["LibSignalClient"]
-        ),
+        )
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.4.3"),
+        .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.4.3")
     ],
     targets: [
         .systemLibrary(name: "SignalFfi"),

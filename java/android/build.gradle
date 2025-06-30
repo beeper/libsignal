@@ -45,8 +45,8 @@ android {
                 srcDir '../shared/test/java'
             }
             kotlin {
-                srcDir '../client/src/test/kotlin'
-                srcDir '../shared/test/kotlin'
+                srcDir '../client/src/test/java'
+                srcDir '../shared/test/java'
             }
             resources {
                 srcDir '../client/src/test/resources'
@@ -62,6 +62,22 @@ android {
     publishing {
         singleVariant('release')
     }
+}
+
+kotlin {
+    explicitApi()
+}
+
+task dokkaHtmlJar(type: Jar) {
+    dependsOn(dokkaHtml)
+    from(dokkaHtml)
+    archiveClassifier.set("dokka")
+}
+
+task dokkaJavadocJar(type: Jar) {
+    dependsOn(dokkaJavadoc)
+    from(dokkaJavadoc)
+    archiveClassifier.set("javadoc")
 }
 
 String collectTestEnvironment() {
@@ -149,8 +165,9 @@ task makeJniLibraries(type:Exec) {
 }
 
 task collectAssets(type:Copy) {
-    from('../../acknowledgments/acknowledgments.md') {
-        rename 'acknowledgments.md', 'libsignal.md'
+    from('../../acknowledgments') {
+        include 'acknowledgments-android*.md'
+        rename 'acknowledgments-android(.*)[.]md', 'libsignal$1.md'
     }
     into 'src/main/assets/acknowledgments'
 }
@@ -162,6 +179,8 @@ afterEvaluate {
             mavenJava(MavenPublication) {
                 artifactId = archivesBaseName
                 from components.release
+                artifact dokkaHtmlJar
+                artifact dokkaJavadocJar
 
                 pom {
                     name = archivesBaseName

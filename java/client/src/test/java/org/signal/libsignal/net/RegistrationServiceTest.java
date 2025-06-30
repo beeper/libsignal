@@ -5,6 +5,8 @@
 
 package org.signal.libsignal.net;
 
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.*;
 
 import java.time.Duration;
@@ -23,7 +25,7 @@ import org.signal.libsignal.internal.NativeTesting;
 import org.signal.libsignal.internal.TokioAsyncContext;
 import org.signal.libsignal.protocol.ServiceId;
 import org.signal.libsignal.protocol.SignedPublicPreKey;
-import org.signal.libsignal.protocol.ecc.Curve;
+import org.signal.libsignal.protocol.ecc.ECKeyPair;
 import org.signal.libsignal.protocol.ecc.ECPublicKey;
 import org.signal.libsignal.protocol.kem.KEMKeyPair;
 import org.signal.libsignal.protocol.kem.KEMKeyType;
@@ -46,14 +48,12 @@ public class RegistrationServiceTest {
     assertEquals(info.getNextCall(), Duration.ofSeconds(123));
     assertEquals(info.getNextSms(), Duration.ofSeconds(456));
     assertEquals(info.getNextVerificationAttempt(), Duration.ofSeconds(789));
-    assertEquals(
-        info.getRequestedInformation(),
-        EnumSet.of(RegistrationSessionState.RequestedInformation.PUSH_CHALLENGE));
+    assertEquals(info.getRequestedInformation(), EnumSet.of(ChallengeOption.PUSH_CHALLENGE));
   }
 
   @Test
   public void testConvertSignedPreKey() {
-    var key = Curve.generateKeyPair().getPublicKey();
+    var key = ECKeyPair.generate().getPublicKey();
     var signedPublicPreKey = new SignedPublicPreKey<>(42, key, "signature".getBytes());
     key.guardedRun(
         keyHandle ->
@@ -108,6 +108,9 @@ public class RegistrationServiceTest {
     assertIsRetryAfterError(NativeTesting::TESTING_RegistrationService_CreateSessionErrorConvert);
     assertIsTimeoutError(NativeTesting::TESTING_RegistrationService_CreateSessionErrorConvert);
     assertIsUnknownError(NativeTesting::TESTING_RegistrationService_CreateSessionErrorConvert);
+    assertIsServerSideError(NativeTesting::TESTING_RegistrationService_CreateSessionErrorConvert);
+    assertIsPushChallengeError(
+        NativeTesting::TESTING_RegistrationService_CreateSessionErrorConvert);
   }
 
   @Test
@@ -122,6 +125,9 @@ public class RegistrationServiceTest {
         NativeTesting::TESTING_RegistrationService_ResumeSessionErrorConvert);
     assertIsTimeoutError(NativeTesting::TESTING_RegistrationService_ResumeSessionErrorConvert);
     assertIsUnknownError(NativeTesting::TESTING_RegistrationService_ResumeSessionErrorConvert);
+    assertIsServerSideError(NativeTesting::TESTING_RegistrationService_ResumeSessionErrorConvert);
+    assertIsPushChallengeError(
+        NativeTesting::TESTING_RegistrationService_ResumeSessionErrorConvert);
   }
 
   @Test
@@ -133,6 +139,7 @@ public class RegistrationServiceTest {
     assertIsRetryAfterError(NativeTesting::TESTING_RegistrationService_UpdateSessionErrorConvert);
     assertIsTimeoutError(NativeTesting::TESTING_RegistrationService_UpdateSessionErrorConvert);
     assertIsUnknownError(NativeTesting::TESTING_RegistrationService_UpdateSessionErrorConvert);
+    assertIsServerSideError(NativeTesting::TESTING_RegistrationService_UpdateSessionErrorConvert);
   }
 
   @Test
@@ -168,6 +175,8 @@ public class RegistrationServiceTest {
         NativeTesting::TESTING_RegistrationService_RequestVerificationCodeErrorConvert);
     assertIsUnknownError(
         NativeTesting::TESTING_RegistrationService_RequestVerificationCodeErrorConvert);
+    assertIsServerSideError(
+        NativeTesting::TESTING_RegistrationService_RequestVerificationCodeErrorConvert);
   }
 
   @Test
@@ -188,6 +197,8 @@ public class RegistrationServiceTest {
         NativeTesting::TESTING_RegistrationService_SubmitVerificationErrorConvert);
     assertIsTimeoutError(NativeTesting::TESTING_RegistrationService_SubmitVerificationErrorConvert);
     assertIsUnknownError(NativeTesting::TESTING_RegistrationService_SubmitVerificationErrorConvert);
+    assertIsServerSideError(
+        NativeTesting::TESTING_RegistrationService_SubmitVerificationErrorConvert);
   }
 
   @Test
@@ -199,6 +210,8 @@ public class RegistrationServiceTest {
     assertIsTimeoutError(
         NativeTesting::TESTING_RegistrationService_CheckSvr2CredentialsErrorConvert);
     assertIsUnknownError(
+        NativeTesting::TESTING_RegistrationService_CheckSvr2CredentialsErrorConvert);
+    assertIsServerSideError(
         NativeTesting::TESTING_RegistrationService_CheckSvr2CredentialsErrorConvert);
   }
 
@@ -219,6 +232,7 @@ public class RegistrationServiceTest {
     assertIsRetryAfterError(NativeTesting::TESTING_RegistrationService_RegisterAccountErrorConvert);
     assertIsTimeoutError(NativeTesting::TESTING_RegistrationService_RegisterAccountErrorConvert);
     assertIsUnknownError(NativeTesting::TESTING_RegistrationService_RegisterAccountErrorConvert);
+    assertIsServerSideError(NativeTesting::TESTING_RegistrationService_RegisterAccountErrorConvert);
   }
 
   private static <E extends Throwable> E assertRegistrationSessionErrorIs(
@@ -242,6 +256,21 @@ public class RegistrationServiceTest {
     RegistrationException e =
         assertRegistrationSessionErrorIs("Unknown", RegistrationException.class, throwError);
     assertEquals(e.getMessage(), "some message");
+  }
+
+  private static void assertIsServerSideError(ThrowingConsumer<String> throwError) {
+    RegistrationException e =
+        assertRegistrationSessionErrorIs(
+            "ServerSideError", RegistrationException.class, throwError);
+    assertThat(e.getMessage(), containsString("server-side error"));
+  }
+
+  private static void assertIsPushChallengeError(ThrowingConsumer<String> throwError) {
+    RateLimitChallengeException e =
+        assertRegistrationSessionErrorIs(
+            "PushChallenge", RateLimitChallengeException.class, throwError);
+    assertEquals(e.getToken(), "token");
+    assertEquals(e.getOptions(), EnumSet.of(ChallengeOption.PUSH_CHALLENGE));
   }
 
   @Test
@@ -283,9 +312,7 @@ public class RegistrationServiceTest {
     assertEquals(sessionState.getVerified(), false);
     assertEquals(
         sessionState.getRequestedInformation(),
-        Set.of(
-            RegistrationSessionState.RequestedInformation.PUSH_CHALLENGE,
-            RegistrationSessionState.RequestedInformation.CAPTCHA));
+        Set.of(ChallengeOption.PUSH_CHALLENGE, ChallengeOption.CAPTCHA));
 
     var requestVerification =
         session.requestVerificationCode(
@@ -486,9 +513,9 @@ public class RegistrationServiceTest {
       SignedPublicPreKey<KEMPublicKey> pqLastResortPreKey) {
     public static RegisterAccountKeys createForTest() {
       return new RegisterAccountKeys(
-          Curve.generateKeyPair().getPublicKey(),
+          ECKeyPair.generate().getPublicKey(),
           new SignedPublicPreKey<>(
-              1, Curve.generateKeyPair().getPublicKey(), "EC signature".getBytes()),
+              1, ECKeyPair.generate().getPublicKey(), "EC signature".getBytes()),
           new SignedPublicPreKey<>(
               2,
               KEMKeyPair.generate(KEMKeyType.KYBER_1024).getPublicKey(),

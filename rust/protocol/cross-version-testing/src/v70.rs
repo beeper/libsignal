@@ -58,7 +58,7 @@ impl super::LibSignalProtocolStore for LibSignalProtocolV70 {
             .calculate_signature(&signed_pq_pre_key_public, &mut csprng)
             .expect("can sign");
 
-        let device_id: u32 = csprng.gen();
+        let device_id: u32 = csprng.gen_range(1..=127);
         let pre_key_id: u32 = csprng.gen();
         let signed_pre_key_id: u32 = csprng.gen();
         let kyber_pre_key_id: u32 = csprng.gen();
@@ -69,26 +69,23 @@ impl super::LibSignalProtocolStore for LibSignalProtocolV70 {
                 .now_or_never()
                 .expect("synchronous")
                 .expect("can fetch registration id"),
-            device_id.into(),
+            device_id.try_into().unwrap(),
             Some((pre_key_id.into(), pre_key_pair.public_key.into_current())),
             signed_pre_key_id.into(),
             signed_pre_key_pair.public_key.into_current(),
             signed_pre_key_signature.to_vec(),
+            kyber_pre_key_id.into(),
+            signed_pq_pre_key_pair.public_key.clone().into_current(),
+            signed_pq_pre_key_signature.to_vec(),
             self.0
                 .get_identity_key_pair()
                 .now_or_never()
                 .expect("synchronous")
                 .expect("can fetch identity key")
                 .identity_key()
-                .clone()
                 .into_current(),
         )
-        .expect("can create pre-key bundles")
-        .with_kyber_pre_key(
-            kyber_pre_key_id.into(),
-            signed_pq_pre_key_pair.public_key.clone().into_current(),
-            signed_pq_pre_key_signature.to_vec(),
-        );
+        .expect("can create pre-key bundles");
 
         self.0
             .save_pre_key(
@@ -134,7 +131,7 @@ impl super::LibSignalProtocolStore for LibSignalProtocolV70 {
 
     fn process_pre_key_bundle(&mut self, remote: &str, pre_key_bundle: super::PreKeyBundle) {
         let pre_key_bundle = (|| {
-            let mut bundle = PreKeyBundle::new(
+            let bundle = PreKeyBundle::new(
                 pre_key_bundle.registration_id()?,
                 ConvertVersion::from_current(pre_key_bundle.device_id()?),
                 pre_key_bundle
@@ -145,24 +142,17 @@ impl super::LibSignalProtocolStore for LibSignalProtocolV70 {
                             .pre_key_public()?
                             .map(ConvertVersion::from_current),
                     ),
-                u32::from(pre_key_bundle.signed_pre_key_id()?).into(),
+                ConvertVersion::from_current(pre_key_bundle.signed_pre_key_id()?),
                 ConvertVersion::from_current(pre_key_bundle.signed_pre_key_public()?),
                 pre_key_bundle.signed_pre_key_signature()?.to_vec(),
                 ConvertVersion::from_current(pre_key_bundle.identity_key()?.to_owned()),
             )
-            .expect("can produce bundle");
-            let kyber_keys = pre_key_bundle
-                .kyber_pre_key_id()?
-                .zip(pre_key_bundle.kyber_pre_key_public()?)
-                .zip(pre_key_bundle.kyber_pre_key_signature()?);
-
-            if let Some(((id, key), signature)) = kyber_keys {
-                bundle = bundle.with_kyber_pre_key(
-                    ConvertVersion::from_current(id),
-                    ConvertVersion::from_current(key.clone()),
-                    signature.to_vec(),
-                );
-            }
+            .expect("can produce bundle")
+            .with_kyber_pre_key(
+                ConvertVersion::from_current(pre_key_bundle.kyber_pre_key_id()?),
+                ConvertVersion::from_current(pre_key_bundle.kyber_pre_key_public()?.clone()),
+                pre_key_bundle.kyber_pre_key_signature()?.to_vec(),
+            );
 
             Ok::<_, libsignal_protocol_current::SignalProtocolError>(bundle)
         })()
@@ -220,7 +210,7 @@ impl super::LibSignalProtocolStore for LibSignalProtocolV70 {
                 &mut self.0.session_store,
                 &mut self.0.identity_store,
                 &mut self.0.pre_key_store,
-                &mut self.0.signed_pre_key_store,
+                &self.0.signed_pre_key_store,
                 &mut self.0.kyber_pre_key_store,
                 &mut thread_rng(),
             )
@@ -229,6 +219,66 @@ impl super::LibSignalProtocolStore for LibSignalProtocolV70 {
             .expect("can decrypt messages"),
             _ => panic!("unexpected 1:1 message type"),
         }
+    }
+
+    fn encrypt_sealed_sender_v1(
+        &self,
+        remote: &str,
+        msg: &libsignal_protocol_current::UnidentifiedSenderMessageContent,
+    ) -> Vec<u8> {
+        // We don't use ConvertVersion for this because we're passed a reference and USMC doesn't
+        // implement Clone.
+        let msg = UnidentifiedSenderMessageContent::deserialize(
+            msg.serialized().expect("can re-serialize"),
+        )
+        .expect("compatible serialization");
+        sealed_sender_encrypt_from_usmc(&address(remote), &msg, &self.0, &mut thread_rng())
+            .now_or_never()
+            .expect("synchronous")
+            .expect("can encrypt messages")
+    }
+
+    fn encrypt_sealed_sender_v2(
+        &self,
+        remote: &str,
+        msg: &libsignal_protocol_current::UnidentifiedSenderMessageContent,
+    ) -> Vec<u8> {
+        let msg = UnidentifiedSenderMessageContent::deserialize(
+            msg.serialized().expect("can re-serialize"),
+        )
+        .expect("compatible serialization");
+        let session = self
+            .0
+            .load_session(&address(remote))
+            .now_or_never()
+            .expect("synchronous")
+            .expect("can fetch sessions")
+            .expect("session established");
+        sealed_sender_multi_recipient_encrypt(
+            &[&address(remote)],
+            &[&session],
+            [],
+            &msg,
+            &self.0,
+            &mut thread_rng(),
+        )
+        .now_or_never()
+        .expect("synchronous")
+        .expect("can encrypt messages")
+    }
+
+    fn decrypt_sealed_sender(
+        &self,
+        msg: &[u8],
+    ) -> libsignal_protocol_current::UnidentifiedSenderMessageContent {
+        let decrypted = sealed_sender_decrypt_to_usmc(msg, &self.0)
+            .now_or_never()
+            .expect("synchronous")
+            .expect("can decrypt messages");
+        libsignal_protocol_current::UnidentifiedSenderMessageContent::deserialize(
+            decrypted.serialized().expect("can re-serialize"),
+        )
+        .expect("compatible serialization")
     }
 }
 
@@ -264,7 +314,7 @@ macro_rules! impl_convert_version {
                 u32::from(current).into()
             }
             fn into_current(self) -> Self::Current {
-                u32::from(self).into()
+                u32::from(self).try_into().expect("valid range")
             }
         }
     };
@@ -288,6 +338,10 @@ impl_convert_version!(
 );
 impl_convert_version!(DeviceId, libsignal_protocol_current::DeviceId as u32);
 impl_convert_version!(PreKeyId, libsignal_protocol_current::PreKeyId as u32);
+impl_convert_version!(
+    SignedPreKeyId,
+    libsignal_protocol_current::SignedPreKeyId as u32
+);
 impl_convert_version!(
     KyberPreKeyId,
     libsignal_protocol_current::KyberPreKeyId as u32

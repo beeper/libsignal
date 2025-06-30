@@ -11,8 +11,8 @@ use attest::hsm_enclave::Error as HsmEnclaveError;
 use device_transfer::Error as DeviceTransferError;
 use libsignal_account_keys::Error as PinError;
 use libsignal_net::infra::errors::RetryLater;
-use libsignal_net::keytrans::Error;
-use libsignal_net::registration::{RegistrationLock, VerificationCodeNotDeliverable};
+use libsignal_net_chat::api::registration::{RegistrationLock, VerificationCodeNotDeliverable};
+use libsignal_net_chat::api::RateLimitChallenge;
 use libsignal_protocol::*;
 use signal_crypto::Error as SignalCryptoError;
 use usernames::{UsernameError, UsernameLinkError};
@@ -58,6 +58,7 @@ pub enum SignalErrorCode {
     InvalidRegistrationId = 81,
     InvalidSession = 82,
     InvalidSenderKeySession = 83,
+    InvalidProtocolAddress = 84,
 
     DuplicatedMessage = 90,
 
@@ -95,6 +96,7 @@ pub enum SignalErrorCode {
     ConnectionFailed = 148,
     ChatServiceInactive = 149,
     RequestTimedOut = 150,
+    RateLimitChallenge = 151,
 
     SvrDataMissing = 160,
     SvrRestoreFailed = 161,
@@ -108,7 +110,6 @@ pub enum SignalErrorCode {
     BackupValidation = 180,
 
     RegistrationInvalidSessionId = 190,
-    RegistrationRequestNotValid = 191,
     RegistrationUnknown = 192,
     RegistrationSessionNotFound = 193,
     RegistrationNotReadyForVerification = 194,
@@ -136,6 +137,11 @@ impl<T: std::any::Any> UpcastAsAny for T {
 /// Error returned when asking for an attribute of an error that doesn't support that attribute.
 pub struct WrongErrorKind;
 
+pub struct FingerprintVersions {
+    pub theirs: u32,
+    pub ours: u32,
+}
+
 pub trait FfiError: UpcastAsAny + fmt::Debug + Send + 'static {
     fn describe(&self) -> String;
     fn code(&self) -> SignalErrorCode;
@@ -144,6 +150,9 @@ pub trait FfiError: UpcastAsAny + fmt::Debug + Send + 'static {
         Err(WrongErrorKind)
     }
     fn provide_uuid(&self) -> Result<uuid::Uuid, WrongErrorKind> {
+        Err(WrongErrorKind)
+    }
+    fn provide_invalid_address(&self) -> Result<(&str, u32), WrongErrorKind> {
         Err(WrongErrorKind)
     }
     fn provide_retry_after_seconds(&self) -> Result<u32, WrongErrorKind> {
@@ -163,6 +172,12 @@ pub trait FfiError: UpcastAsAny + fmt::Debug + Send + 'static {
     fn provide_registration_lock(&self) -> Result<&RegistrationLock, WrongErrorKind> {
         Err(WrongErrorKind)
     }
+    fn provide_rate_limit_challenge(&self) -> Result<&RateLimitChallenge, WrongErrorKind> {
+        Err(WrongErrorKind)
+    }
+    fn provide_fingerprint_versions(&self) -> Result<FingerprintVersions, WrongErrorKind> {
+        Err(WrongErrorKind)
+    }
 }
 
 /// The top-level error type (opaquely) returned to C clients when something goes wrong.
@@ -177,6 +192,11 @@ pub struct SignalFfiError(Box<dyn FfiError + Send>);
 impl SignalFfiError {
     pub fn downcast_ref<T: FfiError>(&self) -> Option<&T> {
         (*self.0).upcast_as_any().downcast_ref()
+    }
+
+    #[cold]
+    pub fn into_raw_box_for_ffi(self) -> *mut Self {
+        Box::into_raw(Box::new(self))
     }
 }
 
@@ -266,6 +286,7 @@ impl FfiError for SignalProtocolError {
             Self::InvalidSessionStructure(_) => SignalErrorCode::InvalidSession,
             Self::InvalidSenderKeySession { .. } => SignalErrorCode::InvalidSenderKeySession,
             Self::InvalidRegistrationId(_, _) => SignalErrorCode::InvalidRegistrationId,
+            Self::InvalidProtocolAddress { .. } => SignalErrorCode::InvalidProtocolAddress,
             Self::DuplicatedMessage(_, _) => SignalErrorCode::DuplicatedMessage,
             Self::FfiBindingError(_) => SignalErrorCode::InternalError,
             Self::ApplicationCallbackError(_, _) => SignalErrorCode::CallbackError,
@@ -283,6 +304,22 @@ impl FfiError for SignalProtocolError {
     fn provide_uuid(&self) -> Result<uuid::Uuid, WrongErrorKind> {
         match self {
             Self::InvalidSenderKeySession { distribution_id } => Ok(*distribution_id),
+            _ => Err(WrongErrorKind),
+        }
+    }
+    fn provide_invalid_address(&self) -> Result<(&str, u32), WrongErrorKind> {
+        match self {
+            Self::InvalidProtocolAddress { name, device_id } => Ok((name, *device_id)),
+            _ => Err(WrongErrorKind),
+        }
+    }
+
+    fn provide_fingerprint_versions(&self) -> Result<FingerprintVersions, WrongErrorKind> {
+        match self {
+            Self::FingerprintVersionMismatch(theirs, ours) => Ok(FingerprintVersions {
+                theirs: *theirs,
+                ours: *ours,
+            }),
             _ => Err(WrongErrorKind),
         }
     }
@@ -589,48 +626,79 @@ impl FfiError for libsignal_net::chat::SendError {
     }
 }
 
-impl FfiError for libsignal_net::keytrans::Error {
+impl FfiError for libsignal_net_chat::api::DisconnectedError {
     fn describe(&self) -> String {
-        match self {
-            Error::ChatSendError(err) => err.describe(),
-            Error::RequestFailed(_)
-            | Error::InvalidResponse(_)
-            | Error::InvalidRequest(_)
-            | Error::NonFatalVerificationFailure(_)
-            | Error::FatalVerificationFailure(_) => self.to_string(),
-        }
+        self.to_string()
     }
 
     fn code(&self) -> SignalErrorCode {
         match self {
-            Error::ChatSendError(err) => err.code(),
-            Error::RequestFailed(_) => SignalErrorCode::NetworkProtocol,
-            Error::InvalidResponse(_)
-            | Error::InvalidRequest(_)
-            | Error::NonFatalVerificationFailure(_) => SignalErrorCode::KeyTransparencyError,
-            Error::FatalVerificationFailure(_) => {
-                SignalErrorCode::KeyTransparencyVerificationFailed
-            }
+            Self::ConnectedElsewhere => SignalErrorCode::ConnectedElsewhere,
+            Self::ConnectionInvalidated => SignalErrorCode::ConnectionInvalidated,
+            Self::Transport { .. } => SignalErrorCode::NetworkProtocol,
+            Self::Closed => SignalErrorCode::ChatServiceInactive,
         }
+    }
+}
+
+impl FfiError for crate::keytrans::BridgeError {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        use libsignal_net_chat::api::RequestError;
+        match &**self {
+            RequestError::Disconnected(inner) => inner.code(),
+            RequestError::Timeout => SignalErrorCode::RequestTimedOut,
+            RequestError::Other(libsignal_net_chat::api::keytrans::Error::VerificationFailed(
+                inner,
+            )) => match inner {
+                libsignal_keytrans::Error::VerificationFailed(_) => {
+                    SignalErrorCode::KeyTransparencyVerificationFailed
+                }
+                libsignal_keytrans::Error::RequiredFieldMissing(_)
+                | libsignal_keytrans::Error::BadData(_) => SignalErrorCode::KeyTransparencyError,
+            },
+            // TODO: Consider being more consistent with other APIs for RetryLater and
+            // ServerSideError. (Challenge shouldn't happen in practice.)
+            RequestError::RetryLater(_)
+            | RequestError::Challenge { .. }
+            | RequestError::ServerSideError
+            | RequestError::Unexpected { .. }
+            | RequestError::Other(_) => SignalErrorCode::KeyTransparencyError,
+        }
+    }
+}
+
+impl FfiError for RateLimitChallenge {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        SignalErrorCode::RateLimitChallenge
+    }
+    fn provide_rate_limit_challenge(&self) -> Result<&RateLimitChallenge, WrongErrorKind> {
+        Ok(self)
     }
 }
 
 mod registration {
     use libsignal_net::infra::errors::LogSafeDisplay;
-    use libsignal_net::registration::{
-        CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError, RegistrationLock,
-        RequestError, RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
-        UpdateSessionError, VerificationCodeNotDeliverable,
+    use libsignal_net_chat::api::registration::{
+        CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError,
+        RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
+        UpdateSessionError,
     };
+    use libsignal_net_chat::registration::RequestError;
 
     use super::*;
 
     #[derive(Debug, derive_more::From)]
-    pub enum RegistrationError<'a> {
+    enum RegistrationError<'a> {
         InvalidSessionId,
-        RequestNotValid,
-        RetryLater(&'a RetryLater),
-        Unknown,
+        Unexpected,
         SessionNotFound,
         NotReadyForVerification,
         SendVerificationCodeFailed,
@@ -646,9 +714,7 @@ mod registration {
         fn from(value: RegistrationError<'a>) -> Self {
             match value {
                 RegistrationError::InvalidSessionId => Self::RegistrationInvalidSessionId,
-                RegistrationError::RequestNotValid => Self::RegistrationRequestNotValid,
-                RegistrationError::Unknown => Self::RegistrationUnknown,
-                RegistrationError::RetryLater(retry_later) => retry_later.code(),
+                RegistrationError::Unexpected => Self::RegistrationUnknown,
                 RegistrationError::SessionNotFound => Self::RegistrationSessionNotFound,
                 RegistrationError::NotReadyForVerification => {
                     Self::RegistrationNotReadyForVerification
@@ -680,9 +746,13 @@ mod registration {
         fn code(&self) -> SignalErrorCode {
             let error_class = match self {
                 RequestError::Timeout => return SignalErrorCode::RequestTimedOut,
-                RequestError::RequestWasNotValid => RegistrationError::RequestNotValid,
-                RequestError::Unknown(_) => RegistrationError::Unknown,
+                RequestError::ServerSideError | RequestError::Unexpected { log_safe: _ } => {
+                    RegistrationError::Unexpected
+                }
                 RequestError::Other(err) => err.into(),
+                RequestError::RetryLater(retry_later) => return retry_later.code(),
+                RequestError::Challenge(challenge) => return challenge.code(),
+                RequestError::Disconnected(d) => match *d {},
             };
             error_class.into()
         }
@@ -692,13 +762,13 @@ mod registration {
         }
         fn provide_retry_after_seconds(&self) -> Result<u32, WrongErrorKind> {
             match self {
-                RequestError::Other(e) => match e.into() {
-                    RegistrationError::RetryLater(retry) => retry.provide_retry_after_seconds(),
-                    _ => Err(WrongErrorKind),
-                },
-                RequestError::Timeout
-                | RequestError::RequestWasNotValid
-                | RequestError::Unknown(_) => Err(WrongErrorKind),
+                RequestError::RetryLater(retry_later) => retry_later.provide_retry_after_seconds(),
+                RequestError::Other(_)
+                | RequestError::Timeout
+                | RequestError::Challenge(_)
+                | RequestError::ServerSideError
+                | RequestError::Unexpected { .. } => Err(WrongErrorKind),
+                RequestError::Disconnected(d) => match *d {},
             }
         }
         fn provide_registration_code_not_deliverable(
@@ -710,8 +780,11 @@ mod registration {
                     _ => Err(WrongErrorKind),
                 },
                 RequestError::Timeout
-                | RequestError::RequestWasNotValid
-                | RequestError::Unknown(_) => Err(WrongErrorKind),
+                | RequestError::RetryLater(_)
+                | RequestError::Challenge(_)
+                | RequestError::ServerSideError
+                | RequestError::Unexpected { .. } => Err(WrongErrorKind),
+                RequestError::Disconnected(d) => match *d {},
             }
         }
         fn provide_registration_lock(&self) -> Result<&RegistrationLock, WrongErrorKind> {
@@ -721,8 +794,22 @@ mod registration {
                     _ => Err(WrongErrorKind),
                 },
                 RequestError::Timeout
-                | RequestError::RequestWasNotValid
-                | RequestError::Unknown(_) => Err(WrongErrorKind),
+                | RequestError::RetryLater(_)
+                | RequestError::Challenge(_)
+                | RequestError::ServerSideError
+                | RequestError::Unexpected { .. } => Err(WrongErrorKind),
+                RequestError::Disconnected(d) => match *d {},
+            }
+        }
+        fn provide_rate_limit_challenge(&self) -> Result<&RateLimitChallenge, WrongErrorKind> {
+            match self {
+                RequestError::Challenge(challenge) => Ok(challenge),
+                RequestError::Other(_)
+                | RequestError::Timeout
+                | RequestError::RetryLater(_)
+                | RequestError::ServerSideError
+                | RequestError::Unexpected { .. } => Err(WrongErrorKind),
+                RequestError::Disconnected(d) => match *d {},
             }
         }
     }
@@ -731,7 +818,6 @@ mod registration {
         fn from(value: &'a CreateSessionError) -> Self {
             match value {
                 CreateSessionError::InvalidSessionId => Self::InvalidSessionId,
-                CreateSessionError::RetryLater(retry) => retry.into(),
             }
         }
     }
@@ -757,7 +843,6 @@ mod registration {
                 RequestVerificationCodeError::CodeNotDeliverable(not_deliverable) => {
                     Self::CodeNotDeliverable(not_deliverable)
                 }
-                RequestVerificationCodeError::RetryLater(retry) => retry.into(),
             }
         }
     }
@@ -766,7 +851,6 @@ mod registration {
         fn from(value: &'a UpdateSessionError) -> Self {
             match value {
                 UpdateSessionError::Rejected => Self::SessionUpdateRejected,
-                UpdateSessionError::RetryLater(retry) => retry.into(),
             }
         }
     }
@@ -777,7 +861,6 @@ mod registration {
                 SubmitVerificationError::InvalidSessionId => Self::InvalidSessionId,
                 SubmitVerificationError::SessionNotFound => Self::SessionNotFound,
                 SubmitVerificationError::NotReadyForVerification => Self::NotReadyForVerification,
-                SubmitVerificationError::RetryLater(retry) => retry.into(),
             }
         }
     }
@@ -798,7 +881,6 @@ mod registration {
                 RegisterAccountError::DeviceTransferIsPossibleButNotSkipped => {
                     Self::DeviceTransferPossible
                 }
-                RegisterAccountError::RetryLater(retry_later) => Self::RetryLater(retry_later),
                 RegisterAccountError::RegistrationRecoveryVerificationFailed => {
                     Self::RegistrationRecoveryVerificationFailed
                 }

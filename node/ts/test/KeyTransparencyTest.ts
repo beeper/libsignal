@@ -11,7 +11,6 @@ import { UnauthenticatedChatConnection, Environment, Net } from '../net';
 import { Aci } from '../Address';
 import { PublicKey } from '../EcKeys';
 import {
-  ChatServiceInactive,
   ErrorCode,
   KeyTransparencyError,
   KeyTransparencyVerificationFailed,
@@ -78,7 +77,7 @@ describe('KeyTransparency bridging', () => {
     expect(() => Native.TESTING_KeyTransChatSendError())
       .to.throw(LibSignalErrorBase)
       .that.satisfies(
-        (err: ChatServiceInactive) => err.code === ErrorCode.ChatServiceInactive
+        (err: LibSignalErrorBase) => err.code === ErrorCode.IoError
       );
   });
 });
@@ -128,32 +127,32 @@ describe('KeyTransparency Integration', function (this: Mocha.Suite) {
 });
 
 class InMemoryKtStore implements KT.Store {
-  storage: Map<Readonly<Aci>, Array<Readonly<Buffer>>>;
-  distinguished: Readonly<Buffer> | null;
+  storage: Map<Readonly<Aci>, Array<Readonly<Uint8Array>>>;
+  distinguished: Readonly<Uint8Array> | null;
 
   constructor() {
-    this.storage = new Map<Aci, Array<Readonly<Buffer>>>();
+    this.storage = new Map<Aci, Array<Readonly<Uint8Array>>>();
     this.distinguished = null;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async getLastDistinguishedTreeHead(): Promise<Buffer | null> {
+  async getLastDistinguishedTreeHead(): Promise<Uint8Array | null> {
     return this.distinguished;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async setLastDistinguishedTreeHead(bytes: Readonly<Buffer> | null) {
+  async setLastDistinguishedTreeHead(bytes: Readonly<Uint8Array> | null) {
     this.distinguished = bytes;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async getAccountData(aci: Aci): Promise<Buffer | null> {
+  async getAccountData(aci: Aci): Promise<Uint8Array | null> {
     const allVersions = this.storage.get(aci) ?? [];
     return allVersions.at(-1) ?? null;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async setAccountData(aci: Aci, bytes: Readonly<Buffer>) {
+  async setAccountData(aci: Aci, bytes: Readonly<Uint8Array>) {
     const allVersions = this.storage.get(aci) ?? [];
     allVersions.push(bytes);
     this.storage.set(aci, allVersions);

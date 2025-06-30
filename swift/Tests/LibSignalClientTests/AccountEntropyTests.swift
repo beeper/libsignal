@@ -17,7 +17,10 @@ class AccountEntropyTests: TestCaseBase {
         for _ in 0..<numTestIterations {
             let pool = AccountEntropyPool.generate()
 
-            XCTAssertTrue(generatedEntropyPools.insert(pool).inserted, "Generated pool should be unique, got repeat: \(pool)")
+            XCTAssertTrue(
+                generatedEntropyPools.insert(pool).inserted,
+                "Generated pool should be unique, got repeat: \(pool)"
+            )
             XCTAssertEqual(pool.count, 64, "Pool \(pool) is not the right length")
             for c in pool {
                 XCTAssertTrue(validCharacters.contains(c), "Generated pool \(pool) contains invalid character \(c)")
@@ -61,7 +64,7 @@ class AccountEntropyTests: TestCaseBase {
         let mediaKey = try! backupKey.deriveMediaEncryptionKey(mediaId)
         XCTAssertEqual(32 + 32, mediaKey.count)
 
-        XCTAssertThrowsError(try backupKey.deriveMediaEncryptionKey([0])) { error in
+        XCTAssertThrowsError(try backupKey.deriveMediaEncryptionKey(Data([0]))) { error in
             switch error {
             case SignalError.invalidType(_): break
             default: XCTFail("unexpected error: \(error)")

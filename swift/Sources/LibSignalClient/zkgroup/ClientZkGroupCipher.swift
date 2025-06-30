@@ -50,33 +50,44 @@ public class ClientZkGroupCipher {
             try profileKeyCiphertext.withUnsafePointerToSerialized { profileKeyCiphertext in
                 try userId.withPointerToFixedWidthBinary { userId in
                     try invokeFnReturningSerialized {
-                        signal_group_secret_params_decrypt_profile_key($0, groupSecretParams, profileKeyCiphertext, userId)
+                        signal_group_secret_params_decrypt_profile_key(
+                            $0,
+                            groupSecretParams,
+                            profileKeyCiphertext,
+                            userId
+                        )
                     }
                 }
             }
         }
     }
 
-    public func encryptBlob(plaintext: [UInt8]) throws -> [UInt8] {
+    public func encryptBlob(plaintext: Data) throws -> Data {
         return try self.encryptBlob(randomness: Randomness.generate(), plaintext: plaintext)
     }
 
-    public func encryptBlob(randomness: Randomness, plaintext: [UInt8]) throws -> [UInt8] {
+    public func encryptBlob(randomness: Randomness, plaintext: Data) throws -> Data {
         return try self.groupSecretParams.withUnsafePointerToSerialized { groupSecretParams in
             try randomness.withUnsafePointerToBytes { randomness in
                 try plaintext.withUnsafeBorrowedBuffer { plaintext in
-                    try invokeFnReturningArray {
-                        signal_group_secret_params_encrypt_blob_with_padding_deterministic($0, groupSecretParams, randomness, plaintext, 0)
+                    try invokeFnReturningData {
+                        signal_group_secret_params_encrypt_blob_with_padding_deterministic(
+                            $0,
+                            groupSecretParams,
+                            randomness,
+                            plaintext,
+                            0
+                        )
                     }
                 }
             }
         }
     }
 
-    public func decryptBlob(blobCiphertext: [UInt8]) throws -> [UInt8] {
+    public func decryptBlob(blobCiphertext: Data) throws -> Data {
         return try self.groupSecretParams.withUnsafePointerToSerialized { groupSecretParams in
             try blobCiphertext.withUnsafeBorrowedBuffer { blobCiphertext in
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_group_secret_params_decrypt_blob_with_padding($0, groupSecretParams, blobCiphertext)
                 }
             }

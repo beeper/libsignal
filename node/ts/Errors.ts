@@ -13,6 +13,7 @@ export enum ErrorCode {
   SealedSenderSelfSend,
   UntrustedIdentity,
   InvalidRegistrationId,
+  InvalidProtocolAddress,
   VerificationFailed,
   InvalidSession,
   InvalidSenderKeySession,
@@ -42,6 +43,7 @@ export enum ErrorCode {
   InvalidUsernameLinkEncryptedData,
 
   RateLimitedError,
+  RateLimitChallengeError,
 
   SvrDataMissing,
   SvrRequestFailed,
@@ -154,6 +156,12 @@ export type InvalidRegistrationIdError = LibSignalErrorCommon & {
   addr: ProtocolAddress;
 };
 
+export type InvalidProtocolAddress = LibSignalErrorCommon & {
+  code: ErrorCode.InvalidProtocolAddress;
+  name: string;
+  deviceId: number;
+};
+
 export type VerificationFailedError = LibSignalErrorCommon & {
   code: ErrorCode.VerificationFailed;
 };
@@ -245,6 +253,12 @@ export type RateLimitedError = LibSignalErrorBase & {
   readonly retryAfterSecs: number;
 };
 
+export type RateLimitChallengeError = LibSignalErrorBase & {
+  code: ErrorCode.RateLimitChallengeError;
+  readonly token: string;
+  readonly options: Set<'pushChallenge' | 'captcha'>;
+};
+
 export type ChatServiceInactive = LibSignalErrorBase & {
   code: ErrorCode.ChatServiceInactive;
 };
@@ -301,6 +315,7 @@ export type LibSignalError =
   | SealedSenderSelfSendError
   | UntrustedIdentityError
   | InvalidRegistrationIdError
+  | InvalidProtocolAddress
   | VerificationFailedError
   | InvalidSessionError
   | InvalidSenderKeySessionError
@@ -333,6 +348,7 @@ export type LibSignalError =
   | ConnectionInvalidatedError
   | ConnectedElsewhereError
   | RateLimitedError
+  | RateLimitChallengeError
   | BackupValidationError
   | CancellationError
   | KeyTransparencyError

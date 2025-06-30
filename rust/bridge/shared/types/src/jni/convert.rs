@@ -1259,7 +1259,7 @@ impl<'a> SimpleArgTypeInfo<'a> for bool {
     }
 }
 
-impl<'a> SimpleArgTypeInfo<'a> for libsignal_net::registration::CreateSession {
+impl<'a> SimpleArgTypeInfo<'a> for libsignal_net_chat::api::registration::CreateSession {
     type ArgType = JObject<'a>;
 
     fn convert_from(
@@ -1319,7 +1319,7 @@ impl<'a> SimpleArgTypeInfo<'a> for libsignal_net::registration::CreateSession {
     }
 }
 
-impl<'a> SimpleArgTypeInfo<'a> for libsignal_net::registration::PushTokenType {
+impl<'a> SimpleArgTypeInfo<'a> for libsignal_net_chat::api::registration::PushTokenType {
     type ArgType = JObject<'a>;
     fn convert_from(
         _env: &mut JNIEnv<'a>,
@@ -1537,45 +1537,49 @@ impl<'a> ResultTypeInfo<'a> for libsignal_net::chat::Response {
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::RequestedInformation {
+impl<'a> ResultTypeInfo<'a> for libsignal_net_chat::api::ChallengeOption {
     type ResultType = JObject<'a>;
 
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
         try_scoped(|| {
-            let class = find_class(
-                env,
-                ClassName("org.signal.libsignal.net.RegistrationSessionState$RequestedInformation"),
-            )?;
+            let class = find_class(env, ClassName("org.signal.libsignal.net.ChallengeOption"))?;
 
             let field_name = match self {
-                libsignal_net::registration::RequestedInformation::PushChallenge => {
-                    "PUSH_CHALLENGE"
-                }
-                libsignal_net::registration::RequestedInformation::Captcha => "CAPTCHA",
+                Self::PushChallenge => "PUSH_CHALLENGE",
+                Self::Captcha => "CAPTCHA",
             };
             env.get_static_field(
                 class,
                 field_name,
-                jni_signature!(org.signal.libsignal.net.RegistrationSessionState::RequestedInformation),
-            )?.l()
+                jni_signature!(org.signal.libsignal.net.ChallengeOption),
+            )?
+            .l()
         })
-        .check_exceptions(env, "RequestedInformation::convert_into")
+        .check_exceptions(env, "ChallengeOption::convert_into")
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RequestedInformation]> {
+impl<'a> ResultTypeInfo<'a> for &'_ [libsignal_net_chat::api::ChallengeOption] {
     type ResultType = JObjectArray<'a>;
 
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
         make_object_array(
             env,
-            jni_class_name!(org.signal.libsignal.net.RegistrationSessionState::RequestedInformation),
-            self,
+            jni_class_name!(org.signal.libsignal.net.ChallengeOption),
+            self.iter().copied(),
         )
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::RegisterResponseBadge {
+impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net_chat::api::ChallengeOption]> {
+    type ResultType = JObjectArray<'a>;
+
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        (&*self).convert_into(env)
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for libsignal_net_chat::api::registration::RegisterResponseBadge {
     type ResultType = JObject<'a>;
 
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
@@ -1608,7 +1612,9 @@ impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::RegisterResponseBad
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RegisterResponseBadge]> {
+impl<'a> ResultTypeInfo<'a>
+    for Box<[libsignal_net_chat::api::registration::RegisterResponseBadge]>
+{
     type ResultType = JObjectArray<'a>;
 
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
@@ -1620,7 +1626,9 @@ impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RegisterRespon
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::CheckSvr2CredentialsResponse {
+impl<'a> ResultTypeInfo<'a>
+    for libsignal_net_chat::api::registration::CheckSvr2CredentialsResponse
+{
     type ResultType = JObject<'a>;
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
         const RESULT_CLASS_NAME: &str =
@@ -1638,9 +1646,9 @@ impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::CheckSvr2Credential
         for (k, v) in matches {
             let k = k.convert_into(env)?;
             let name = match v {
-                libsignal_net::registration::Svr2CredentialsResult::Match => "MATCH",
-                libsignal_net::registration::Svr2CredentialsResult::NoMatch => "NO_MATCH",
-                libsignal_net::registration::Svr2CredentialsResult::Invalid => "INVALID",
+                libsignal_net_chat::api::registration::Svr2CredentialsResult::Match => "MATCH",
+                libsignal_net_chat::api::registration::Svr2CredentialsResult::NoMatch => "NO_MATCH",
+                libsignal_net_chat::api::registration::Svr2CredentialsResult::Invalid => "INVALID",
             };
             let v = env.get_static_field(&response_class, name, jni_signature!(org.signal.libsignal.net.RegistrationService::Svr2CredentialsResult))
             .and_then(|v| v.l())
@@ -2062,7 +2070,7 @@ macro_rules! jni_result_type {
     (CiphertextMessage) => {
         jni::JavaCiphertextMessage<'local>
     };
-    (Box<[RegistrationSessionRequestedInformation] >) => {
+    (Box<[ChallengeOption] >) => {
         ::jni::objects::JObjectArray<'local>
     };
     (Box<[RegisterResponseBadge] >) => {

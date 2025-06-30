@@ -13,7 +13,7 @@ import SignalFfi
 /// ``GroupSendEndorsement`` for a full description of the endorsement flow from the client's
 /// perspective.
 public class GroupSendEndorsementsResponse: ByteArray, @unchecked Sendable {
-    public required init(contents: [UInt8]) throws {
+    public required init(contents: Data) throws {
         try super.init(contents, checkValid: signal_group_send_endorsements_response_check_valid_contents)
     }
 
@@ -45,7 +45,12 @@ public class GroupSendEndorsementsResponse: ByteArray, @unchecked Sendable {
                 try keyPair.withUnsafeBorrowedBuffer { keyPair in
                     try randomness.withUnsafePointerToBytes { randomness in
                         try invokeFnReturningVariableLengthSerialized {
-                            signal_group_send_endorsements_response_issue_deterministic($0, concatenated, keyPair, randomness)
+                            signal_group_send_endorsements_response_issue_deterministic(
+                                $0,
+                                concatenated,
+                                keyPair,
+                                randomness
+                            )
                         }
                     }
                 }
@@ -99,7 +104,15 @@ public class GroupSendEndorsementsResponse: ByteArray, @unchecked Sendable {
                     try groupParams.withUnsafePointerToSerialized { groupParams in
                         try serverParams.withNativeHandle { serverParams in
                             try invokeFnReturningBytestringArray {
-                                signal_group_send_endorsements_response_receive_and_combine_with_service_ids($0, response, groupMembers, localUser, UInt64(now.timeIntervalSince1970), groupParams, serverParams.const())
+                                signal_group_send_endorsements_response_receive_and_combine_with_service_ids(
+                                    $0,
+                                    response,
+                                    groupMembers,
+                                    localUser,
+                                    UInt64(now.timeIntervalSince1970),
+                                    groupParams,
+                                    serverParams.const()
+                                )
                             }
                         }
                     }
@@ -137,7 +150,14 @@ public class GroupSendEndorsementsResponse: ByteArray, @unchecked Sendable {
                 try localUser.withUnsafeBorrowedBuffer { localUser in
                     try serverParams.withNativeHandle { serverParams in
                         try invokeFnReturningBytestringArray {
-                            signal_group_send_endorsements_response_receive_and_combine_with_ciphertexts($0, response, groupMembers, localUser, UInt64(now.timeIntervalSince1970), serverParams.const())
+                            signal_group_send_endorsements_response_receive_and_combine_with_ciphertexts(
+                                $0,
+                                response,
+                                groupMembers,
+                                localUser,
+                                UInt64(now.timeIntervalSince1970),
+                                serverParams.const()
+                            )
                         }
                     }
                 }

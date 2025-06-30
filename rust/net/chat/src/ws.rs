@@ -6,16 +6,26 @@
 //! The `ws` module and its submodules implement a chat server based on REST-like requests over a
 //! websocket, as implemented in [`libsignal_net::chat`].
 
+mod keytrans;
 mod profiles;
+// TODO make this not pub(crate)
+pub(crate) mod registration;
 mod usernames;
+
+use std::future::Future;
+use std::time::Duration;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
+use http::StatusCode;
 use libsignal_net::chat;
 use libsignal_net::infra::errors::LogSafeDisplay;
 use libsignal_net::infra::{extract_retry_later, AsHttpHeader};
+use serde_with::serde_as;
 
-use crate::api::{RequestError, UserBasedAuthorization};
+use crate::api::{
+    ChallengeOption, DisconnectedError, RateLimitChallenge, RequestError, UserBasedAuthorization,
+};
 
 const ACCESS_KEY_HEADER_NAME: http::HeaderName =
     http::HeaderName::from_static("unidentified-access-key");
@@ -40,20 +50,74 @@ impl AsHttpHeader for UserBasedAuthorization {
     }
 }
 
+/// An abstraction over [`chat::ChatConnection`].
+pub trait WsConnection: Sync {
+    fn send(
+        &self,
+        log_tag: &'static str,
+        log_safe_path: &str,
+        request: chat::Request,
+    ) -> impl Future<Output = Result<chat::Response, chat::SendError>> + Send;
+}
+
+impl WsConnection for chat::ChatConnection {
+    async fn send(
+        &self,
+        log_tag: &'static str,
+        log_safe_path: &str,
+        request: chat::Request,
+    ) -> Result<chat::Response, chat::SendError> {
+        let request_id = rand::random::<u16>();
+        let method = request.method.clone();
+        log::info!("[{log_tag} {request_id:04x}] {method} {log_safe_path}");
+
+        // TODO: Figure out timeouts for libsignal-net-chat APIs.
+        let result = self.send(request, Duration::MAX).await;
+
+        match &result {
+            Ok(response) => {
+                if response.status.is_success() {
+                    log::info!(
+                        "[{log_tag} {request_id:04x}] {method} {log_safe_path} {}",
+                        response.status
+                    )
+                } else {
+                    log::warn!(
+                        "[{log_tag} {request_id:04x}] {method} {log_safe_path} {}",
+                        response.status
+                    );
+                    log::debug!(
+                        "[{log_tag} {request_id:04x}] {} {}: {:?}",
+                        response.status,
+                        response.message.as_deref().unwrap_or_default(),
+                        DebugAsStrOrBytes(response.body.as_deref().unwrap_or_default())
+                    );
+                }
+            }
+            Err(e) => log::error!(
+                "[{log_tag} {request_id:04x}] {method} {log_safe_path} - {}",
+                e as &dyn LogSafeDisplay
+            ),
+        }
+
+        result
+    }
+}
+
 impl<E> From<chat::SendError> for RequestError<E> {
     fn from(value: chat::SendError) -> Self {
         match value {
-            chat::SendError::RequestTimedOut | chat::SendError::Disconnected => {
-                RequestError::Timeout
-            }
-            chat::SendError::ConnectedElsewhere => RequestError::ConnectedElsewhere,
-            chat::SendError::ConnectionInvalidated => RequestError::ConnectionInvalidated,
+            chat::SendError::RequestTimedOut => return RequestError::Timeout,
+            chat::SendError::Disconnected => DisconnectedError::Closed,
+            chat::SendError::ConnectedElsewhere => DisconnectedError::ConnectedElsewhere,
+            chat::SendError::ConnectionInvalidated => DisconnectedError::ConnectionInvalidated,
             e @ (chat::SendError::WebSocket(_)
             | chat::SendError::IncomingDataInvalid
-            | chat::SendError::RequestHasInvalidHeader) => RequestError::Transport {
+            | chat::SendError::RequestHasInvalidHeader) => DisconnectedError::Transport {
                 log_safe: (&e as &dyn LogSafeDisplay).to_string(),
             },
         }
+        .into()
     }
 }
 
@@ -63,7 +127,7 @@ pub(super) enum ResponseError {
     /// unexpected response status {status}
     UnrecognizedStatus {
         /// Pulled out for easier matching and displaying.
-        status: http::StatusCode,
+        status: StatusCode,
         response: chat::Response,
     },
     /// unexpected content-type {0:?}
@@ -83,11 +147,10 @@ impl ResponseError {
     ///
     /// If `map_unrecognized` returns `None`, some basic checks will be done for request-independent
     /// response codes (like 429 Too Many Requests).
-    fn into_request_error<E>(
+    pub(crate) fn into_request_error<E, D>(
         self,
-        operation: &'static str,
         map_unrecognized: impl FnOnce(&chat::Response) -> Option<E>,
-    ) -> RequestError<E> {
+    ) -> RequestError<E, D> {
         match self {
             e @ (ResponseError::UnexpectedContentType(_)
             | ResponseError::MissingBody
@@ -95,58 +158,53 @@ impl ResponseError {
             | ResponseError::UnexpectedData) => RequestError::Unexpected {
                 log_safe: e.to_string(),
             },
-            ResponseError::UnrecognizedStatus { status, response } => {
-                log::warn!("{operation}: {status} response");
-                match map_unrecognized(&response) {
-                    Some(specific_error) => RequestError::Other(specific_error),
-                    None => {
-                        let chat::Response {
-                            status,
-                            message,
-                            body,
-                            headers,
-                        } = &response;
+            ResponseError::UnrecognizedStatus {
+                status: _,
+                response,
+            } => match map_unrecognized(&response) {
+                Some(specific_error) => RequestError::Other(specific_error),
+                None => {
+                    let chat::Response {
+                        status,
+                        message: _,
+                        headers,
+                        body: _,
+                    } = &response;
 
-                        log::debug!(
-                            "{operation}: got unsuccessful response with {status} {}: {:?}",
-                            message.as_deref().unwrap_or_default(),
-                            DebugAsStrOrBytes(body.as_deref().unwrap_or_default())
-                        );
-
-                        if status.is_server_error() {
-                            return RequestError::ServerSideError;
-                        }
-                        if status.as_u16() == 429 {
-                            if let Some(retry_later) = extract_retry_later(headers) {
-                                return RequestError::RetryLater(retry_later);
-                            }
-                        }
-                        if status.as_u16() == 428 {
-                            #[derive(serde::Deserialize)]
-                            struct ChallengeBody {
-                                token: String,
-                                // TODO: Move this type into libsignal-net-chat.
-                                options: Vec<libsignal_net::registration::RequestedInformation>,
-                            }
-
-                            if let Ok(ChallengeBody { token, options }) =
-                                parse_json_from_body(&response)
-                            {
-                                return RequestError::Challenge { token, options };
-                            }
-                        }
-                        if status.as_u16() == 422 {
-                            return RequestError::Unexpected {
-                                log_safe: "the request did not pass server validation".into(),
-                            };
-                        }
-
-                        RequestError::Unexpected {
-                            log_safe: format!("unexpected response status {status}"),
+                    if status.is_server_error() {
+                        return RequestError::ServerSideError;
+                    }
+                    if status.as_u16() == 429 {
+                        if let Some(retry_later) = extract_retry_later(headers) {
+                            return RequestError::RetryLater(retry_later);
                         }
                     }
+                    if status.as_u16() == 428 {
+                        #[serde_as]
+                        #[derive(serde::Deserialize)]
+                        struct ChallengeBody {
+                            token: String,
+                            #[serde_as(as = "Vec<serde_with::DisplayFromStr>")]
+                            options: Vec<ChallengeOption>,
+                        }
+
+                        if let Ok(ChallengeBody { token, options }) =
+                            parse_json_from_body(&response)
+                        {
+                            return RequestError::Challenge(RateLimitChallenge { token, options });
+                        }
+                    }
+                    if status.as_u16() == 422 {
+                        return RequestError::Unexpected {
+                            log_safe: "the request did not pass server validation".into(),
+                        };
+                    }
+
+                    RequestError::Unexpected {
+                        log_safe: format!("unexpected response status {status}"),
+                    }
                 }
-            }
+            },
         }
     }
 }
@@ -156,7 +214,7 @@ impl ResponseError {
 /// Defined this way (instead of with `Self` as the typed response) so that `try_into_response`
 /// becomes available on `chat::Response` with a useful Jump to Definition (as opposed to the usual
 /// From/Into idiom).
-trait TryIntoResponse<R>: Sized {
+pub(super) trait TryIntoResponse<R>: Sized {
     #[allow(clippy::result_large_err)] // ResponseError itself contains a chat::Response.
     fn try_into_response(self) -> Result<R, ResponseError>;
 }
@@ -189,7 +247,10 @@ impl TryIntoResponse<Empty> for chat::Response {
     }
 }
 
-const JSON_CONTENT_TYPE: http::HeaderValue = http::HeaderValue::from_static("application/json");
+const CONTENT_TYPE_JSON: (http::HeaderName, http::HeaderValue) = (
+    http::header::CONTENT_TYPE,
+    http::HeaderValue::from_static("application/json"),
+);
 
 impl<R> TryIntoResponse<R> for chat::Response
 where
@@ -227,7 +288,7 @@ where
     } = response;
 
     let content_type = headers.get(http::header::CONTENT_TYPE);
-    if content_type != Some(&JSON_CONTENT_TYPE) {
+    if content_type != Some(&CONTENT_TYPE_JSON.1) {
         return Err(ResponseError::UnexpectedContentType(content_type.cloned()));
     }
 
@@ -251,24 +312,19 @@ impl std::fmt::Debug for DebugAsStrOrBytes<'_> {
 }
 
 #[cfg(test)]
-mod test {
-    use libsignal_net::infra::errors::RetryLater;
-    use libsignal_net::infra::AsStaticHttpHeader as _;
-    use libsignal_net::registration::RequestedInformation;
-    use test_case::test_case;
-
+mod testutil {
     use super::*;
 
-    fn json(status: u16, body: &str) -> chat::Response {
+    pub(crate) fn json(status: u16, body: impl AsRef<[u8]>) -> chat::Response {
         chat::Response {
             status: http::StatusCode::from_u16(status).expect("valid"),
             message: None,
-            headers: http::HeaderMap::from_iter([(http::header::CONTENT_TYPE, JSON_CONTENT_TYPE)]),
-            body: Some(bytes::Bytes::copy_from_slice(body.as_bytes())),
+            headers: http::HeaderMap::from_iter([CONTENT_TYPE_JSON]),
+            body: Some(bytes::Bytes::copy_from_slice(body.as_ref())),
         }
     }
 
-    fn empty(status: u16) -> chat::Response {
+    pub(crate) fn empty(status: u16) -> chat::Response {
         chat::Response {
             status: http::StatusCode::from_u16(status).expect("valid"),
             message: None,
@@ -277,7 +333,10 @@ mod test {
         }
     }
 
-    fn headers(status: u16, headers: &[(http::HeaderName, &'static str)]) -> chat::Response {
+    pub(crate) fn headers(
+        status: u16,
+        headers: &[(http::HeaderName, &'static str)],
+    ) -> chat::Response {
         chat::Response {
             status: http::StatusCode::from_u16(status).expect("valid"),
             message: None,
@@ -288,6 +347,47 @@ mod test {
             body: None,
         }
     }
+
+    pub(crate) struct RequestValidator {
+        pub expected: chat::Request,
+        pub response: chat::Response,
+    }
+
+    impl WsConnection for RequestValidator {
+        fn send(
+            &self,
+            _log_tag: &'static str,
+            _log_safe_path: &str,
+            request: chat::Request,
+        ) -> impl Future<Output = Result<chat::Response, chat::SendError>> + Send {
+            assert_eq!(self.expected, request);
+            std::future::ready(Ok(self.response.clone()))
+        }
+    }
+
+    pub(crate) struct ProduceResponse(pub chat::Response);
+
+    impl WsConnection for ProduceResponse {
+        fn send(
+            &self,
+            _log_tag: &'static str,
+            _log_safe_path: &str,
+            _request: chat::Request,
+        ) -> impl Future<Output = Result<chat::Response, chat::SendError>> + Send {
+            std::future::ready(Ok(self.0.clone()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use libsignal_net::infra::errors::RetryLater;
+    use libsignal_net::infra::AsStaticHttpHeader as _;
+    use test_case::test_case;
+
+    use super::testutil::*;
+    use super::*;
+    use crate::api::ChallengeOption;
 
     #[test_case(empty(200) => matches Ok(Empty))]
     #[test_case(empty(204) => matches Ok(Empty))]
@@ -302,7 +402,7 @@ mod test {
     #[test_case(json(428, "{}") => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("428"))]
     #[test_case(json(
         428, r#"{"token": "zzz", "options": ["captcha"]}"#
-    ) => matches Err(RequestError::Challenge { token, options }) if token == "zzz" && options == vec![RequestedInformation::Captcha])]
+    ) => matches Err(RequestError::Challenge(RateLimitChallenge { token, options })) if token == "zzz" && options == vec![ChallengeOption::Captcha])]
     #[test_case(empty(422) => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("server validation"))]
     #[test_case(empty(419) => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("419"))]
     fn try_parse_empty(
@@ -310,7 +410,7 @@ mod test {
     ) -> Result<Empty, RequestError<std::convert::Infallible>> {
         input
             .try_into_response()
-            .map_err(|e| e.into_request_error("test", |_| None))
+            .map_err(|e| e.into_request_error(|_| None))
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -335,6 +435,6 @@ mod test {
     ) -> Result<Example, RequestError<std::convert::Infallible>> {
         input
             .try_into_response()
-            .map_err(|e| e.into_request_error("test", |_| None))
+            .map_err(|e| e.into_request_error(|_| None))
     }
 }

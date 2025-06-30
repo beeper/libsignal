@@ -8,13 +8,19 @@ use std::pin::Pin;
 use std::task::{ready, Poll};
 
 use bytes::Bytes;
+use futures_util::stream::FusedStream;
 use futures_util::{Sink, SinkExt as _, Stream, StreamExt as _};
+use static_assertions::assert_impl_all;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::WebSocketStream;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 
+use crate::noise::{FrameType, Transport};
+
 pub struct WebSocketTransport<S>(pub WebSocketStream<S>);
+
+assert_impl_all!(WebSocketTransport<tokio::io::DuplexStream>: Transport);
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 enum TransportError {
@@ -24,7 +30,7 @@ enum TransportError {
     UnexpectedTextFrame { bytes: usize },
 }
 
-impl<S: AsyncRead + AsyncWrite + Unpin> Sink<Bytes> for WebSocketTransport<S> {
+impl<S: AsyncRead + AsyncWrite + Unpin> Sink<(FrameType, Bytes)> for WebSocketTransport<S> {
     type Error = IoError;
 
     fn poll_ready(
@@ -34,7 +40,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Sink<Bytes> for WebSocketTransport<S> {
         self.0.poll_ready_unpin(cx).map_err(into_io_error)
     }
 
-    fn start_send(mut self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
+    fn start_send(
+        mut self: Pin<&mut Self>,
+        (_frame_type, item): (FrameType, Bytes),
+    ) -> Result<(), Self::Error> {
         self.0
             .start_send_unpin(Message::Binary(item))
             .map_err(into_io_error)
@@ -86,6 +95,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Stream for WebSocketTransport<S> {
             }
             .map(|r| r.map_err(Into::into)),
         )
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> FusedStream for WebSocketTransport<S> {
+    fn is_terminated(&self) -> bool {
+        FusedStream::is_terminated(&self.0)
     }
 }
 

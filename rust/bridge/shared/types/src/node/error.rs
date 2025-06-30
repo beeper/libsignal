@@ -5,7 +5,6 @@
 
 use std::fmt;
 
-use libsignal_net::keytrans::Error;
 #[cfg(feature = "signal-media")]
 use signal_media::sanitize::mp4::{Error as Mp4Error, ParseError as Mp4ParseError};
 #[cfg(feature = "signal-media")]
@@ -204,6 +203,24 @@ impl SignalNodeError for SignalProtocolError {
                     cx,
                     module,
                     Some("InvalidRegistrationId"),
+                    &message,
+                    operation_name,
+                    make_extra_props,
+                )
+            }
+            SignalProtocolError::InvalidProtocolAddress { name, device_id } => {
+                let make_extra_props = |cx: &mut C| {
+                    let props = cx.empty_object();
+                    let name = cx.string(name);
+                    props.set(cx, "name", name)?;
+                    let device_id = cx.number(device_id);
+                    props.set(cx, "deviceId", device_id)?;
+                    Ok(props.upcast())
+                };
+                new_js_error(
+                    cx,
+                    module,
+                    Some("InvalidProtocolAddress"),
                     &message,
                     operation_name,
                     make_extra_props,
@@ -500,6 +517,36 @@ impl SignalNodeError for libsignal_net::infra::errors::RetryLater {
     }
 }
 
+impl SignalNodeError for libsignal_net_chat::api::RateLimitChallenge {
+    fn into_throwable<'a, C: Context<'a>>(
+        self,
+        cx: &mut C,
+        module: Handle<'a, JsObject>,
+        operation_name: &str,
+    ) -> Handle<'a, JsError> {
+        let message = self.to_string();
+        let Self { token, options } = self;
+        let properties = move |cx: &mut C| {
+            let token = cx.string(token);
+            let options = options.into_boxed_slice().convert_into(cx)?.upcast();
+            let set_constructor: Handle<'_, JsFunction> = cx.global("Set")?;
+            let options = set_constructor.construct(cx, [options])?;
+            let props = cx.empty_object();
+            props.set(cx, "token", token)?;
+            props.set(cx, "options", options)?;
+            Ok(props.upcast())
+        };
+        new_js_error(
+            cx,
+            module,
+            Some("RateLimitChallengeError"),
+            &message,
+            operation_name,
+            properties,
+        )
+    }
+}
+
 impl SignalNodeError for http::uri::InvalidUri {
     fn into_throwable<'a, C: Context<'a>>(
         self,
@@ -556,12 +603,12 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
 }
 
 mod registration {
-    use libsignal_net::infra::errors::RetryLater;
-    use libsignal_net::registration::{
+    use libsignal_net_chat::api::registration::{
         CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError, RegistrationLock,
-        RequestError, RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
+        RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
         UpdateSessionError, VerificationCodeNotDeliverable,
     };
+    use libsignal_net_chat::registration::RequestError;
 
     use super::*;
 
@@ -573,7 +620,6 @@ mod registration {
             operation_name: &str,
         ) -> Handle<'a, JsError> {
             let inner = match self {
-                RequestError::RequestWasNotValid => BridgedErrorVariant::RequestInvalid,
                 RequestError::Other(inner) => inner.into(),
                 RequestError::Timeout => {
                     return libsignal_net::chat::SendError::RequestTimedOut.into_throwable(
@@ -582,16 +628,23 @@ mod registration {
                         operation_name,
                     )
                 }
-                RequestError::Unknown(message) => {
+                e @ (RequestError::Unexpected { log_safe: _ } | RequestError::ServerSideError) => {
                     return new_js_error(
                         cx,
                         module,
                         None,
-                        &message,
+                        &e.to_string(),
                         operation_name,
                         no_extra_properties,
                     )
                 }
+                RequestError::RetryLater(retry_later) => {
+                    return retry_later.into_throwable(cx, module, operation_name)
+                }
+                RequestError::Challenge(challenge) => {
+                    return challenge.into_throwable(cx, module, operation_name)
+                }
+                RequestError::Disconnected(d) => match d {},
             };
             SignalNodeError::into_throwable(inner, cx, module, operation_name)
         }
@@ -601,7 +654,6 @@ mod registration {
         SessionNotFound,
         InvalidSessionId,
         RequestInvalid,
-        RetryLater(RetryLater),
         RequestRejected,
         NotReadyForVerification,
         VerificationSendFailed,
@@ -619,9 +671,6 @@ mod registration {
             operation_name: &str,
         ) -> Handle<'a, JsError> {
             let message = match self {
-                BridgedErrorVariant::RetryLater(retry_later) => {
-                    return retry_later.into_throwable(cx, module, operation_name)
-                }
                 BridgedErrorVariant::SessionNotFound => {
                     "no verification session found for the session ID"
                 }
@@ -662,7 +711,6 @@ mod registration {
         fn from(value: CreateSessionError) -> Self {
             match value {
                 CreateSessionError::InvalidSessionId => Self::InvalidSessionId,
-                CreateSessionError::RetryLater(retry_later) => Self::RetryLater(retry_later),
             }
         }
     }
@@ -680,7 +728,6 @@ mod registration {
         fn from(value: UpdateSessionError) -> Self {
             match value {
                 UpdateSessionError::Rejected => Self::RequestRejected,
-                UpdateSessionError::RetryLater(retry_later) => Self::RetryLater(retry_later),
             }
         }
     }
@@ -697,9 +744,6 @@ mod registration {
                 RequestVerificationCodeError::CodeNotDeliverable(not_deliverable) => {
                     Self::VerificationNotDeliverable(not_deliverable)
                 }
-                RequestVerificationCodeError::RetryLater(retry_later) => {
-                    Self::RetryLater(retry_later)
-                }
             }
         }
     }
@@ -710,7 +754,6 @@ mod registration {
                 SubmitVerificationError::InvalidSessionId => Self::InvalidSessionId,
                 SubmitVerificationError::SessionNotFound => Self::SessionNotFound,
                 SubmitVerificationError::NotReadyForVerification => Self::NotReadyForVerification,
-                SubmitVerificationError::RetryLater(retry_later) => Self::RetryLater(retry_later),
             }
         }
     }
@@ -735,7 +778,6 @@ mod registration {
                 RegisterAccountError::RegistrationLock(registration_lock) => {
                     Self::RegistrationLock(registration_lock)
                 }
-                RegisterAccountError::RetryLater(retry_later) => Self::RetryLater(retry_later),
             }
         }
     }
@@ -789,22 +831,62 @@ impl SignalNodeError for libsignal_message_backup::ReadError {
     }
 }
 
-impl SignalNodeError for libsignal_net::keytrans::Error {
+impl SignalNodeError for libsignal_net_chat::api::DisconnectedError {
     fn into_throwable<'a, C: Context<'a>>(
         self,
         cx: &mut C,
         module: Handle<'a, JsObject>,
         operation_name: &str,
     ) -> Handle<'a, JsError> {
-        let name = match self {
-            Error::ChatSendError(err) => return err.into_throwable(cx, module, operation_name),
-            Error::RequestFailed(_)
-            | Error::NonFatalVerificationFailure(_)
-            | Error::InvalidResponse(_)
-            | Error::InvalidRequest(_) => "KeyTransparencyError",
-            Error::FatalVerificationFailure(_) => "KeyTransparencyVerificationFailed",
-        };
         let message = self.to_string();
+        let name = match &self {
+            Self::ConnectedElsewhere => "ConnectedElsewhere",
+            Self::ConnectionInvalidated => "ConnectionInvalidated",
+            Self::Transport { .. } => IO_ERROR,
+            Self::Closed => "ChatServiceInactive",
+        };
+        new_js_error(
+            cx,
+            module,
+            Some(name),
+            &message,
+            operation_name,
+            no_extra_properties,
+        )
+    }
+}
+
+impl SignalNodeError for crate::keytrans::BridgeError {
+    fn into_throwable<'a, C: Context<'a>>(
+        self,
+        cx: &mut C,
+        module: Handle<'a, JsObject>,
+        operation_name: &str,
+    ) -> Handle<'a, JsError> {
+        use libsignal_net_chat::api::RequestError;
+        let message = self.to_string();
+        let name = match self.into() {
+            RequestError::Disconnected(inner) => {
+                return inner.into_throwable(cx, module, operation_name)
+            }
+            RequestError::Timeout => IO_ERROR,
+            RequestError::Other(libsignal_net_chat::api::keytrans::Error::VerificationFailed(
+                inner,
+            )) => match inner {
+                libsignal_keytrans::Error::VerificationFailed(_) => {
+                    "KeyTransparencyVerificationFailed"
+                }
+                libsignal_keytrans::Error::RequiredFieldMissing(_)
+                | libsignal_keytrans::Error::BadData(_) => "KeyTransparencyError",
+            },
+            // TODO: Consider being more consistent with other APIs for RetryLater and
+            // ServerSideError. (Challenge shouldn't happen in practice.)
+            RequestError::RetryLater(_)
+            | RequestError::Challenge { .. }
+            | RequestError::ServerSideError
+            | RequestError::Unexpected { .. }
+            | RequestError::Other(_) => "KeyTransparencyError",
+        };
         new_js_error(
             cx,
             module,

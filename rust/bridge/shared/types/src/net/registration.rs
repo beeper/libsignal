@@ -8,12 +8,12 @@ use std::future::Future;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use futures_util::TryFutureExt as _;
-use libsignal_net::registration::{
-    self as net_registration, ConnectChat, CreateSession, CreateSessionError, ForServiceIds,
-    NewMessageNotification, ProvidedAccountAttributes, PushTokenType, RegisterAccountResponse,
-    RegistrationSession, RequestError, RequestedInformation, ResumeSessionError, SessionId,
-    SignedPreKeyBody, SkipDeviceTransfer, UnidentifiedAccessKey,
+use libsignal_net_chat::api::registration::{
+    CreateSession, CreateSessionError, ForServiceIds, NewMessageNotification,
+    ProvidedAccountAttributes, PushTokenType, RegisterAccountResponse, RegistrationSession,
+    ResumeSessionError, SessionId, SignedPreKeyBody, SkipDeviceTransfer, UnidentifiedAccessKey,
 };
+use libsignal_net_chat::registration::{self as net_registration, ConnectUnauthChat, RequestError};
 use libsignal_protocol::PublicKey;
 
 use crate::*;
@@ -61,7 +61,6 @@ pub struct AccountAttributes {
 pub type RegistrationCreateSessionRequest = CreateSession;
 pub type RegistrationPushTokenType = PushTokenType;
 pub type RegistrationAccountAttributes = AccountAttributes;
-pub type RegistrationSessionRequestedInformation = RequestedInformation;
 
 // Alias the type exposed across the bridge since the macros don't support
 // templates well.
@@ -84,14 +83,14 @@ pub trait ConnectChatBridge: Send + UnwindSafe {
     fn create_chat_connector(
         self: Box<Self>,
         runtime: tokio::runtime::Handle,
-    ) -> Box<dyn ConnectChat + Send + Sync + UnwindSafe>;
+    ) -> Box<dyn ConnectUnauthChat + Send + Sync + UnwindSafe>;
 }
 
 impl RegistrationService {
     pub fn create_session(
         connect_bridge: Box<dyn ConnectChatBridge>,
         tokio_runtime: tokio::runtime::Handle,
-        create_session: net_registration::CreateSession,
+        create_session: CreateSession,
     ) -> impl Future<Output = Result<Self, RequestError<CreateSessionError>>> + Send {
         net_registration::RegistrationService::create_session(
             create_session,

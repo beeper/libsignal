@@ -57,8 +57,9 @@ public class ThrowsAfterInputStream: SignalInputStream {
 
 func readResource(forName name: String) -> Data {
     try! Data(
-        contentsOf: URL(fileURLWithPath: #file)
+        contentsOf: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .appendingPathComponent("Resources")
-            .appendingPathComponent(name))
+            .appendingPathComponent(name)
+    )
 }

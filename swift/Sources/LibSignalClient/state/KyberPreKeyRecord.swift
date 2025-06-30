@@ -7,11 +7,16 @@ import Foundation
 import SignalFfi
 
 public class KyberPreKeyRecord: ClonableHandleOwner<SignalMutPointerKyberPreKeyRecord> {
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerKyberPreKeyRecord>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerKyberPreKeyRecord>
+    ) -> SignalFfiErrorRef? {
         return signal_kyber_pre_key_record_destroy(handle.pointer)
     }
 
-    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerKyberPreKeyRecord, currentHandle: SignalConstPointerKyberPreKeyRecord) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(
+        _ newHandle: inout SignalMutPointerKyberPreKeyRecord,
+        currentHandle: SignalConstPointerKyberPreKeyRecord
+    ) -> SignalFfiErrorRef? {
         return signal_kyber_pre_key_record_clone(&newHandle, currentHandle)
     }
 
@@ -39,10 +44,10 @@ public class KyberPreKeyRecord: ClonableHandleOwner<SignalMutPointerKyberPreKeyR
         self.init(owned: NonNull(result)!)
     }
 
-    public func serialize() -> [UInt8] {
+    public func serialize() -> Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_kyber_pre_key_record_serialize($0, nativeHandle.const())
                 }
             }
@@ -93,10 +98,10 @@ public class KyberPreKeyRecord: ClonableHandleOwner<SignalMutPointerKyberPreKeyR
         }
     }
 
-    public var signature: [UInt8] {
+    public var signature: Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_kyber_pre_key_record_get_signature($0, nativeHandle.const())
                 }
             }

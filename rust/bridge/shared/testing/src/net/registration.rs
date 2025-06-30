@@ -4,7 +4,6 @@
 //
 
 use std::collections::HashSet;
-use std::str::FromStr;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -18,14 +17,9 @@ use libsignal_net::auth::Auth;
 use libsignal_net::chat::fake::FakeChatRemote;
 use libsignal_net::chat::ChatConnection;
 use libsignal_net::infra::errors::RetryLater;
-use libsignal_net::registration::{
-    CheckSvr2CredentialsError, CheckSvr2CredentialsResponse, ConnectChat, CreateSessionError,
-    RegisterAccountError, RegisterAccountResponse, RegisterResponseBackup, RegisterResponseBadge,
-    RegisterResponseEntitlements, RegistrationLock, RegistrationSession, RequestError,
-    RequestVerificationCodeError, RequestedInformation, ResumeSessionError,
-    SubmitVerificationError, Svr2CredentialsResult, UpdateSessionError,
-    VerificationCodeNotDeliverable,
-};
+use libsignal_net_chat::api::registration::*;
+use libsignal_net_chat::api::{ChallengeOption, RateLimitChallenge, Unauth};
+use libsignal_net_chat::registration::*;
 use uuid::uuid;
 
 use super::make_error_testing_enum;
@@ -40,7 +34,7 @@ pub fn TESTING_RegistrationSessionInfoConvert() -> RegistrationSession {
         next_call: Some(Duration::from_secs(123)),
         next_sms: Some(Duration::from_secs(456)),
         next_verification_attempt: Some(Duration::from_secs(789)),
-        requested_information: HashSet::from([RequestedInformation::PushChallenge]),
+        requested_information: HashSet::from([ChallengeOption::PushChallenge]),
     }
 }
 
@@ -71,16 +65,16 @@ impl ConnectChatBridge for ConnectFakeChatBridge {
     fn create_chat_connector(
         self: Box<Self>,
         runtime: tokio::runtime::Handle,
-    ) -> Box<dyn ConnectChat + Send + Sync + std::panic::UnwindSafe> {
+    ) -> Box<dyn ConnectUnauthChat + Send + Sync + std::panic::UnwindSafe> {
         let Self(tx) = *self;
         Box::new(ConnectFakeChat(runtime, tx))
     }
 }
-impl ConnectChat for ConnectFakeChat {
+impl ConnectUnauthChat for ConnectFakeChat {
     fn connect_chat(
         &self,
         on_disconnect: tokio::sync::oneshot::Sender<std::convert::Infallible>,
-    ) -> BoxFuture<'_, Result<ChatConnection, libsignal_net::chat::ConnectError>> {
+    ) -> BoxFuture<'_, Result<Unauth<ChatConnection>, libsignal_net::chat::ConnectError>> {
         let mut on_disconnect = Some(on_disconnect);
         let listener = move |event| match event {
             libsignal_net::chat::ws::ListenerEvent::Finished(_) => drop(on_disconnect.take()),
@@ -94,7 +88,7 @@ impl ConnectChat for ConnectFakeChat {
             self.1
                 .send(remote)
                 .map_err(|_| libsignal_net::chat::ConnectError::AllAttemptsFailed)
-                .map(|()| chat),
+                .map(|()| Unauth(chat)),
         )
         .boxed()
     }
@@ -171,9 +165,12 @@ impl<TestE> TestingRequestError<TestE> {
         let TestingRequestError(inner) = self;
         match inner {
             RequestError::Timeout => RequestError::Timeout,
-            RequestError::RequestWasNotValid => RequestError::RequestWasNotValid,
-            RequestError::Unknown(message) => RequestError::Unknown(message),
+            RequestError::Unexpected { log_safe } => RequestError::Unexpected { log_safe },
             RequestError::Other(e) => RequestError::Other(f(e)),
+            RequestError::RetryLater(retry_later) => RequestError::RetryLater(retry_later),
+            RequestError::Challenge(challenge) => RequestError::Challenge(challenge),
+            RequestError::ServerSideError => RequestError::ServerSideError,
+            RequestError::Disconnected(d) => match d {},
         }
     }
 }
@@ -185,27 +182,33 @@ const RETRY_AFTER_42_SECONDS: RetryLater = RetryLater {
 impl<TestE: for<'a> TryFrom<&'a str, Error = strum::ParseError>> TryFrom<String>
     for TestingRequestError<TestE>
 {
-    type Error = strum::ParseError;
+    type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        RequestError::from_str(&value)
-            .map(|e| match e {
-                // Replace the always-empty message with one we can look for.
-                RequestError::Unknown(message) => {
-                    assert_eq!(message, "");
-                    RequestError::Unknown("some message".to_string())
-                }
-                e => e,
-            })
-            .or_else(|_| TestE::try_from(&value).map(RequestError::Other))
-            .map(Self)
+        Ok(Self(match value.as_str() {
+            "Timeout" => RequestError::Timeout,
+            "RequestWasNotValid" => RequestError::Unexpected {
+                log_safe: "the request did not pass server validation".into(),
+            },
+            "Unknown" => RequestError::Unexpected {
+                log_safe: "some message".to_owned(),
+            },
+            "RetryAfter42Seconds" => RequestError::RetryLater(RETRY_AFTER_42_SECONDS),
+            "PushChallenge" => RequestError::Challenge(RateLimitChallenge {
+                token: "token".to_owned(),
+                options: vec![ChallengeOption::PushChallenge],
+            }),
+            "ServerSideError" => RequestError::ServerSideError,
+            _ => TestE::try_from(&value)
+                .map(RequestError::Other)
+                .map_err(|_| format!("failed to parse as request error: {value:?}"))?,
+        }))
     }
 }
 
 make_error_testing_enum!(
     enum TestingCreateSessionError for CreateSessionError {
         InvalidSessionId => InvalidSessionId,
-        RetryLater => RetryAfter42Seconds,
     }
 );
 
@@ -219,9 +222,6 @@ fn TESTING_RegistrationService_CreateSessionErrorConvert(
         .into_inner()
         .map_into_error(|inner| match inner {
             TestingCreateSessionError::InvalidSessionId => CreateSessionError::InvalidSessionId,
-            TestingCreateSessionError::RetryAfter42Seconds => {
-                CreateSessionError::RetryLater(RETRY_AFTER_42_SECONDS)
-            }
         }))
 }
 
@@ -249,7 +249,6 @@ fn TESTING_RegistrationService_ResumeSessionErrorConvert(
 make_error_testing_enum!(
     enum TestingUpdateSessionError for UpdateSessionError {
         Rejected => Rejected,
-        RetryLater => RetryAfter42Seconds,
     }
 );
 
@@ -263,9 +262,6 @@ fn TESTING_RegistrationService_UpdateSessionErrorConvert(
         .into_inner()
         .map_into_error(|inner| match inner {
             TestingUpdateSessionError::Rejected => UpdateSessionError::Rejected,
-            TestingUpdateSessionError::RetryAfter42Seconds => {
-                UpdateSessionError::RetryLater(RETRY_AFTER_42_SECONDS)
-            }
         }))
 }
 
@@ -276,7 +272,6 @@ make_error_testing_enum!(
         NotReadyForVerification => NotReadyForVerification,
         SendFailed => SendFailed,
         CodeNotDeliverable => CodeNotDeliverable,
-        RetryLater => RetryAfter42Seconds,
     }
 );
 
@@ -307,9 +302,6 @@ fn TESTING_RegistrationService_RequestVerificationCodeErrorConvert(
                     permanent_failure: true,
                 })
             }
-            TestingRequestVerificationCodeError::RetryAfter42Seconds => {
-                RequestVerificationCodeError::RetryLater(RETRY_AFTER_42_SECONDS)
-            }
         }))
 }
 
@@ -318,7 +310,6 @@ make_error_testing_enum!(
         InvalidSessionId => InvalidSessionId,
         SessionNotFound => SessionNotFound,
         NotReadyForVerification => NotReadyForVerification,
-        RetryLater => RetryAfter42Seconds,
     }
 );
 
@@ -339,9 +330,6 @@ fn TESTING_RegistrationService_SubmitVerificationErrorConvert(
             }
             TestingSubmitVerificationError::NotReadyForVerification => {
                 SubmitVerificationError::NotReadyForVerification
-            }
-            TestingSubmitVerificationError::RetryAfter42Seconds => {
-                SubmitVerificationError::RetryLater(RETRY_AFTER_42_SECONDS)
             }
         }))
 }
@@ -372,7 +360,6 @@ make_error_testing_enum!(
         DeviceTransferIsPossibleButNotSkipped => DeviceTransferIsPossibleButNotSkipped,
         RegistrationRecoveryVerificationFailed => RegistrationRecoveryVerificationFailed,
         RegistrationLock => RegistrationLockFor50Seconds,
-        RetryLater => RetryAfter42Seconds,
     }
 );
 
@@ -385,9 +372,6 @@ fn TESTING_RegistrationService_RegisterAccountErrorConvert(
     Err(error_description
         .into_inner()
         .map_into_error(|inner| match inner {
-            TestingRegisterAccountError::RetryAfter42Seconds => {
-                RegisterAccountError::RetryLater(RETRY_AFTER_42_SECONDS)
-            }
             TestingRegisterAccountError::DeviceTransferIsPossibleButNotSkipped => {
                 RegisterAccountError::DeviceTransferIsPossibleButNotSkipped
             }

@@ -38,14 +38,16 @@ public class IncrementalMacContext: NativeHandleOwner<SignalMutPointerIncrementa
         self.chunkSizeInBytes = chunkSize
     }
 
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerIncrementalMac>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerIncrementalMac>
+    ) -> SignalFfiErrorRef? {
         return signal_incremental_mac_destroy(handle.pointer)
     }
 
     public func update<Bytes: ContiguousBytes>(_ bytes: Bytes) throws {
         let digest = try bytes.withUnsafeBorrowedBuffer { bytesPtr in
             try withNativeHandle { nativeHandle in
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_incremental_mac_update($0, nativeHandle, bytesPtr, 0, UInt32(bytesPtr.length))
                 }
             }
@@ -53,15 +55,15 @@ public class IncrementalMacContext: NativeHandleOwner<SignalMutPointerIncrementa
         self._digest.append(contentsOf: digest)
     }
 
-    public func finalize() throws -> [UInt8] {
+    public func finalize() throws -> Data {
         let digest =
             try withNativeHandle { nativeHandle in
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_incremental_mac_finalize($0, nativeHandle)
                 }
             }
         self._digest.append(contentsOf: digest)
-        return Array(self._digest)
+        return Data(self._digest)
     }
 }
 
@@ -97,7 +99,9 @@ public class ValidatingMacContext: NativeHandleOwner<SignalMutPointerValidatingM
         self.init(owned: NonNull(handle)!)
     }
 
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerValidatingMac>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerValidatingMac>
+    ) -> SignalFfiErrorRef? {
         return signal_validating_mac_destroy(handle.pointer)
     }
 

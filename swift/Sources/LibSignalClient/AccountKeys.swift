@@ -36,7 +36,8 @@ public func hashLocalPin<Bytes: ContiguousBytes>(_ pin: Bytes) throws -> String 
 /// - parameter encodedHash: An encoded string of the hash, as returned by `localHash`
 /// - returns: true if the pin matches the hash, false otherwise
 ///
-public func verifyLocalPin<Bytes: ContiguousBytes>(_ pin: Bytes, againstEncodedHash encodedHash: String) throws -> Bool {
+public func verifyLocalPin<Bytes: ContiguousBytes>(_ pin: Bytes, againstEncodedHash encodedHash: String) throws -> Bool
+{
     try encodedHash.withCString { hashPtr in
         try pin.withUnsafeBorrowedBuffer { buffer in
             try invokeFnReturningBool {
@@ -75,7 +76,7 @@ public class PinHash: NativeHandleOwner<SignalMutPointerPinHash>, @unchecked Sen
     }
 
     /// A 32 byte secret that can be used to access a value in a secure store.
-    public var accessKey: [UInt8] {
+    public var accessKey: Data {
         return withNativeHandle { nativeHandle in
             failOnError {
                 try invokeFnReturningFixedLengthArray {
@@ -86,7 +87,7 @@ public class PinHash: NativeHandleOwner<SignalMutPointerPinHash>, @unchecked Sen
     }
 
     /// A 32 byte encryption key that can be used to encrypt or decrypt values before uploading them to a secure store.
-    public var encryptionKey: [UInt8] {
+    public var encryptionKey: Data {
         return withNativeHandle { nativeHandle in
             failOnError {
                 try invokeFnReturningFixedLengthArray {
@@ -104,11 +105,15 @@ public class PinHash: NativeHandleOwner<SignalMutPointerPinHash>, @unchecked Sen
     /// - parameter normalizedPin: A normalized, UTF-8 encoded byte representation of the pin to verify
     /// - parameter salt: A 32 byte salt
     /// - returns: A `PinHash`
-    public convenience init<PinBytes: ContiguousBytes, SaltBytes: ContiguousBytes>(normalizedPin: PinBytes, salt: SaltBytes) throws {
+    public convenience init<PinBytes: ContiguousBytes, SaltBytes: ContiguousBytes>(
+        normalizedPin: PinBytes,
+        salt: SaltBytes
+    ) throws {
         var result = SignalMutPointerPinHash()
         try normalizedPin.withUnsafeBorrowedBuffer { pinBytes in
             try salt.withUnsafeBytes { saltBytes in
-                try ByteArray(newContents: Array(saltBytes), expectedLength: 32).withUnsafePointerToSerialized { saltTuple in
+                try ByteArray(newContents: Data(saltBytes), expectedLength: 32).withUnsafePointerToSerialized {
+                    saltTuple in
                     try checkError(signal_pin_hash_from_salt(&result, pinBytes, saltTuple))
                 }
             }
@@ -124,12 +129,18 @@ public class PinHash: NativeHandleOwner<SignalMutPointerPinHash>, @unchecked Sen
     /// - parameter username: The Basic Auth username used to authenticate with SVR2
     /// - parameter mrenclave: The mrenclave where the hashed pin will be stored
     /// - returns: A `PinHash`
-    public convenience init<PinBytes: ContiguousBytes, MrenclaveBytes: ContiguousBytes>(normalizedPin: PinBytes, username: String, mrenclave: MrenclaveBytes) throws {
+    public convenience init<PinBytes: ContiguousBytes, MrenclaveBytes: ContiguousBytes>(
+        normalizedPin: PinBytes,
+        username: String,
+        mrenclave: MrenclaveBytes
+    ) throws {
         var result = SignalMutPointerPinHash()
         try normalizedPin.withUnsafeBorrowedBuffer { pinBytes in
             try mrenclave.withUnsafeBorrowedBuffer { mrenclaveBytes in
                 try username.withCString { userBytes in
-                    try checkError(signal_pin_hash_from_username_mrenclave(&result, pinBytes, userBytes, mrenclaveBytes))
+                    try checkError(
+                        signal_pin_hash_from_username_mrenclave(&result, pinBytes, userBytes, mrenclaveBytes)
+                    )
                 }
             }
         }
@@ -167,7 +178,7 @@ public enum AccountEntropyPool {
     ///
     /// `accountEntropyPool` must be a **validated** account entropy pool;
     /// passing an arbitrary String here is considered a programmer error.
-    public static func deriveSvrKey(_ accountEntropyPool: String) throws -> [UInt8] {
+    public static func deriveSvrKey(_ accountEntropyPool: String) throws -> Data {
         try invokeFnReturningFixedLengthArray {
             signal_account_entropy_pool_derive_svr_key($0, accountEntropyPool)
         }
@@ -195,7 +206,7 @@ public class BackupKey: ByteArray, @unchecked Sendable {
     public static let SIZE = 32
 
     /// Throws if `contents` is not ``SIZE`` (32) bytes.
-    public required init(contents: [UInt8]) throws {
+    public required init(contents: Data) throws {
         try super.init(newContents: contents, expectedLength: Self.SIZE)
     }
 
@@ -206,7 +217,7 @@ public class BackupKey: ByteArray, @unchecked Sendable {
     /// - SeeAlso: ``AccountEntropyPool/deriveBackupKey(_:)``
     public static func generateRandom() -> BackupKey {
         failOnError {
-            var bytes: [UInt8] = Array(repeating: 0, count: Self.SIZE)
+            var bytes = Data(count: Self.SIZE)
             try bytes.withUnsafeMutableBytes { try fillRandom($0) }
             return try BackupKey(contents: bytes)
         }
@@ -215,7 +226,7 @@ public class BackupKey: ByteArray, @unchecked Sendable {
     /// Derives the backup ID to use given the current device's ACI.
     ///
     /// Used for both messages and media backups.
-    public func deriveBackupId(aci: Aci) -> [UInt8] {
+    public func deriveBackupId(aci: Aci) -> Data {
         failOnError {
             try withUnsafePointerToSerialized { backupKey in
                 try aci.withPointerToFixedWidthBinary { aci in
@@ -245,7 +256,7 @@ public class BackupKey: ByteArray, @unchecked Sendable {
     /// Derives the AES key used for encrypted fields in local backup metadata.
     ///
     /// Only relevant for message backup keys.
-    public func deriveLocalBackupMetadataKey() -> [UInt8] {
+    public func deriveLocalBackupMetadataKey() -> Data {
         failOnError {
             try withUnsafePointerToSerialized { backupKey in
                 try invokeFnReturningFixedLengthArray {
@@ -258,7 +269,7 @@ public class BackupKey: ByteArray, @unchecked Sendable {
     /// Derives the ID for uploading media with the name `mediaName`.
     ///
     /// Only relevant for media backup keys.
-    public func deriveMediaId(_ mediaName: String) throws -> [UInt8] {
+    public func deriveMediaId(_ mediaName: String) throws -> Data {
         try withUnsafePointerToSerialized { backupKey in
             try invokeFnReturningFixedLengthArray {
                 signal_backup_key_derive_media_id($0, backupKey, mediaName)
@@ -271,7 +282,7 @@ public class BackupKey: ByteArray, @unchecked Sendable {
     /// This is a concatenation of an HMAC key (32 bytes) and an AES-CBC key (also 32 bytes).
     ///
     /// Only relevant for media backup keys.
-    public func deriveMediaEncryptionKey(_ mediaId: [UInt8]) throws -> [UInt8] {
+    public func deriveMediaEncryptionKey(_ mediaId: Data) throws -> Data {
         let mediaId = try ByteArray(newContents: mediaId, expectedLength: 15)
         return try withUnsafePointerToSerialized { backupKey in
             try mediaId.withUnsafePointerToSerialized { mediaId in
@@ -287,7 +298,7 @@ public class BackupKey: ByteArray, @unchecked Sendable {
     /// This is a concatenation of an HMAC key (32 bytes) and an AES-CBC key (also 32 bytes).
     ///
     /// Only relevant for media backup keys.
-    public func deriveThumbnailTransitEncryptionKey(_ mediaId: [UInt8]) throws -> [UInt8] {
+    public func deriveThumbnailTransitEncryptionKey(_ mediaId: Data) throws -> Data {
         let mediaId = try ByteArray(newContents: mediaId, expectedLength: 15)
         return try withUnsafePointerToSerialized { backupKey in
             try mediaId.withUnsafePointerToSerialized { mediaId in

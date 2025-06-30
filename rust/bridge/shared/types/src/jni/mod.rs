@@ -25,7 +25,7 @@ use libsignal_core::try_scoped;
 use libsignal_net::chat::{ConnectError as ChatConnectError, SendError as ChatSendError};
 use libsignal_net::infra::errors::RetryLater;
 use libsignal_net::infra::ws::WebSocketServiceError;
-use libsignal_net::keytrans::Error as KeyTransNetError;
+use libsignal_net_chat::api::RateLimitChallenge;
 use libsignal_protocol::*;
 use signal_crypto::Error as SignalCryptoError;
 use usernames::{UsernameError, UsernameLinkError};
@@ -101,6 +101,7 @@ impl<'a, T> From<JavaCompletableFuture<'a, T>> for JObject<'a> {
     }
 }
 
+#[cold]
 fn convert_to_exception<'a, 'env, F>(env: &'a mut JNIEnv<'env>, error: SignalJniError, consume: F)
 where
     F: 'a + FnOnce(&'a mut JNIEnv<'env>, Result<JThrowable<'a>, BridgeLayerError>, SignalJniError),
@@ -209,7 +210,6 @@ impl JniError for SignalProtocolError {
                 )
                 .map(Into::into);
             }
-
             SignalProtocolError::InvalidSenderKeySession { distribution_id } => {
                 let distribution_id = distribution_id.convert_into(env)?;
                 let message = to_java_string(env, self.to_string())?;
@@ -245,7 +245,11 @@ impl JniError for SignalProtocolError {
 
             SignalProtocolError::InvalidState(_, _) => ClassName("java.lang.IllegalStateException"),
 
-            SignalProtocolError::InvalidArgument(_) => {
+            SignalProtocolError::InvalidProtocolAddress {
+                name: _,
+                device_id: _,
+            }
+            | SignalProtocolError::InvalidArgument(_) => {
                 ClassName("java.lang.IllegalArgumentException")
             }
             SignalProtocolError::FfiBindingError(_) => ClassName("java.lang.RuntimeException"),
@@ -530,11 +534,12 @@ impl MessageOnlyExceptionJniError for signal_media::sanitize::webp::ParseErrorRe
 mod registration {
     use libsignal_core::try_scoped;
     use libsignal_net::auth::Auth;
-    use libsignal_net::registration::{
+    use libsignal_net_chat::api::registration::{
         CheckSvr2CredentialsError, CreateSessionError, InvalidSessionId, RegisterAccountError,
-        RegistrationLock, RequestError, RequestVerificationCodeError, ResumeSessionError,
+        RegistrationLock, RequestVerificationCodeError, ResumeSessionError,
         SubmitVerificationError, UpdateSessionError, VerificationCodeNotDeliverable,
     };
+    use libsignal_net_chat::registration::RequestError;
 
     use super::*;
 
@@ -544,13 +549,17 @@ mod registration {
             env: &mut JNIEnv<'a>,
         ) -> Result<JThrowable<'a>, BridgeLayerError> {
             let message = match self {
-                RequestError::RequestWasNotValid => "the request did not pass server validation",
-
                 RequestError::Other(inner) => return inner.to_throwable(env),
                 RequestError::Timeout => {
                     return libsignal_net::chat::SendError::RequestTimedOut.to_throwable(env)
                 }
-                RequestError::Unknown(message) => message,
+                RequestError::RetryLater(retry_later) => return retry_later.to_throwable(env),
+                RequestError::Unexpected { log_safe } => log_safe,
+                RequestError::Challenge(rate_limit_challenge) => {
+                    return rate_limit_challenge.to_throwable(env)
+                }
+                RequestError::ServerSideError => &self.to_string(),
+                RequestError::Disconnected(d) => match *d {},
             };
             make_single_message_throwable(
                 env,
@@ -594,7 +603,6 @@ mod registration {
         ) -> Result<JThrowable<'a>, BridgeLayerError> {
             match self {
                 CreateSessionError::InvalidSessionId => InvalidSessionId.to_throwable(env),
-                CreateSessionError::RetryLater(retry_later) => retry_later.to_throwable(env),
             }
         }
     }
@@ -617,7 +625,6 @@ mod registration {
             env: &mut JNIEnv<'a>,
         ) -> Result<JThrowable<'a>, BridgeLayerError> {
             match self {
-                UpdateSessionError::RetryLater(retry_later) => retry_later.to_throwable(env),
                 UpdateSessionError::Rejected => make_single_message_throwable(
                     env,
                     &self.to_string(),
@@ -667,9 +674,6 @@ mod registration {
                     )
                     .map(Into::into)
                 }
-                RequestVerificationCodeError::RetryLater(retry_later) => {
-                    retry_later.to_throwable(env)
-                }
             }
         }
     }
@@ -687,7 +691,6 @@ mod registration {
                 SubmitVerificationError::NotReadyForVerification => {
                     not_ready_for_verification(env, &self.to_string())
                 }
-                SubmitVerificationError::RetryLater(retry_later) => retry_later.to_throwable(env),
             }
         }
     }
@@ -708,9 +711,6 @@ mod registration {
             env: &mut JNIEnv<'a>,
         ) -> Result<JThrowable<'a>, BridgeLayerError> {
             let class_name = match self {
-                RegisterAccountError::RetryLater(retry_later) => {
-                    return retry_later.to_throwable(env)
-                }
                 RegisterAccountError::RegistrationLock(registration_lock) => {
                     let class_name =
                         ClassName("org.signal.libsignal.net.RegistrationLockException");
@@ -836,18 +836,42 @@ impl MessageOnlyExceptionJniError for ChatSendError {
     }
 }
 
-impl MessageOnlyExceptionJniError for KeyTransNetError {
+impl MessageOnlyExceptionJniError for libsignal_net_chat::api::DisconnectedError {
     fn exception_class(&self) -> ClassName<'static> {
-        match &self {
-            KeyTransNetError::ChatSendError(send_error) => send_error.exception_class(),
-            KeyTransNetError::RequestFailed(_)
-            | KeyTransNetError::NonFatalVerificationFailure(_)
-            | KeyTransNetError::InvalidResponse(_)
-            | KeyTransNetError::InvalidRequest(_) => {
+        match self {
+            Self::ConnectedElsewhere => ChatSendError::ConnectedElsewhere.exception_class(),
+            Self::ConnectionInvalidated => ChatSendError::ConnectionInvalidated.exception_class(),
+            Self::Transport { .. } => ClassName("org.signal.libsignal.net.ChatServiceException"),
+            Self::Closed => ChatSendError::Disconnected.exception_class(),
+        }
+    }
+}
+
+impl MessageOnlyExceptionJniError for crate::keytrans::BridgeError {
+    fn exception_class(&self) -> ClassName<'static> {
+        use libsignal_net_chat::api::RequestError;
+        match &**self {
+            RequestError::Disconnected(inner) => inner.exception_class(),
+            RequestError::Timeout => ClassName("org.signal.libsignal.net.ChatServiceException"),
+            RequestError::Other(libsignal_net_chat::api::keytrans::Error::VerificationFailed(
+                inner,
+            )) => match inner {
+                libsignal_keytrans::Error::VerificationFailed(_) => {
+                    ClassName("org.signal.libsignal.keytrans.VerificationFailedException")
+                }
+                libsignal_keytrans::Error::RequiredFieldMissing(_)
+                | libsignal_keytrans::Error::BadData(_) => {
+                    ClassName("org.signal.libsignal.keytrans.KeyTransparencyException")
+                }
+            },
+            // TODO: Consider being more consistent with other APIs for RetryLater and
+            // ServerSideError. (Challenge shouldn't happen in practice.)
+            RequestError::RetryLater(_)
+            | RequestError::Challenge { .. }
+            | RequestError::ServerSideError
+            | RequestError::Unexpected { .. }
+            | RequestError::Other(_) => {
                 ClassName("org.signal.libsignal.keytrans.KeyTransparencyException")
-            }
-            KeyTransNetError::FatalVerificationFailure(_) => {
-                ClassName("org.signal.libsignal.keytrans.VerificationFailedException")
             }
         }
     }
@@ -873,10 +897,30 @@ impl JniError for RetryLater {
     }
 }
 
+impl JniError for RateLimitChallenge {
+    fn to_throwable<'a>(&self, env: &mut JNIEnv<'a>) -> Result<JThrowable<'a>, BridgeLayerError> {
+        let Self { token, options } = self;
+        let (message, token) =
+            try_scoped(|| Ok((env.new_string(self.to_string())?, env.new_string(token)?)))
+                .check_exceptions(env, "RateLimitChallenge")?;
+        let options = options.as_slice().convert_into(env)?;
+        new_instance(
+            env,
+            ClassName("org.signal.libsignal.net.RateLimitChallengeException"),
+            jni_args!((
+                message => java.lang.String,
+                token => java.lang.String,
+                options => [org.signal.libsignal.net.ChallengeOption]) -> void),
+        )
+        .map(Into::into)
+    }
+}
+
 /// Translates errors into Java exceptions.
 ///
 /// Exceptions thrown in callbacks will be rethrown; all other errors will be mapped to an
 /// appropriate Java exception class and thrown.
+#[cold]
 fn throw_error(env: &mut JNIEnv, error: SignalJniError) {
     convert_to_exception(env, error, |env, throwable, error| match throwable {
         Err(failure) => log::error!("failed to create exception for {error}: {failure}"),

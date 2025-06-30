@@ -31,16 +31,6 @@ fn test_basic_prekey() -> TestResult {
         |builder| {
             builder.add_pre_key(IdChoice::Next);
             builder.add_signed_pre_key(IdChoice::Next);
-        },
-        PRE_KYBER_MESSAGE_VERSION,
-        UsePQRatchet::Yes,
-        UsePQRatchet::Yes,
-    )?;
-
-    run(
-        |builder| {
-            builder.add_pre_key(IdChoice::Next);
-            builder.add_signed_pre_key(IdChoice::Next);
             builder.add_kyber_pre_key(IdChoice::Next);
         },
         KYBER_AWARE_MESSAGE_VERSION,
@@ -93,9 +83,10 @@ fn test_basic_prekey() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let bob_device_id: DeviceId = 1.into();
+            let bob_device_id = DeviceId::new(1).unwrap();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
             let bob_address = ProtocolAddress::new("+14151111112".to_owned(), bob_device_id);
 
             let mut bob_store_builder = TestStoreBuilder::new();
@@ -281,12 +272,6 @@ fn test_chain_jump_over_limit() -> TestResult {
     let mut alice_store_builder = TestStoreBuilder::new();
     let mut bob_store_builder = TestStoreBuilder::new()
         .with_pre_key(31337.into())
-        .with_signed_pre_key(22.into());
-    run(&mut alice_store_builder, &mut bob_store_builder)?;
-
-    let mut alice_store_builder = TestStoreBuilder::new();
-    let mut bob_store_builder = TestStoreBuilder::new()
-        .with_pre_key(31337.into())
         .with_signed_pre_key(22.into())
         .with_kyber_pre_key(8000.into());
 
@@ -298,12 +283,15 @@ fn test_chain_jump_over_limit() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
             let alice_store = &mut alice_store_builder.store;
 
-            let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+            let bob_pre_key_bundle =
+                bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
             process_prekey_bundle(
                 &bob_address,
@@ -349,12 +337,6 @@ fn test_chain_jump_over_limit_with_self() -> TestResult {
     let mut store_builder_one = TestStoreBuilder::new();
     let mut store_builder_two = TestStoreBuilder::from_store(&store_builder_one.store)
         .with_pre_key(31337.into())
-        .with_signed_pre_key(22.into());
-    run(&mut store_builder_one, &mut store_builder_two)?;
-
-    let mut store_builder_one = TestStoreBuilder::new();
-    let mut store_builder_two = TestStoreBuilder::from_store(&store_builder_one.store)
-        .with_pre_key(31337.into())
         .with_signed_pre_key(22.into())
         .with_kyber_pre_key(8000.into());
     run(&mut store_builder_one, &mut store_builder_two)?;
@@ -366,9 +348,9 @@ fn test_chain_jump_over_limit_with_self() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let device_id_1: DeviceId = 1.into();
+            let device_id_1 = DeviceId::new(1).unwrap();
             let a1_address = ProtocolAddress::new("+14151111111".to_owned(), device_id_1);
-            let device_id_2: DeviceId = 2.into();
+            let device_id_2 = DeviceId::new(2).unwrap();
             let a2_address = ProtocolAddress::new("+14151111111".to_owned(), device_id_2);
 
             let a1_store = &mut a1_store_builder.store;
@@ -422,14 +404,16 @@ fn test_chain_jump_over_limit_with_self() -> TestResult {
 fn test_bad_signed_pre_key_signature() -> TestResult {
     async {
         let mut csprng = OsRng.unwrap_err();
-        let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+        let bob_address =
+            ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
         let mut alice_store = TestStoreBuilder::new().store;
         let bob_store_builder = TestStoreBuilder::new()
             .with_pre_key(31337.into())
-            .with_signed_pre_key(22.into());
+            .with_signed_pre_key(22.into())
+            .with_kyber_pre_key(8000.into());
 
-        let good_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+        let good_bundle = bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
         for bit in 0..8 * good_bundle
             .signed_pre_key_signature()
@@ -445,7 +429,7 @@ fn test_bad_signed_pre_key_signature() -> TestResult {
 
             let bad_bundle = good_bundle
                 .clone()
-                .modify(|content| content.ec_pre_key_signature = Some(bad_signature))
+                .modify(|content| content.signed_pre_key_signature = Some(bad_signature))
                 .expect("can recreate the bundle");
 
             assert!(process_prekey_bundle(
@@ -484,16 +468,6 @@ fn test_repeat_bundle_message() -> TestResult {
     let mut alice_store_builder = TestStoreBuilder::new();
     let mut bob_store_builder = TestStoreBuilder::new()
         .with_pre_key(3133.into())
-        .with_signed_pre_key(22.into());
-    run(
-        &mut alice_store_builder,
-        &mut bob_store_builder,
-        PRE_KYBER_MESSAGE_VERSION,
-    )?;
-
-    let mut alice_store_builder = TestStoreBuilder::new();
-    let mut bob_store_builder = TestStoreBuilder::new()
-        .with_pre_key(3133.into())
         .with_signed_pre_key(22.into())
         .with_kyber_pre_key(8000.into());
     run(
@@ -509,12 +483,15 @@ fn test_repeat_bundle_message() -> TestResult {
     ) -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
             let alice_store = &mut alice_store_builder.store;
 
-            let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+            let bob_pre_key_bundle =
+                bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
             process_prekey_bundle(
                 &bob_address,
@@ -622,16 +599,6 @@ fn test_bad_message_bundle() -> TestResult {
     let mut alice_store_builder = TestStoreBuilder::new();
     let mut bob_store_builder = TestStoreBuilder::new()
         .with_pre_key(3133.into())
-        .with_signed_pre_key(22.into());
-    run(
-        &mut alice_store_builder,
-        &mut bob_store_builder,
-        PRE_KYBER_MESSAGE_VERSION,
-    )?;
-
-    let mut alice_store_builder = TestStoreBuilder::new();
-    let mut bob_store_builder = TestStoreBuilder::new()
-        .with_pre_key(3133.into())
         .with_signed_pre_key(22.into())
         .with_kyber_pre_key(8000.into());
     run(
@@ -648,10 +615,13 @@ fn test_bad_message_bundle() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
-            let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+            let bob_pre_key_bundle =
+                bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
             let pre_key_id = bob_pre_key_bundle.pre_key_id()?.expect("has pre key id");
 
             let alice_store = &mut alice_store_builder.store;
@@ -736,14 +706,6 @@ fn test_bad_message_bundle() -> TestResult {
 #[test]
 fn test_optional_one_time_prekey() -> TestResult {
     let mut alice_store_builder = TestStoreBuilder::new();
-    let mut bob_store_builder = TestStoreBuilder::new().with_signed_pre_key(22.into());
-    run(
-        &mut alice_store_builder,
-        &mut bob_store_builder,
-        PRE_KYBER_MESSAGE_VERSION,
-    )?;
-
-    let mut alice_store_builder = TestStoreBuilder::new();
     let mut bob_store_builder = TestStoreBuilder::new()
         .with_signed_pre_key(22.into())
         .with_kyber_pre_key(8000.into());
@@ -760,12 +722,15 @@ fn test_optional_one_time_prekey() -> TestResult {
     ) -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
             let alice_store = &mut alice_store_builder.store;
 
-            let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+            let bob_pre_key_bundle =
+                bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
             process_prekey_bundle(
                 &bob_address,
@@ -820,9 +785,6 @@ fn test_optional_one_time_prekey() -> TestResult {
 
 #[test]
 fn test_basic_session() -> TestResult {
-    let (alice_session, bob_session) = initialize_sessions_v3()?;
-    run_session_interaction(alice_session, bob_session)?;
-
     let (alice_session, bob_session) = initialize_sessions_v4()?;
     run_session_interaction(alice_session, bob_session)?;
     Ok(())
@@ -830,15 +792,16 @@ fn test_basic_session() -> TestResult {
 
 #[test]
 fn test_message_key_limits() -> TestResult {
-    run(initialize_sessions_v3()?)?;
     run(initialize_sessions_v4()?)?;
 
     fn run(sessions: (SessionRecord, SessionRecord)) -> TestResult {
         async {
             let (alice_session_record, bob_session_record) = sessions;
 
-            let alice_address = ProtocolAddress::new("+14159999999".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14159999999".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14158888888".to_owned(), DeviceId::new(1).unwrap());
 
             let mut alice_store = TestStoreBuilder::new().store;
             let mut bob_store = TestStoreBuilder::new().store;
@@ -913,20 +876,6 @@ fn test_message_key_limits() -> TestResult {
 fn test_basic_simultaneous_initiate() -> TestResult {
     let mut alice_store_builder = TestStoreBuilder::new()
         .with_pre_key(IdChoice::Random)
-        .with_signed_pre_key(IdChoice::Random);
-    let mut bob_store_builder = TestStoreBuilder::new()
-        .with_pre_key(IdChoice::Random)
-        .with_signed_pre_key(IdChoice::Random);
-    run(
-        &mut alice_store_builder,
-        &mut bob_store_builder,
-        PRE_KYBER_MESSAGE_VERSION,
-        UsePQRatchet::Yes,
-        UsePQRatchet::Yes,
-    )?;
-
-    let mut alice_store_builder = TestStoreBuilder::new()
-        .with_pre_key(IdChoice::Random)
         .with_signed_pre_key(IdChoice::Random)
         .with_kyber_pre_key(IdChoice::Random);
     let mut bob_store_builder = TestStoreBuilder::new()
@@ -999,11 +948,15 @@ fn test_basic_simultaneous_initiate() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
-            let alice_pre_key_bundle = alice_store_builder.make_bundle_with_latest_keys(1.into());
-            let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+            let alice_pre_key_bundle =
+                alice_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
+            let bob_pre_key_bundle =
+                bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
             let alice_store = &mut alice_store_builder.store;
             let bob_store = &mut bob_store_builder.store;
@@ -1147,18 +1100,6 @@ fn test_basic_simultaneous_initiate() -> TestResult {
 fn test_simultaneous_initiate_with_lossage() -> TestResult {
     let mut alice_store_builder = TestStoreBuilder::new()
         .with_pre_key(IdChoice::Random)
-        .with_signed_pre_key(IdChoice::Random);
-    let mut bob_store_builder = TestStoreBuilder::new()
-        .with_pre_key(IdChoice::Random)
-        .with_signed_pre_key(IdChoice::Random);
-    run(
-        &mut alice_store_builder,
-        &mut bob_store_builder,
-        PRE_KYBER_MESSAGE_VERSION,
-    )?;
-
-    let mut alice_store_builder = TestStoreBuilder::new()
-        .with_pre_key(IdChoice::Random)
         .with_signed_pre_key(IdChoice::Random)
         .with_kyber_pre_key(IdChoice::Random);
     let mut bob_store_builder = TestStoreBuilder::new()
@@ -1179,11 +1120,15 @@ fn test_simultaneous_initiate_with_lossage() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
-            let alice_pre_key_bundle = alice_store_builder.make_bundle_with_latest_keys(1.into());
-            let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+            let alice_pre_key_bundle =
+                alice_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
+            let bob_pre_key_bundle =
+                bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
             let alice_store = &mut alice_store_builder.store;
             let bob_store = &mut bob_store_builder.store;
@@ -1306,18 +1251,6 @@ fn test_simultaneous_initiate_with_lossage() -> TestResult {
 fn test_simultaneous_initiate_lost_message() -> TestResult {
     let mut alice_store_builder = TestStoreBuilder::new()
         .with_pre_key(IdChoice::Random)
-        .with_signed_pre_key(IdChoice::Random);
-    let mut bob_store_builder = TestStoreBuilder::new()
-        .with_pre_key(IdChoice::Random)
-        .with_signed_pre_key(IdChoice::Random);
-    run(
-        &mut alice_store_builder,
-        &mut bob_store_builder,
-        PRE_KYBER_MESSAGE_VERSION,
-    )?;
-
-    let mut alice_store_builder = TestStoreBuilder::new()
-        .with_pre_key(IdChoice::Random)
         .with_signed_pre_key(IdChoice::Random)
         .with_kyber_pre_key(IdChoice::Random);
     let mut bob_store_builder = TestStoreBuilder::new()
@@ -1338,11 +1271,15 @@ fn test_simultaneous_initiate_lost_message() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
-            let alice_pre_key_bundle = alice_store_builder.make_bundle_with_latest_keys(1.into());
-            let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+            let alice_pre_key_bundle =
+                alice_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
+            let bob_pre_key_bundle =
+                bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
             let alice_store = &mut alice_store_builder.store;
             let bob_store = &mut bob_store_builder.store;
@@ -1472,18 +1409,6 @@ fn test_simultaneous_initiate_lost_message() -> TestResult {
 fn test_simultaneous_initiate_repeated_messages() -> TestResult {
     let mut alice_store_builder = TestStoreBuilder::new()
         .with_pre_key(IdChoice::Random)
-        .with_signed_pre_key(IdChoice::Random);
-    let mut bob_store_builder = TestStoreBuilder::new()
-        .with_pre_key(IdChoice::Random)
-        .with_signed_pre_key(IdChoice::Random);
-    run(
-        &mut alice_store_builder,
-        &mut bob_store_builder,
-        PRE_KYBER_MESSAGE_VERSION,
-    )?;
-
-    let mut alice_store_builder = TestStoreBuilder::new()
-        .with_pre_key(IdChoice::Random)
         .with_signed_pre_key(IdChoice::Random)
         .with_kyber_pre_key(IdChoice::Random);
     let mut bob_store_builder = TestStoreBuilder::new()
@@ -1504,13 +1429,16 @@ fn test_simultaneous_initiate_repeated_messages() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
             for _ in 0..15 {
                 let alice_pre_key_bundle =
-                    alice_store_builder.make_bundle_with_latest_keys(1.into());
-                let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+                    alice_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
+                let bob_pre_key_bundle =
+                    bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
                 process_prekey_bundle(
                     &bob_address,
@@ -1745,14 +1673,6 @@ fn test_simultaneous_initiate_lost_message_repeated_messages() -> TestResult {
         |builder| {
             builder.add_pre_key(IdChoice::Next);
             builder.add_signed_pre_key(IdChoice::Next);
-        },
-        PRE_KYBER_MESSAGE_VERSION,
-    )?;
-
-    run(
-        |builder| {
-            builder.add_pre_key(IdChoice::Next);
-            builder.add_signed_pre_key(IdChoice::Next);
             builder.add_kyber_pre_key(IdChoice::Next);
         },
         KYBER_AWARE_MESSAGE_VERSION,
@@ -1765,15 +1685,18 @@ fn test_simultaneous_initiate_lost_message_repeated_messages() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-            let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+            let bob_address =
+                ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
             let mut alice_store_builder = TestStoreBuilder::new();
             add_keys(&mut alice_store_builder);
             let mut bob_store_builder = TestStoreBuilder::new();
             add_keys(&mut bob_store_builder);
 
-            let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+            let bob_pre_key_bundle =
+                bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
             process_prekey_bundle(
                 &bob_address,
@@ -1797,9 +1720,9 @@ fn test_simultaneous_initiate_lost_message_repeated_messages() -> TestResult {
                 add_keys(&mut bob_store_builder);
 
                 let alice_pre_key_bundle =
-                    alice_store_builder.make_bundle_with_latest_keys((i + 2).into());
+                    alice_store_builder.make_bundle_with_latest_keys(DeviceId::new(i + 2).unwrap());
                 let bob_pre_key_bundle =
-                    bob_store_builder.make_bundle_with_latest_keys((i + 2).into());
+                    bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(i + 2).unwrap());
 
                 process_prekey_bundle(
                     &bob_address,
@@ -2085,8 +2008,10 @@ fn test_simultaneous_initiate_lost_message_repeated_messages() -> TestResult {
 fn test_zero_is_a_valid_prekey_id() -> TestResult {
     async {
         let mut csprng = OsRng.unwrap_err();
-        let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-        let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+        let alice_address =
+            ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+        let bob_address =
+            ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
         let mut alice_store = TestStoreBuilder::new().store;
         let mut bob_store_builder = TestStoreBuilder::new()
@@ -2094,7 +2019,8 @@ fn test_zero_is_a_valid_prekey_id() -> TestResult {
             .with_signed_pre_key(0.into())
             .with_kyber_pre_key(0.into());
 
-        let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+        let bob_pre_key_bundle =
+            bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
         process_prekey_bundle(
             &bob_address,
@@ -2154,7 +2080,8 @@ fn test_unacknowledged_sessions_eventually_expire() -> TestResult {
         const WELL_PAST_EXPIRATION: Duration = Duration::from_secs(60 * 60 * 24 * 90);
 
         let mut csprng = OsRng.unwrap_err();
-        let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+        let bob_address =
+            ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
         let mut alice_store = TestStoreBuilder::new().store;
         let bob_store_builder = TestStoreBuilder::new()
@@ -2162,7 +2089,8 @@ fn test_unacknowledged_sessions_eventually_expire() -> TestResult {
             .with_signed_pre_key(0.into())
             .with_kyber_pre_key(0.into());
 
-        let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(1.into());
+        let bob_pre_key_bundle =
+            bob_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
         process_prekey_bundle(
             &bob_address,
@@ -2242,14 +2170,17 @@ fn test_unacknowledged_sessions_eventually_expire() -> TestResult {
 fn prekey_message_failed_decryption_does_not_update_stores() -> TestResult {
     async {
         let mut csprng = OsRng.unwrap_err();
-        let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-        let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+        let alice_address =
+            ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+        let bob_address =
+            ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
         let alice_store_builder = TestStoreBuilder::new()
             .with_pre_key(0.into())
             .with_signed_pre_key(0.into())
             .with_kyber_pre_key(0.into());
-        let alice_pre_key_bundle = alice_store_builder.make_bundle_with_latest_keys(1.into());
+        let alice_pre_key_bundle =
+            alice_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
         let mut alice_store = alice_store_builder.store;
 
@@ -2346,14 +2277,17 @@ fn prekey_message_failed_decryption_does_not_update_stores_even_when_previously_
 ) -> TestResult {
     async {
         let mut csprng = OsRng.unwrap_err();
-        let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-        let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+        let alice_address =
+            ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+        let bob_address =
+            ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
         let alice_store_builder = TestStoreBuilder::new()
             .with_pre_key(0.into())
             .with_signed_pre_key(0.into())
             .with_kyber_pre_key(0.into());
-        let alice_pre_key_bundle = alice_store_builder.make_bundle_with_latest_keys(1.into());
+        let alice_pre_key_bundle =
+            alice_store_builder.make_bundle_with_latest_keys(DeviceId::new(1).unwrap());
 
         let mut alice_store = alice_store_builder.store;
 
@@ -2482,8 +2416,10 @@ fn prekey_message_failed_decryption_does_not_update_stores_even_when_previously_
 fn prekey_message_to_archived_session() -> TestResult {
     async {
         let mut csprng = OsRng.unwrap_err();
-        let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
-        let bob_address = ProtocolAddress::new("+14151111112".to_owned(), 1.into());
+        let alice_address =
+            ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
+        let bob_address =
+            ProtocolAddress::new("+14151111112".to_owned(), DeviceId::new(1).unwrap());
 
         let alice_store_builder = TestStoreBuilder::new()
             .with_pre_key(0.into())
@@ -2601,8 +2537,10 @@ fn run_session_interaction(alice_session: SessionRecord, bob_session: SessionRec
     async {
         use rand::seq::SliceRandom;
 
-        let alice_address = ProtocolAddress::new("+14159999999".to_owned(), 1.into());
-        let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
+        let alice_address =
+            ProtocolAddress::new("+14159999999".to_owned(), DeviceId::new(1).unwrap());
+        let bob_address =
+            ProtocolAddress::new("+14158888888".to_owned(), DeviceId::new(1).unwrap());
 
         let mut alice_store = TestStoreBuilder::new().store;
         let mut bob_store = TestStoreBuilder::new().store;
@@ -2827,14 +2765,6 @@ fn test_signedprekey_not_saved() -> TestResult {
         |builder| {
             builder.add_pre_key(IdChoice::Next);
             builder.add_signed_pre_key(IdChoice::Next);
-        },
-        PRE_KYBER_MESSAGE_VERSION,
-    )?;
-
-    run(
-        |builder| {
-            builder.add_pre_key(IdChoice::Next);
-            builder.add_signed_pre_key(IdChoice::Next);
             builder.add_kyber_pre_key(IdChoice::Next);
         },
         KYBER_AWARE_MESSAGE_VERSION,
@@ -2847,9 +2777,10 @@ fn test_signedprekey_not_saved() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let bob_device_id: DeviceId = 1.into();
+            let bob_device_id = DeviceId::new(1).unwrap();
 
-            let alice_address = ProtocolAddress::new("+14151111111".to_owned(), 1.into());
+            let alice_address =
+                ProtocolAddress::new("+14151111111".to_owned(), DeviceId::new(1).unwrap());
             let bob_address = ProtocolAddress::new("+14151111112".to_owned(), bob_device_id);
 
             let mut bob_store_builder = TestStoreBuilder::new();
@@ -3092,8 +3023,8 @@ fn test_longer_sessions() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_device_id: DeviceId = 1.into();
-            let bob_device_id: DeviceId = 1.into();
+            let alice_device_id = DeviceId::new(1).unwrap();
+            let bob_device_id = DeviceId::new(1).unwrap();
 
             let alice_address = ProtocolAddress::new("+14151111111".to_owned(), alice_device_id);
             let bob_address = ProtocolAddress::new("+14151111112".to_owned(), bob_device_id);
@@ -3224,8 +3155,8 @@ fn test_duplicate_message_error_returned() -> TestResult {
     async {
         let mut csprng = OsRng.unwrap_err();
 
-        let alice_device_id: DeviceId = 1.into();
-        let bob_device_id: DeviceId = 1.into();
+        let alice_device_id = DeviceId::new(1).unwrap();
+        let bob_device_id = DeviceId::new(1).unwrap();
 
         let alice_address = ProtocolAddress::new("+14151111111".to_owned(), alice_device_id);
         let bob_address = ProtocolAddress::new("+14151111112".to_owned(), bob_device_id);
@@ -3277,8 +3208,8 @@ fn test_pqr_state_empty_if_disabled() -> TestResult {
         async {
             let mut csprng = OsRng.unwrap_err();
 
-            let alice_device_id: DeviceId = 1.into();
-            let bob_device_id: DeviceId = 1.into();
+            let alice_device_id = DeviceId::new(1).unwrap();
+            let bob_device_id = DeviceId::new(1).unwrap();
 
             let alice_address = ProtocolAddress::new("+14151111111".to_owned(), alice_device_id);
             let bob_address = ProtocolAddress::new("+14151111112".to_owned(), bob_device_id);
@@ -3338,4 +3269,152 @@ fn test_pqr_state_empty_if_disabled() -> TestResult {
     }
 
     Ok(())
+}
+
+#[test]
+fn test_pqr_state_and_message_contents_nonempty_if_enabled() -> TestResult {
+    async {
+        let mut csprng = OsRng.unwrap_err();
+
+        let alice_device_id = DeviceId::new(1).unwrap();
+        let bob_device_id = DeviceId::new(1).unwrap();
+
+        let alice_address = ProtocolAddress::new("+14151111111".to_owned(), alice_device_id);
+        let bob_address = ProtocolAddress::new("+14151111112".to_owned(), bob_device_id);
+
+        let mut alice_store_builder = TestStoreBuilder::new();
+        alice_store_builder.add_pre_key(IdChoice::Next);
+        alice_store_builder.add_signed_pre_key(IdChoice::Next);
+        alice_store_builder.add_kyber_pre_key(IdChoice::Next);
+        let mut bob_store_builder = TestStoreBuilder::new();
+        bob_store_builder.add_pre_key(IdChoice::Next);
+        bob_store_builder.add_signed_pre_key(IdChoice::Next);
+        bob_store_builder.add_kyber_pre_key(IdChoice::Next);
+
+        let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(bob_device_id);
+
+        let alice_store = &mut alice_store_builder.store;
+        let bob_store = &mut bob_store_builder.store;
+
+        process_prekey_bundle(
+            &bob_address,
+            &mut alice_store.session_store,
+            &mut alice_store.identity_store,
+            &bob_pre_key_bundle,
+            SystemTime::now(),
+            &mut csprng,
+            UsePQRatchet::Yes,
+        )
+        .await?;
+
+        let msg = encrypt(alice_store, &bob_address, "msg1").await?;
+        assert_matches!(&msg, CiphertextMessage::PreKeySignalMessage(m) if !m.message().pq_ratchet().is_empty());
+        decrypt(bob_store, &alice_address, &msg, UsePQRatchet::Yes).await?;
+
+        let msg = encrypt(bob_store, &alice_address, "msg2").await?;
+        assert_matches!(&msg, CiphertextMessage::SignalMessage(m) if !m.pq_ratchet().is_empty());
+        decrypt(alice_store, &bob_address, &msg, UsePQRatchet::Yes).await?;
+
+        let msg = encrypt(alice_store, &bob_address, "msg3").await?;
+        assert_matches!(&msg, CiphertextMessage::SignalMessage(m) if !m.pq_ratchet().is_empty());
+
+        assert!(!alice_store
+            .session_store
+            .load_existing_sessions(&[&bob_address])?
+            .first()
+            .expect("should have Bob's address")
+            .current_pq_state()
+            .expect("should have Bob's PQ state")
+            .is_empty());
+
+        assert!(!bob_store
+            .session_store
+            .load_existing_sessions(&[&alice_address])?
+            .first()
+            .expect("should have Alice's address")
+            .current_pq_state()
+            .expect("should have Alice's PQ state")
+            .is_empty());
+
+        Ok(())
+    }
+    .now_or_never()
+    .unwrap()
+}
+
+#[test]
+fn x3dh_prekey_rejected_as_invalid_message_specifically() {
+    async {
+        let mut csprng = OsRng.unwrap_err();
+
+        let alice_device_id = DeviceId::new(1).unwrap();
+        let bob_device_id = DeviceId::new(1).unwrap();
+
+        let alice_address = ProtocolAddress::new("+14151111111".to_owned(), alice_device_id);
+        let bob_address = ProtocolAddress::new("+14151111112".to_owned(), bob_device_id);
+
+        let mut bob_store_builder = TestStoreBuilder::new();
+        bob_store_builder.add_pre_key(IdChoice::Next);
+        bob_store_builder.add_signed_pre_key(IdChoice::Next);
+        bob_store_builder.add_kyber_pre_key(IdChoice::Next);
+
+        let bob_pre_key_bundle = bob_store_builder.make_bundle_with_latest_keys(bob_device_id);
+
+        let mut alice_store = TestStoreBuilder::new().store;
+        process_prekey_bundle(
+            &bob_address,
+            &mut alice_store.session_store,
+            &mut alice_store.identity_store,
+            &bob_pre_key_bundle,
+            SystemTime::now(),
+            &mut csprng,
+            UsePQRatchet::No,
+        )
+        .await
+        .expect("valid");
+
+        let pre_key_message = support::encrypt(&mut alice_store, &bob_address, "bad")
+            .await
+            .expect("valid");
+
+        let mut bob_one_off_store = bob_store_builder.store.clone();
+        _ = support::decrypt(
+            &mut bob_one_off_store,
+            &alice_address,
+            &pre_key_message,
+            UsePQRatchet::Yes,
+        )
+        .await
+        .expect("unmodified message is fine");
+
+        let original =
+            assert_matches!(pre_key_message, CiphertextMessage::PreKeySignalMessage(m) => m);
+        let modified_message = PreKeySignalMessage::new(
+            PRE_KYBER_MESSAGE_VERSION.try_into().expect("fits in u8"),
+            original.registration_id(),
+            original.pre_key_id(),
+            original.signed_pre_key_id(),
+            None,
+            *original.base_key(),
+            *original.identity_key(),
+            original.message().clone(),
+        )
+        .expect("valid, though it won't decrypt successfully");
+
+        let err = support::decrypt(
+            &mut bob_store_builder.store,
+            &alice_address,
+            &CiphertextMessage::PreKeySignalMessage(modified_message.clone()),
+            UsePQRatchet::Yes,
+        )
+        .await
+        .expect_err("we changed the version, it should be rejected early");
+        assert_matches!(
+            err,
+            SignalProtocolError::InvalidMessage(CiphertextMessageType::PreKey, msg)
+            if msg.contains("X3DH")
+        );
+    }
+    .now_or_never()
+    .expect("sync");
 }

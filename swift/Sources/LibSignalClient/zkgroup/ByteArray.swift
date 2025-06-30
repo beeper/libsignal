@@ -7,27 +7,29 @@ import Foundation
 import SignalFfi
 
 public class ByteArray {
-    private let contents: [UInt8]
+    fileprivate let contents: Data
 
-    init(_ newContents: [UInt8], checkValid: (SignalBorrowedBuffer) -> SignalFfiErrorRef?) throws {
+    init(_ newContents: Data, checkValid: (SignalBorrowedBuffer) -> SignalFfiErrorRef?) throws {
         self.contents = newContents
         try self.withUnsafeBorrowedBuffer { buffer in
             try checkError(checkValid(buffer))
         }
     }
 
-    init(newContents: [UInt8], expectedLength: Int, unrecoverable: Bool = false) throws {
+    init(newContents: Data, expectedLength: Int, unrecoverable: Bool = false) throws {
         if newContents.count != expectedLength {
-            throw SignalError.invalidType("\(type(of: self)) uses \(expectedLength) bytes, but tried to deserialize from an array of \(newContents.count) bytes")
+            throw SignalError.invalidType(
+                "\(type(of: self)) uses \(expectedLength) bytes, but tried to deserialize from an array of \(newContents.count) bytes"
+            )
         }
         self.contents = newContents
     }
 
-    required init(contents: [UInt8]) throws {
+    required init(contents: Data) throws {
         fatalError("must be overridden by subclasses to specify how to validate the contents")
     }
 
-    public func serialize() -> [UInt8] {
+    public func serialize() -> Data {
         return self.contents
     }
 
@@ -42,13 +44,17 @@ public class ByteArray {
     /// tuples representing a fixed-size array; using another type, or using the wrong size of
     /// array, is considered a programmer error and can result in arbitrary behavior (including
     /// violating type safety). So, uh, don't do that.
-    func withUnsafePointerToSerialized<Serialized, Result>(_ callback: (UnsafePointer<Serialized>) throws -> Result) throws -> Result {
+    func withUnsafePointerToSerialized<Serialized, Result>(
+        _ callback: (UnsafePointer<Serialized>) throws -> Result
+    ) throws -> Result {
         precondition(MemoryLayout<Serialized>.alignment == 1, "not a fixed-sized array (tuple) of UInt8")
 
         return try self.contents.withUnsafeBytes { buffer in
             let expectedSize = MemoryLayout<Serialized>.size
             guard expectedSize == buffer.count else {
-                throw SignalError.invalidType("\(type(of: self)) uses \(buffer.count) bytes, but was passed to a callback that uses \(expectedSize) bytes")
+                throw SignalError.invalidType(
+                    "\(type(of: self)) uses \(buffer.count) bytes, but was passed to a callback that uses \(expectedSize) bytes"
+                )
             }
 
             // Use assumingMemoryBound(to:) here rather than bindMemory(to:)
@@ -63,7 +69,25 @@ public class ByteArray {
     /// Passes a pointer/length pair for the serialized contents to `callback`.
     ///
     /// Used for types that don't have a fixed-length representation.
-    func withUnsafeBorrowedBuffer<Result>(_ callback: (SignalBorrowedBuffer) throws -> Result) throws -> Result {
+    func withUnsafeBorrowedBuffer<Result>(_ callback: (SignalBorrowedBuffer) throws -> Result) rethrows -> Result {
         return try self.contents.withUnsafeBorrowedBuffer(callback)
+    }
+}
+
+/// A newtype for ``ByteArray`` that conforms to ``Hashable``
+///
+/// Regular ``ByteArray`` is often used for keys and should not conform
+/// to ``Hashable`` or implement `==` as a non-constant-time operation.
+public class HashableByteArray: ByteArray {}
+
+extension HashableByteArray: Equatable {
+    public static func == (lhs: HashableByteArray, rhs: HashableByteArray) -> Bool {
+        return lhs.contents == rhs.contents
+    }
+}
+
+extension HashableByteArray: Hashable {
+    public func hash(into hasher: inout Hasher) {
+        self.contents.hash(into: &hasher)
     }
 }

@@ -7,7 +7,9 @@ import Foundation
 import SignalFfi
 
 public class PreKeySignalMessage: NativeHandleOwner<SignalMutPointerPreKeySignalMessage> {
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerPreKeySignalMessage>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerPreKeySignalMessage>
+    ) -> SignalFfiErrorRef? {
         return signal_pre_key_signal_message_destroy(handle.pointer)
     }
 
@@ -19,9 +21,9 @@ public class PreKeySignalMessage: NativeHandleOwner<SignalMutPointerPreKeySignal
         self.init(owned: NonNull(result)!)
     }
 
-    public func serialize() throws -> [UInt8] {
+    public func serialize() throws -> Data {
         return try withNativeHandle { nativeHandle in
-            try invokeFnReturningArray {
+            try invokeFnReturningData {
                 signal_pre_key_signal_message_serialize($0, nativeHandle.const())
             }
         }

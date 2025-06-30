@@ -15,11 +15,16 @@ public class KEMKeyPair: ClonableHandleOwner<SignalMutPointerKyberKeyPair>, @unc
         }
     }
 
-    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerKyberKeyPair, currentHandle: SignalConstPointerKyberKeyPair) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(
+        _ newHandle: inout SignalMutPointerKyberKeyPair,
+        currentHandle: SignalConstPointerKyberKeyPair
+    ) -> SignalFfiErrorRef? {
         return signal_kyber_key_pair_clone(&newHandle, currentHandle)
     }
 
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerKyberKeyPair>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerKyberKeyPair>
+    ) -> SignalFfiErrorRef? {
         return signal_kyber_key_pair_destroy(handle.pointer)
     }
 
@@ -76,18 +81,23 @@ public class KEMPublicKey: ClonableHandleOwner<SignalMutPointerKyberPublicKey>, 
         self.init(owned: NonNull(handle)!)
     }
 
-    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerKyberPublicKey, currentHandle: SignalConstPointerKyberPublicKey) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(
+        _ newHandle: inout SignalMutPointerKyberPublicKey,
+        currentHandle: SignalConstPointerKyberPublicKey
+    ) -> SignalFfiErrorRef? {
         return signal_kyber_public_key_clone(&newHandle, currentHandle)
     }
 
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerKyberPublicKey>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerKyberPublicKey>
+    ) -> SignalFfiErrorRef? {
         return signal_kyber_public_key_destroy(handle.pointer)
     }
 
-    public func serialize() -> [UInt8] {
+    public func serialize() -> Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_kyber_public_key_serialize($0, nativeHandle.const())
                 }
             }
@@ -119,8 +129,8 @@ extension SignalConstPointerKyberPublicKey: SignalConstPointer {
 
 extension KEMPublicKey: Equatable {
     public static func == (lhs: KEMPublicKey, rhs: KEMPublicKey) -> Bool {
-        return withNativeHandles(lhs, rhs) { lHandle, rHandle in
-            failOnError {
+        return failOnError {
+            try withAllBorrowed(lhs, rhs) { lHandle, rHandle in
                 try invokeFnReturningBool {
                     signal_kyber_public_key_equals($0, lHandle.const(), rHandle.const())
                 }
@@ -139,18 +149,23 @@ public class KEMSecretKey: ClonableHandleOwner<SignalMutPointerKyberSecretKey>, 
         self.init(owned: NonNull(handle)!)
     }
 
-    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerKyberSecretKey, currentHandle: SignalConstPointerKyberSecretKey) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(
+        _ newHandle: inout SignalMutPointerKyberSecretKey,
+        currentHandle: SignalConstPointerKyberSecretKey
+    ) -> SignalFfiErrorRef? {
         return signal_kyber_secret_key_clone(&newHandle, currentHandle)
     }
 
-    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerKyberSecretKey>) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(
+        _ handle: NonNull<SignalMutPointerKyberSecretKey>
+    ) -> SignalFfiErrorRef? {
         return signal_kyber_secret_key_destroy(handle.pointer)
     }
 
-    public func serialize() -> [UInt8] {
+    public func serialize() -> Data {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningArray {
+                try invokeFnReturningData {
                     signal_kyber_secret_key_serialize($0, nativeHandle.const())
                 }
             }

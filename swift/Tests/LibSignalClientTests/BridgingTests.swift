@@ -188,23 +188,31 @@ final class BridgingTests: XCTestCase {
         let result = try first.withUnsafeBytes { first in
             try empty.withUnsafeBytes { empty in
                 try second.withUnsafeBytes { second in
-                    let slices = [SignalBorrowedBuffer(first), SignalBorrowedBuffer(empty), SignalBorrowedBuffer(second)]
+                    let slices = [
+                        SignalBorrowedBuffer(first), SignalBorrowedBuffer(empty), SignalBorrowedBuffer(second),
+                    ]
                     return try slices.withUnsafeBufferPointer { slices in
                         try invokeFnReturningBytestringArray {
-                            signal_testing_process_bytestring_array($0, SignalBorrowedSliceOfBuffers(base: slices.baseAddress, length: slices.count))
+                            signal_testing_process_bytestring_array(
+                                $0,
+                                SignalBorrowedSliceOfBuffers(base: slices.baseAddress, length: slices.count)
+                            )
                         }
                     }
                 }
             }
         }
-        XCTAssertEqual(result, [[1, 2, 3, 1, 2, 3], [], [4, 5, 6, 4, 5, 6]])
+        XCTAssertEqual(result, [[1, 2, 3, 1, 2, 3], [], [4, 5, 6, 4, 5, 6]].map { Data($0) })
     }
 
     func testBytestringArrayEmpty() throws {
         let slices: [SignalBorrowedBuffer] = []
         let result = try slices.withUnsafeBufferPointer { slices in
             try invokeFnReturningBytestringArray {
-                signal_testing_process_bytestring_array($0, SignalBorrowedSliceOfBuffers(base: slices.baseAddress, length: slices.count))
+                signal_testing_process_bytestring_array(
+                    $0,
+                    SignalBorrowedSliceOfBuffers(base: slices.baseAddress, length: slices.count)
+                )
             }
         }
         XCTAssertEqual(result, [])
@@ -223,13 +231,16 @@ final class BridgingTests: XCTestCase {
                 signal_testing_bridged_string_map_dump_to_json($0, map.const())
             }
         }
-        XCTAssertEqual(dumped, """
+        XCTAssertEqual(
+            dumped,
+            """
             {
               "a": "aaa",
               "b": "bbb",
               "c": "ccc"
             }
-            """)
+            """
+        )
     }
 
     func testReturnOptionalUuid() throws {
@@ -241,6 +252,18 @@ final class BridgingTests: XCTestCase {
             signal_testing_convert_optional_uuid($0, true)
         }
         XCTAssertEqual(UUID(uuidString: "abababab-1212-8989-baba-565656565656"), shouldBePresent)
+    }
+
+    func testFingerprintVersionMismatchError() throws {
+        let theirs = UInt32(11)
+        let ours = UInt32(22)
+        do {
+            try checkError(signal_testing_fingerprint_version_mismatch_error(theirs, ours))
+            XCTFail("should have thrown")
+        } catch SignalError.fingerprintVersionMismatch(let actualTheirs, let actualOurs) {
+            XCTAssertEqual(theirs, actualTheirs)
+            XCTAssertEqual(ours, actualOurs)
+        }
     }
 }
 

@@ -15,10 +15,10 @@ use rand::TryRngCore as _;
 mod support;
 
 pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolError> {
-    let (alice_session_record, bob_session_record) = support::initialize_sessions_v3()?;
+    let (alice_session_record, bob_session_record) = support::initialize_sessions_v4()?;
 
-    let alice_address = ProtocolAddress::new("+14159999999".to_owned(), 1.into());
-    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
+    let alice_address = ProtocolAddress::new("+14159999999".to_owned(), DeviceId::new(1).unwrap());
+    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), DeviceId::new(1).unwrap());
 
     let mut alice_store = support::test_in_memory_protocol_store()?;
     let mut bob_store = support::test_in_memory_protocol_store()?;
@@ -111,16 +111,31 @@ pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolErr
 
     let signed_pre_key_id = 22;
 
+    let kyber_pre_key_pair =
+        kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut OsRng.unwrap_err());
+    let kyber_pre_key_public = kyber_pre_key_pair.public_key.serialize();
+    let kyber_pre_key_signature = bob_store
+        .get_identity_key_pair()
+        .now_or_never()
+        .expect("sync")?
+        .private_key()
+        .calculate_signature(&kyber_pre_key_public, &mut OsRng.unwrap_err())?;
+
+    let kyber_pre_key_id: u32 = 8000;
+
     let bob_pre_key_bundle = PreKeyBundle::new(
         bob_store
             .get_local_registration_id()
             .now_or_never()
             .expect("sync")?,
-        1.into(),                 // device id
-        None,                     // pre key
-        signed_pre_key_id.into(), // signed pre key id
+        DeviceId::new(1).unwrap(), // device id
+        None,                      // pre key
+        signed_pre_key_id.into(),  // signed pre key id
         bob_signed_pre_key_pair.public_key,
         bob_signed_pre_key_signature.to_vec(),
+        kyber_pre_key_id.into(),
+        kyber_pre_key_pair.public_key.clone(),
+        kyber_pre_key_signature.to_vec(),
         *bob_store
             .get_identity_key_pair()
             .now_or_never()
@@ -140,8 +155,20 @@ pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolErr
         )
         .now_or_never()
         .expect("sync")?;
+    bob_store
+        .save_kyber_pre_key(
+            kyber_pre_key_id.into(),
+            &KyberPreKeyRecord::new(
+                kyber_pre_key_id.into(),
+                Timestamp::from_epoch_millis(42),
+                &kyber_pre_key_pair,
+                &kyber_pre_key_signature,
+            ),
+        )
+        .now_or_never()
+        .expect("sync")?;
 
-    // initialize_sessions_v3 makes up its own identity keys,
+    // initialize_sessions makes up its own identity keys,
     // so we need to reset here to avoid it looking like the identity changed.
     alice_store.identity_store.reset();
     bob_store.identity_store.reset();
@@ -214,10 +241,10 @@ pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolErr
 }
 
 pub fn session_encrypt_decrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolError> {
-    let (alice_session_record, bob_session_record) = support::initialize_sessions_v3()?;
+    let (alice_session_record, bob_session_record) = support::initialize_sessions_v4()?;
 
-    let alice_address = ProtocolAddress::new("+14159999999".to_owned(), 1.into());
-    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
+    let alice_address = ProtocolAddress::new("+14159999999".to_owned(), DeviceId::new(1).unwrap());
+    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), DeviceId::new(1).unwrap());
 
     let mut alice_store = support::test_in_memory_protocol_store()?;
     let mut bob_store = support::test_in_memory_protocol_store()?;
@@ -230,6 +257,16 @@ pub fn session_encrypt_decrypt_result(c: &mut Criterion) -> Result<(), SignalPro
         .store_session(&alice_address, &bob_session_record)
         .now_or_never()
         .expect("sync")?;
+
+    // Get the pre-key message out of the way.
+    let ctext = support::encrypt(&mut alice_store, &bob_address, "a short message")
+        .now_or_never()
+        .expect("sync")
+        .expect("success");
+    let _ptext = support::decrypt(&mut bob_store, &alice_address, &ctext, UsePQRatchet::No)
+        .now_or_never()
+        .expect("sync")
+        .expect("success");
 
     c.bench_function("session encrypt+decrypt 1 way", |b| {
         b.iter(|| {
