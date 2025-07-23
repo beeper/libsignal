@@ -38,9 +38,8 @@ jobs:
           runs-on: ubuntu-arm64
         - target: x86_64-pc-windows-gnu
           runs-on: windows-latest
-        # This is missing bash? https://github.com/actions/partner-runner-images/issues/55
-        #- target: aarch64-pc-windows-gnu
-        #  runs-on: windows-arm64
+        - target: aarch64-pc-windows-gnullvm
+          runs-on: windows-11-arm
 
         - target: aarch64-linux-android
           android-prefix: aarch64-linux-android
@@ -65,7 +64,16 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Setup Rust
+      if: matrix.target != 'aarch64-pc-windows-gnullvm'
       uses: actions-rust-lang/setup-rust-toolchain@fb51252c7ba57d633bc668f941da052e410add48 # v1.13.0
+
+    # TODO remove this special case once libsignal bumps the default rust toolchain?
+    - name: Setup Rust
+      if: matrix.target == 'aarch64-pc-windows-gnullvm'
+      uses: actions-rust-lang/setup-rust-toolchain@fb51252c7ba57d633bc668f941da052e410add48 # v1.13.0
+      with:
+        toolchain: nightly
+        target: ${{ matrix.target }}
 
     - name: Install Protoc
       uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
@@ -87,11 +95,11 @@ jobs:
         packages: 'tools platform-tools ndk;26.1.10909125'
 
     - name: Install winget for Windows
-      if: runner.os == 'Windows'
+      if: matrix.target == 'x86_64-pc-windows-gnu'
       uses: Cyberboss/install-winget@v1
 
     - name: Install NASM for Windows
-      if: runner.os == 'Windows'
+      if: matrix.target == 'x86_64-pc-windows-gnu'
       run: |
         winget install nasm --accept-package-agreements --accept-source-agreements --disable-interactivity --silent
 
@@ -99,6 +107,12 @@ jobs:
       if: runner.os == 'macOS'
       with:
         xcode-version: 'latest-stable'
+
+    - uses: msys2/setup-msys2@v2
+      if: matrix.target == 'aarch64-pc-windows-gnullvm'
+      with:
+        msystem: 'CLANGARM64'
+        location: C:\.\
 
     - name: build libsignal
       run: |
@@ -118,9 +132,26 @@ jobs:
           export CARGO_PROFILE_RELEASE_DEBUG=1
           export CARGO_PROFILE_RELEASE_OPT_LEVEL=1
         fi
-        if [ "${{ runner.os }}" = "Windows" ]; then
-            rustup set default-host ${{ matrix.target }}
+
+        if [ "${{ matrix.target }}" = "aarch64-pc-windows-gnullvm" ]; then
+          rm rust-toolchain
+
+          choco install wget
+          wget -q https://github.com/1Conan/llvm-mingw/releases/download/20250721/llvm-mingw-20250721-ucrt-aarch64.zip
+          unzip -q llvm-mingw*.zip
+          rm  llvm-mingw*.zip
+          mv llvm-mingw* /c/llvm-mingw
+
+          export PATH=/c/llvm-mingw/bin:$PATH
+          export LIBCLANG_PATH=/c/llvm-mingw/bin
+          export CMAKE_TOOLCHAIN_FILE="$(pwd)/boring-sys-win-arm64.cmake"
+
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-w64-windows-gnu"
+          export RUSTFLAGS="-A dead_code -A mismatched_lifetime_syntaxes -A unfulfilled_lint_expectations"
+        elif [ "${{ runner.os }}" = "Windows" ]; then
+          rustup set default-host ${{ matrix.target }}
         fi
+
         rustup target add ${{ matrix.target }}
         cargo build --locked --target ${{ matrix.target }} -p libsignal-ffi --profile=release
         mv target/${{ matrix.target }}/release/libsignal_ffi.a libsignal_ffi_${{ matrix.target }}.a
