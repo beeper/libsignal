@@ -10,7 +10,7 @@ use std::ops::Deref;
 
 use itertools::Itertools as _;
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
-use libsignal_net_chat::api::registration::PushTokenType;
+use libsignal_net_chat::api::registration::PushToken;
 use libsignal_net_chat::api::ChallengeOption;
 use libsignal_protocol::*;
 use paste::paste;
@@ -20,7 +20,7 @@ use super::*;
 use crate::io::{InputStream, SyncInputStream};
 use crate::net::chat::ChatListener;
 use crate::net::registration::{
-    ConnectChatBridge, RegistrationCreateSessionRequest, RegistrationPushTokenType,
+    ConnectChatBridge, RegistrationCreateSessionRequest, RegistrationPushToken,
 };
 use crate::support::{extend_lifetime, AsType, FixedLengthBincodeSerializable, Serialized};
 
@@ -399,19 +399,13 @@ impl<const LEN: usize> ResultTypeInfo for [u8; LEN] {
 impl SimpleArgTypeInfo for Box<[String]> {
     type ArgType = BorrowedBytestringArray;
     fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
-        let BorrowedBytestringArray { bytes, lengths } = foreign;
-        let (mut bytes, lengths) = unsafe { (bytes.as_slice()?, lengths.as_slice()?) };
-
-        let mut out = Vec::with_capacity(lengths.len());
-        for length in lengths {
-            let string;
-            (string, bytes) = bytes.split_at(*length);
-            let string = std::str::from_utf8(string)
-                .map_err(|_| SignalProtocolError::InvalidArgument("invalid UTF-8".to_string()))?;
-            out.push(string.to_owned())
-        }
-
-        Ok(out.into_boxed_slice())
+        unsafe { foreign.iter()? }
+            .map(|bytes| {
+                Ok(std::str::from_utf8(bytes)
+                    .map_err(|_| SignalProtocolError::InvalidArgument("invalid UTF-8".to_string()))?
+                    .to_owned())
+            })
+            .try_collect()
     }
 }
 
@@ -422,6 +416,24 @@ impl SimpleArgTypeInfo for Option<Box<[u8]>> {
         let OptionalBorrowedSliceOf { present, value } = foreign;
         let slice = present.then(|| unsafe { value.as_slice() }).transpose()?;
         Ok(slice.map(Box::from))
+    }
+}
+
+impl SimpleArgTypeInfo for libsignal_net::chat::LanguageList {
+    type ArgType = <Box<[String]> as SimpleArgTypeInfo>::ArgType;
+
+    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+        let entries: Vec<&str> = unsafe { foreign.iter()? }
+            .map(|bytes| {
+                std::str::from_utf8(bytes)
+                    .map_err(|_| SignalProtocolError::InvalidArgument("invalid UTF-8".to_string()))
+            })
+            .try_collect()?;
+        Ok(
+            libsignal_net::chat::LanguageList::parse(&entries).map_err(|_| {
+                SignalProtocolError::InvalidArgument("invalid language in list".to_string())
+            })?,
+        )
     }
 }
 
@@ -510,11 +522,13 @@ impl SimpleArgTypeInfo for Box<dyn ConnectChatBridge> {
     }
 }
 
-impl SimpleArgTypeInfo for RegistrationPushTokenType {
-    type ArgType = *const std::ffi::c_void;
-    fn convert_from(_foreign: Self::ArgType) -> SignalFfiResult<Self> {
+impl SimpleArgTypeInfo for RegistrationPushToken {
+    type ArgType = *const std::ffi::c_char;
+    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
         // FFI is only used from Apple platforms.
-        Ok(Self::Apn)
+        Ok(Self::Apn {
+            push_token: String::convert_from(foreign)?,
+        })
     }
 }
 
@@ -531,11 +545,11 @@ impl SimpleArgTypeInfo for RegistrationCreateSessionRequest {
         let push_token: Option<String> = SimpleArgTypeInfo::convert_from(push_token)?;
 
         // The FFI bindings are only used for Swift, which is used on Apple platforms.
-        let push_token_type = push_token.is_some().then_some(PushTokenType::Apn);
+        let push_token = push_token.map(|push_token| PushToken::Apn { push_token });
+
         Ok(Self {
             number: String::convert_from(number)?,
             push_token,
-            push_token_type,
             mcc: SimpleArgTypeInfo::convert_from(mcc)?,
             mnc: SimpleArgTypeInfo::convert_from(mnc)?,
         })
@@ -816,6 +830,25 @@ impl<'a, T: BridgeHandle> ArgTypeInfo<'a> for &'a [&'a T] {
     }
 }
 
+impl<'a> ArgTypeInfo<'a> for &'a SignalFfiError {
+    // This is a lie, we can't *really* guarantee that the contents of an error are unwind-safe. But
+    // it's very unlikely we'll encounter one that isn't, especially when we only use them immutably
+    // in practice.
+    type ArgType = UnwindSafeArg<*const SignalFfiError>;
+    type StoredType = *const SignalFfiError;
+
+    fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
+        if foreign.is_null() {
+            return Err(NullPointerError.into());
+        }
+        Ok(foreign.0)
+    }
+
+    fn load_from(stored: &'a mut Self::StoredType) -> Self {
+        unsafe { stored.as_ref() }.expect("non-null checked above")
+    }
+}
+
 impl<T: BridgeHandle> ResultTypeInfo for T {
     type ResultType = MutPointer<T>;
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
@@ -1085,8 +1118,9 @@ macro_rules! ffi_arg_type {
     (Option<E164>) => (*const std::ffi::c_char);
     (AccountEntropyPool) => (*const std::ffi::c_char);
     (RegistrationCreateSessionRequest) => (ffi::FfiRegistrationCreateSessionRequest);
-    (RegistrationPushTokenType) => (*const std::ffi::c_void);
+    (RegistrationPushToken) => (*const std::ffi::c_char);
     (SignedPublicPreKey) => (ffi::FfiSignedPublicPreKey);
+    (&SignalFfiError) => (ffi::UnwindSafeArg<*const SignalFfiError>);
     (&[u8; $len:expr]) => (*const [u8; $len]);
     (Option<&[u8; $len:expr]>) => (*const [u8; $len]);
     (&[& $typ:ty]) => (ffi::BorrowedSliceOf<ffi::ConstPointer< $typ >>);
@@ -1096,6 +1130,7 @@ macro_rules! ffi_arg_type {
     (&mut $typ:ty) => (ffi::MutPointer< $typ >);
     (Option<& $typ:ty>) => (ffi::ConstPointer< $typ >);
     (Box<[String]>) => (ffi::BorrowedBytestringArray);
+    (LanguageList) => (ffi::BorrowedBytestringArray);
     (Box<[u8]>) => (ffi::BorrowedSliceOf<std::ffi::c_uchar>);
     (Box<dyn $typ:ty >) => (ffi::ConstPointer< ::paste::paste!(ffi::[<Ffi $typ Struct>]) >);
     (Option<Box<dyn $typ:ty> >) => (ffi::ConstPointer< ::paste::paste!(ffi::[<Ffi $typ Struct>]) >);

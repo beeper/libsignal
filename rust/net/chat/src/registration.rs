@@ -6,7 +6,7 @@
 use std::convert::Infallible;
 use std::panic::UnwindSafe;
 
-use libsignal_net::chat::{Request as ChatRequest, Response as ChatResponse};
+use libsignal_net::chat::{LanguageList, Request as ChatRequest, Response as ChatResponse};
 use static_assertions::assert_impl_all;
 
 use crate::api::registration::*;
@@ -127,8 +127,7 @@ impl<'c> RegistrationService<'c> {
 
     pub async fn request_push_challenge(
         &mut self,
-        push_token: &str,
-        push_token_type: PushTokenType,
+        push_token: &PushToken,
     ) -> Result<(), RequestError<UpdateSessionError>> {
         let Self {
             session_id,
@@ -142,7 +141,7 @@ impl<'c> RegistrationService<'c> {
             session_id: _,
             session: response_session,
         } = Registration(&*connection)
-            .request_push_challenge(session_id, push_token, push_token_type)
+            .request_push_challenge(session_id, push_token)
             .await?;
 
         log::info!("request push challenge succeeded");
@@ -154,7 +153,7 @@ impl<'c> RegistrationService<'c> {
         &mut self,
         transport: VerificationTransport,
         client: &str,
-        languages: &[String],
+        languages: LanguageList,
     ) -> Result<(), RequestError<RequestVerificationCodeError>> {
         let Self {
             session_id,

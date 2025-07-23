@@ -98,7 +98,7 @@ public class MessageBackupValidationTest {
     assertFalse("unexpected EOF", backupInfoLength == -1);
     assertTrue("single-byte varint", backupInfoLength < 0x80);
     final byte[] backupInfo = new byte[backupInfoLength];
-    assertEquals("unexpected EOF", input.read(backupInfo), backupInfoLength);
+    assertEquals("unexpected EOF", backupInfoLength, input.read(backupInfo));
     final OnlineBackupValidator backup = new OnlineBackupValidator(backupInfo, BACKUP_PURPOSE);
 
     int frameLength;
@@ -112,7 +112,7 @@ public class MessageBackupValidationTest {
         frameLength |= secondByte << 7;
       }
       final byte[] frame = new byte[frameLength];
-      assertEquals("unexpected EOF", input.read(frame), frameLength);
+      assertEquals("unexpected EOF", frameLength, input.read(frame));
       backup.addFrame(frame);
     }
 
@@ -166,13 +166,13 @@ public class MessageBackupValidationTest {
         };
     MessageBackupKey key = makeMessageBackupKey();
 
-    ValidationError error =
+    IOException error =
         assertThrows(
-            ValidationError.class,
+            IOException.class,
             () -> {
               MessageBackup.validate(key, BACKUP_PURPOSE, factory, 0);
             });
-    assertEquals(error.getMessage(), "not enough bytes for an HMAC");
+    assertEquals("unexpected end of file", error.getMessage());
   }
 
   @Test
@@ -201,7 +201,7 @@ public class MessageBackupValidationTest {
             () -> {
               MessageBackup.validate(key, BACKUP_PURPOSE, throwingStreamFactory, length);
             });
-    assertEquals(thrown.getMessage(), ThrowingInputStream.MESSAGE);
+    assertEquals(ThrowingInputStream.MESSAGE, thrown.getMessage());
   }
 
   @Test
@@ -224,12 +224,11 @@ public class MessageBackupValidationTest {
         };
     MessageBackupKey key = makeMessageBackupKey();
 
-    ValidationError error =
-        assertThrows(
-            ValidationError.class,
-            () -> {
-              MessageBackup.validate(key, BACKUP_PURPOSE, factory, 0);
-            });
+    assertThrows(
+        IOException.class,
+        () -> {
+          MessageBackup.validate(key, BACKUP_PURPOSE, factory, 0);
+        });
     assertTrue("never actually opened?", openCount.get() > 0);
     assertEquals("stream(s) not properly closed", openCount.get(), closeCount.get());
   }

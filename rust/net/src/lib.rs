@@ -12,6 +12,7 @@ pub mod enclave;
 pub mod env;
 pub mod proto;
 pub mod svr;
+pub mod svrb;
 pub mod ws;
 
 // Re-export from `libsignal_net_infra`.

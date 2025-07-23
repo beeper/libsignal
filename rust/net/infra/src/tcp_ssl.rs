@@ -5,11 +5,9 @@
 
 use std::future::Future;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use boring_signal::ssl::{ConnectConfiguration, SslConnector, SslMethod, SslSignatureAlgorithm};
-use tokio::net::TcpStream;
 use tokio_boring_signal::SslStream;
 
 use crate::certs::RootCertificates;
@@ -26,6 +24,11 @@ pub mod proxy;
 
 pub const LONG_TCP_HANDSHAKE_THRESHOLD: Duration = Duration::from_secs(3);
 pub const LONG_TLS_HANDSHAKE_THRESHOLD: Duration = Duration::from_secs(3);
+
+#[cfg(target_os = "macos")]
+pub type TcpStream = crate::stream::WorkaroundWriteBugDuplexStream<tokio::net::TcpStream>;
+#[cfg(not(target_os = "macos"))]
+pub type TcpStream = tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
 pub struct TcpSslConnector {
@@ -97,15 +100,15 @@ impl Connector<TcpRoute<IpAddr>, ()> for StatelessTcp {
         &self,
         (): (),
         route: TcpRoute<IpAddr>,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> {
         let TcpRoute { address, port } = route;
 
         async move {
             let start = tokio::time::Instant::now();
-            tokio::time::timeout(
+            let result = tokio::time::timeout(
                 crate::timeouts::TCP_CONNECTION_TIMEOUT,
-                TcpStream::connect((address, port.get())),
+                tokio::net::TcpStream::connect((address, port.get())),
             )
             .await
             .map_err(|_| {
@@ -113,7 +116,10 @@ impl Connector<TcpRoute<IpAddr>, ()> for StatelessTcp {
                 log::warn!("{log_tag}: TCP connection timed out after {elapsed:?}");
                 TransportConnectError::TcpConnectionFailed
             })?
-            .map_err(|_| TransportConnectError::TcpConnectionFailed)
+            .map_err(|_| TransportConnectError::TcpConnectionFailed)?;
+            #[cfg(target_os = "macos")]
+            let result = crate::stream::WorkaroundWriteBugDuplexStream::new(result);
+            Ok(result)
         }
     }
 }
@@ -130,7 +136,7 @@ where
         &self,
         inner: Inner,
         fragment: TlsRouteFragment,
-        _log_tag: Arc<str>,
+        _log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let TlsRouteFragment {
             root_certs,
@@ -234,23 +240,21 @@ pub(crate) mod testutil {
     /// Asserts that the server returns 200 and [`FAKE_RESPONSE`].
     pub(crate) async fn make_http_request_response_over(
         mut stream: impl AsyncRead + AsyncWrite + Unpin,
-    ) {
+    ) -> Result<(), std::io::Error> {
         stream
             .write_all(b"GET /index HTTP/1.1\r\nConnection: close\r\n\r\n")
-            .await
-            .expect("can send request");
+            .await?;
 
         let response = {
             let mut response = String::new();
-            stream
-                .read_to_string(&mut response)
-                .await
-                .expect("receives response");
+            stream.read_to_string(&mut response).await?;
             response
         };
         let lines = response.lines().collect::<Vec<_>>();
 
         assert_eq!(lines.first(), Some("HTTP/1.1 200 OK").as_ref(), "{lines:?}");
         assert_eq!(lines.last(), Some(FAKE_RESPONSE).as_ref(), "{lines:?}");
+
+        Ok(())
     }
 }

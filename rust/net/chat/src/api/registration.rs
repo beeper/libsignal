@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use libsignal_core::{Aci, Pni, ServiceIdKind};
 use libsignal_net::auth::Auth;
+use libsignal_net::chat::LanguageList;
 use libsignal_protocol::{GenericSignedPreKey, PublicKey};
 use serde_with::{
     serde_as, skip_serializing_none, DurationMilliSeconds, DurationSeconds, FromInto,
@@ -46,8 +47,7 @@ pub(crate) trait RegistrationChatApi {
     fn request_push_challenge(
         &self,
         session_id: &SessionId,
-        push_token: &str,
-        push_token_type: PushTokenType,
+        push_token: &PushToken,
     ) -> impl Future<Output = Result<RegistrationResponse, Self::Error<UpdateSessionError>>> + Send;
 
     fn request_verification_code(
@@ -55,7 +55,7 @@ pub(crate) trait RegistrationChatApi {
         session_id: &SessionId,
         transport: VerificationTransport,
         client: &str,
-        languages: &[String],
+        languages: LanguageList,
     ) -> impl Future<Output = Result<RegistrationResponse, Self::Error<RequestVerificationCodeError>>>
            + Send;
 
@@ -101,14 +101,25 @@ pub(crate) struct RegistrationResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CreateSession {
     pub number: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub push_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub push_token_type: Option<PushTokenType>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub push_token: Option<PushToken>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mnc: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "pushTokenType", rename_all = "camelCase")]
+pub enum PushToken {
+    Apn {
+        #[serde(rename = "pushToken")]
+        push_token: String,
+    },
+    Fcm {
+        #[serde(rename = "pushToken")]
+        push_token: String,
+    },
 }
 
 #[serde_as]
@@ -126,14 +137,6 @@ pub struct RegistrationSession {
     pub next_verification_attempt: Option<Duration>,
     #[serde_as(as = "HashSet<serde_with::DisplayFromStr>")]
     pub requested_information: HashSet<ChallengeOption>,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, strum::EnumString)]
-#[strum(serialize_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub enum PushTokenType {
-    Apn,
-    Fcm,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, strum::EnumString)]

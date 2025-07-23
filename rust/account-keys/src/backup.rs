@@ -15,6 +15,7 @@ use libsignal_core::curve::PrivateKey;
 use libsignal_core::Aci;
 use partial_default::PartialDefault;
 use sha2::Sha256;
+use signal_crypto::Aes256Ctr32;
 
 use crate::AccountEntropyPool;
 
@@ -99,6 +100,17 @@ impl BackupKey<V1> {
     }
 }
 
+const BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE: usize = 32;
+const BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE: usize = 32;
+const BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_IV_SIZE: usize = Aes256Ctr32::NONCE_SIZE;
+
+pub struct BackupForwardSecrecyPassword(pub [u8; 32]);
+pub struct BackupForwardSecrecyEncryptionKey {
+    pub cipher_key: [u8; BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE],
+    pub hmac_key: [u8; BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE],
+    pub iv: [u8; BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_IV_SIZE],
+}
+
 impl<const VERSION: u8> BackupKey<VERSION> {
     /// Derives a backup ID consistently with how this backup key was created.
     pub fn derive_backup_id(&self, aci: &Aci) -> BackupId {
@@ -120,8 +132,47 @@ impl<const VERSION: u8> BackupKey<VERSION> {
             }
             _ => panic!("not a valid backup ID version: {VERSION}"),
         }
-
         BackupId(bytes)
+    }
+
+    /// Derives a backup forward secrecy token password from a backup ID and
+    /// associated password-specific salt.  This password is meant to protect
+    /// a forward secrecy token within secure storage media.
+    pub fn derive_forward_secrecy_password(&self, salt: &[u8]) -> BackupForwardSecrecyPassword {
+        let mut bytes = [0; 32];
+        const INFO: &[u8] = b"Signal Message Backup 20250627:SVR PIN";
+        Hkdf::<Sha256>::new(Some(salt), &self.0)
+            .expand(INFO, &mut bytes)
+            .expect("valid length");
+        BackupForwardSecrecyPassword(bytes)
+    }
+    /// Derives all values necessary to encrypt a forward secrecy token based
+    /// on a backup ID and associated encryption-specific salt.
+    pub fn derive_forward_secrecy_encryption_key(
+        &self,
+        salt: &[u8],
+    ) -> BackupForwardSecrecyEncryptionKey {
+        let mut bytes = [0u8; BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE
+            + BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE
+            + BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_IV_SIZE];
+        const INFO: &[u8] =
+            b"Signal Message Backup 20250627:BackupForwardSecrecyToken Encryption Key";
+        Hkdf::<Sha256>::new(Some(salt), &self.0)
+            .expand(INFO, &mut bytes)
+            .expect("valid length");
+        BackupForwardSecrecyEncryptionKey {
+            cipher_key: bytes[..BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE]
+                .try_into()
+                .expect("should have enough bytes"),
+            hmac_key: bytes[BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE..]
+                [..BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE]
+                .try_into()
+                .expect("should have enough bytes"),
+            iv: bytes[BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE..]
+                [BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE..]
+                .try_into()
+                .expect("should have enough bytes"),
+        }
     }
 }
 
@@ -139,6 +190,21 @@ pub struct BackupId(pub [u8; BackupId::LEN]);
 
 impl BackupId {
     pub const LEN: usize = 16;
+}
+
+/// An additional token stored in a secure enclave to provide forward secrecy
+/// for backups.
+#[derive(Debug, Clone, Copy, PartialDefault)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(transparent)
+)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
+pub struct BackupForwardSecrecyToken(pub [u8; BackupForwardSecrecyToken::LEN]);
+
+impl BackupForwardSecrecyToken {
+    pub const LEN: usize = 32;
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use std::num::NonZeroU16;
 
 use attest::svr2::RaftConfig;
 use const_str::ip_addr;
-use libsignal_net::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, Svr2};
+use libsignal_net::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, SvrSgx};
 use libsignal_net::env::{ConnectionConfig, DomainConfig, Env, KeyTransConfig};
 use libsignal_net::infra::certs::RootCertificates;
 
@@ -43,6 +43,9 @@ const DUMMY_RAFT_CONFIG: &RaftConfig = &RaftConfig {
     max_voting_replicas: 9,
     super_majority: 0,
     group_id: 17325409821474389983,
+    attestation_timeout: 604800,
+    db_version: 2,
+    simulated: false,
 };
 
 const DUMMY_CDSI_ENDPOINT_PARAMS: EndpointParams<'static, Cdsi> = EndpointParams {
@@ -50,7 +53,7 @@ const DUMMY_CDSI_ENDPOINT_PARAMS: EndpointParams<'static, Cdsi> = EndpointParams
     raft_config: (),
 };
 
-const DUMMY_SVR2_ENDPOINT_PARAMS: EndpointParams<'static, Svr2> = EndpointParams {
+const DUMMY_SVR2_ENDPOINT_PARAMS: EndpointParams<'static, SvrSgx> = EndpointParams {
     mr_enclave: MrEnclave::new(ENCLAVE_ID_MOCK_SERVER),
     raft_config: DUMMY_RAFT_CONFIG,
 };
@@ -84,6 +87,7 @@ pub(crate) fn localhost_test_env_with_ports(
             ),
             params: DUMMY_SVR2_ENDPOINT_PARAMS,
         },
+        svr_b: None,
         keytrans_config: DUMMY_KEYTRANS_CONFIG,
     }
 }

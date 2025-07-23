@@ -299,6 +299,7 @@ public final class Native {
   public static native void ECPrivateKey_Destroy(long handle);
   public static native long ECPrivateKey_Generate();
   public static native long ECPrivateKey_GetPublicKey(long k) throws Exception;
+  public static native byte[] ECPrivateKey_HpkeOpen(long sk, byte[] ciphertext, byte[] info, byte[] associatedData) throws Exception;
   public static native byte[] ECPrivateKey_Serialize(long obj) throws Exception;
   public static native byte[] ECPrivateKey_Sign(long key, byte[] message) throws Exception;
 
@@ -307,6 +308,7 @@ public final class Native {
   public static native void ECPublicKey_Destroy(long handle);
   public static native boolean ECPublicKey_Equals(long lhs, long rhs);
   public static native byte[] ECPublicKey_GetPublicKeyBytes(long obj) throws Exception;
+  public static native byte[] ECPublicKey_HpkeSeal(long pk, byte[] plaintext, byte[] info, byte[] associatedData);
   public static native byte[] ECPublicKey_Serialize(long obj) throws Exception;
   public static native boolean ECPublicKey_Verify(long key, byte[] message, byte[] signature);
 
@@ -573,7 +575,7 @@ public final class Native {
   public static native void RegistrationService_Destroy(long handle);
   public static native CompletableFuture<Long> RegistrationService_RegisterAccount(long asyncRuntime, long service, long registerAccount, long accountAttributes);
   public static native long RegistrationService_RegistrationSession(long service);
-  public static native CompletableFuture<Void> RegistrationService_RequestPushChallenge(long asyncRuntime, long service, String pushToken, Object pushTokenType);
+  public static native CompletableFuture<Void> RegistrationService_RequestPushChallenge(long asyncRuntime, long service, String pushToken);
   public static native CompletableFuture<Void> RegistrationService_RequestVerificationCode(long asyncRuntime, long service, String transport, String client, Object[] languages);
   public static native CompletableFuture<Long> RegistrationService_ReregisterAccount(long asyncRuntime, ConnectChatBridge connectChat, String number, long registerAccount, long accountAttributes);
   public static native CompletableFuture<Long> RegistrationService_ResumeSession(long asyncRuntime, String sessionId, String number, ConnectChatBridge connectChat);

@@ -54,7 +54,7 @@ pub enum Error {
     /// {0}
     BackupCompletion(#[from] backup::CompletionError),
     /// {0}
-    Parse(#[from] parse::ParseError),
+    Parse(std::io::Error),
     /// no frames found
     NoFrames,
     /// invalid protobuf: {0}
@@ -224,7 +224,11 @@ where
             unknown_fields.extend(iter);
         };
 
-    let first = reader.read_next().await?.ok_or(Error::NoFrames)?;
+    let first = reader
+        .read_next()
+        .await
+        .map_err(Error::Parse)?
+        .ok_or(Error::NoFrames)?;
     let backup_info = proto::backup::BackupInfo::parse_from_bytes(&first)?;
 
     visitor(&backup_info);
@@ -277,7 +281,7 @@ where
         })
         .expect("can create threads");
 
-    'outer: while let Some(mut buf) = reader.read_next().await? {
+    'outer: while let Some(mut buf) = reader.read_next().await.map_err(Error::Parse)? {
         // Try to send to the processing thread in a spin-loop.
         // Normally the processing thread is faster than the reader thread, so this should only spin
         // a few times before success, which is faster than going to sleep and waiting to be woken.
@@ -313,6 +317,21 @@ where
     Ok(backup)
 }
 
+/// For APIs that don't have a good way to report unknown fields, logging is the best we can do if
+/// we don't want a fatal error.
+fn log_unknown_fields<V: crate::unknown::VisitUnknownFields>(input: &V, context: &'static str) {
+    for (path, value) in input.collect_unknown_fields() {
+        log::warn!(
+            "{context}: {}",
+            FoundUnknownField {
+                frame_index: 0,
+                path,
+                value
+            }
+        );
+    }
+}
+
 impl<M: backup::method::Method + backup::ReferencedTypes> backup::PartialBackup<M> {
     pub fn by_parsing(
         raw_backup_info: &[u8],
@@ -321,18 +340,7 @@ impl<M: backup::method::Method + backup::ReferencedTypes> backup::PartialBackup<
     ) -> Result<Self, crate::Error> {
         let backup_info_proto = proto::backup::BackupInfo::parse_from_bytes(raw_backup_info)?;
         visitor(&backup_info_proto);
-        for (path, value) in backup_info_proto.collect_unknown_fields() {
-            // This API doesn't have a good way to report unknown fields; logging is the best we can
-            // do if we don't want a fatal error.
-            log::warn!(
-                "BackupInfo proto: {}",
-                FoundUnknownField {
-                    frame_index: 0,
-                    path,
-                    value
-                }
-            );
-        }
+        log_unknown_fields(&backup_info_proto, "BackupInfo proto");
         Ok(Self::new(backup_info_proto, purpose)?)
     }
 
@@ -356,7 +364,7 @@ impl From<VerifyHmacError> for Error {
     fn from(value: VerifyHmacError) -> Self {
         match value {
             VerifyHmacError::HmacMismatch(e) => e.into(),
-            VerifyHmacError::Io(e) => Self::Parse(e.into()),
+            VerifyHmacError::Io(e) => Self::Parse(e),
         }
     }
 }

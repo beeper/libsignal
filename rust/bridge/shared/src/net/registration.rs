@@ -7,11 +7,12 @@ use std::collections::HashSet;
 use libsignal_bridge_macros::{bridge_fn, bridge_io};
 use libsignal_bridge_types::net::registration::{
     ConnectChatBridge, RegisterAccountInner, RegisterAccountRequest, RegistrationAccountAttributes,
-    RegistrationCreateSessionRequest, RegistrationPushTokenType, RegistrationService,
+    RegistrationCreateSessionRequest, RegistrationPushToken, RegistrationService,
     SignedPublicPreKey,
 };
 use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::*;
+use libsignal_net::chat::LanguageList;
 use libsignal_net_chat::api::registration::*;
 use libsignal_net_chat::api::ChallengeOption;
 use libsignal_net_chat::registration::RequestError;
@@ -54,21 +55,20 @@ async fn RegistrationService_ResumeSession(
     .await
 }
 
-#[bridge_io(TokioAsyncContext)]
+#[bridge_io(TokioAsyncContext, node = false)]
 async fn RegistrationService_RequestPushChallenge(
     service: &RegistrationService,
-    push_token: String,
-    push_token_type: RegistrationPushTokenType,
+    push_token: RegistrationPushToken,
 ) -> Result<(), RequestError<UpdateSessionError>> {
     service
         .0
         .lock()
         .await
-        .request_push_challenge(&push_token, push_token_type)
+        .request_push_challenge(&push_token)
         .await
 }
 
-#[bridge_io(TokioAsyncContext)]
+#[bridge_io(TokioAsyncContext, node = false)]
 async fn RegistrationService_SubmitPushChallenge(
     service: &RegistrationService,
     push_challenge: String,
@@ -86,13 +86,13 @@ async fn RegistrationService_RequestVerificationCode(
     service: &RegistrationService,
     transport: AsType<VerificationTransport, String>,
     client: String,
-    languages: Box<[String]>,
+    languages: LanguageList,
 ) -> Result<(), RequestError<RequestVerificationCodeError>> {
     service
         .0
         .lock()
         .await
-        .request_verification_code(transport.into_inner(), &client, &languages)
+        .request_verification_code(transport.into_inner(), &client, languages)
         .await
 }
 

@@ -16,14 +16,17 @@ workspace = true
 
 [dependencies]
 libsignal-core = { workspace = true }
+signal-crypto = { workspace = true }
 
 argon2 = { workspace = true, features = ["zeroize"] }
 derive_more = { workspace = true, features = ["from"] }
 displaydoc = { workspace = true }
 hkdf = { workspace = true }
 partial-default = { workspace = true, features = ["derive"] }
+protobuf = { workspace = true }
 rand = { workspace = true }
 rand_core = { workspace = true, features = ["os_rng"] }
+rand_core_06 = { workspace = true, features = ["getrandom"] }        # used by argon2
 serde = { workspace = true, optional = true, features = ["derive"] }
 sha2 = { workspace = true }
 static_assertions = { workspace = true }
@@ -35,6 +38,9 @@ const-str = { workspace = true }
 criterion = { workspace = true }
 hmac = { workspace = true, features = ["reset"] }
 proptest = { workspace = true }
+
+[build-dependencies]
+protobuf-codegen = { workspace = true }
 
 [[bench]]
 name = "hash"

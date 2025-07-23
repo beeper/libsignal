@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use auto_enums::enum_derive;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
 use tokio_socks::tcp::{Socks4Stream, Socks5Stream};
 use tokio_socks::TargetAddr;
 
@@ -20,6 +19,7 @@ use crate::dns::DnsResolver;
 use crate::errors::TransportConnectError;
 use crate::host::Host;
 use crate::route::{Connector, ConnectorExt as _, SocksRoute, TcpRoute};
+use crate::tcp_ssl::TcpStream;
 use crate::Connection;
 
 pub(crate) const LONG_FULL_CONNECT_THRESHOLD: Duration = super::LONG_TCP_HANDSHAKE_THRESHOLD
@@ -64,7 +64,7 @@ impl Connector<SocksRoute<IpAddr>, ()> for super::StatelessProxied {
         &self,
         (): (),
         route: SocksRoute<IpAddr>,
-        log_tag: Arc<str>,
+        log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let SocksRoute {
             protocol,
@@ -93,9 +93,7 @@ impl Connector<SocksRoute<IpAddr>, ()> for super::StatelessProxied {
                 }
             };
 
-            let stream = super::super::StatelessTcp
-                .connect(proxy, log_tag.clone())
-                .await?;
+            let stream = super::super::StatelessTcp.connect(proxy, log_tag).await?;
             log::info!("[{log_tag}] performing proxy handshake");
             log::debug!("[{log_tag}] performing proxy handshake with {target:?}");
             protocol
@@ -198,7 +196,7 @@ mod test {
                 socks5_server::proto::handshake::Method::NONE
             }
         }
-        async fn execute(&self, stream: &mut TcpStream) -> Self::Output {
+        async fn execute(&self, stream: &mut tokio::net::TcpStream) -> Self::Output {
             log::debug!("authenticating incoming stream");
             let accept = !self.deny_all;
 
@@ -323,7 +321,7 @@ mod test {
                     username_password: proxy_credentials.clone(),
                 },
             },
-            "socks test".into(),
+            "socks test",
         ));
 
         // Use `select!` to drive both futures since they both need to make
@@ -432,7 +430,7 @@ mod test {
                     username_password: Some(proxy_credentials.clone()),
                 },
             },
-            "socks test".into(),
+            "socks test",
         ));
 
         let proxy_accept_and_negotiate = async {

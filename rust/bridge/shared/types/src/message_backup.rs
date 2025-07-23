@@ -6,7 +6,6 @@
 use libsignal_account_keys::{AccountEntropyPool, BackupId, BackupKey, BACKUP_KEY_LEN};
 use libsignal_message_backup::frame::ValidationError as FrameValidationError;
 use libsignal_message_backup::key::MessageBackupKey as MessageBackupKeyInner;
-use libsignal_message_backup::parse::ParseError;
 use libsignal_message_backup::{backup, Error, FoundUnknownField};
 use libsignal_protocol::Aci;
 
@@ -18,7 +17,7 @@ impl MessageBackupKey {
     pub fn from_account_entropy_pool(account_entropy: &AccountEntropyPool, aci: Aci) -> Self {
         let backup_key = BackupKey::derive_from_account_entropy_pool(account_entropy);
         let backup_id = backup_key.derive_backup_id(&aci);
-        Self(MessageBackupKeyInner::derive(&backup_key, &backup_id))
+        Self(MessageBackupKeyInner::derive(&backup_key, &backup_id, None))
     }
 
     /// Used when reading from a local backup, where we might not have the ACI.
@@ -33,7 +32,7 @@ impl MessageBackupKey {
         // The explicit type forces the latest version of the key derivation scheme.
         let backup_key: BackupKey = BackupKey(*backup_key);
         let backup_id = BackupId(*backup_id);
-        Self(MessageBackupKeyInner::derive(&backup_key, &backup_id))
+        Self(MessageBackupKeyInner::derive(&backup_key, &backup_id, None))
     }
 
     pub fn from_parts(
@@ -57,11 +56,10 @@ impl From<Error> for MessageBackupValidationError {
         match value {
             Error::BackupValidation(e) => Self::String(e.to_string()),
             Error::BackupCompletion(e) => Self::String(e.to_string()),
-            Error::Parse(ParseError::Io(e)) => Self::Io(e),
-            e @ Error::NoFrames
-            | e @ Error::InvalidProtobuf(_)
-            | e @ Error::HmacMismatch(_)
-            | e @ Error::Parse(ParseError::Decode(_)) => Self::String(e.to_string()),
+            Error::Parse(e) => Self::Io(e),
+            e @ Error::NoFrames | e @ Error::InvalidProtobuf(_) | e @ Error::HmacMismatch(_) => {
+                Self::String(e.to_string())
+            }
         }
     }
 }
@@ -70,9 +68,9 @@ impl From<FrameValidationError> for MessageBackupValidationError {
     fn from(value: FrameValidationError) -> Self {
         match value {
             FrameValidationError::Io(e) => Self::Io(e),
-            e @ (FrameValidationError::TooShort | FrameValidationError::InvalidHmac(_)) => {
-                Self::String(e.to_string())
-            }
+            e @ (FrameValidationError::MissingMetadataField(_)
+            | FrameValidationError::TooManyForwardSecrecyPairs(_)
+            | FrameValidationError::InvalidHmac(_)) => Self::String(e.to_string()),
         }
     }
 }

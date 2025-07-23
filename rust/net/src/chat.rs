@@ -132,25 +132,19 @@ impl AsStaticHttpHeader for ReceiveStories {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LanguageList(pub HeaderValue);
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct LanguageList(Option<HeaderValue>);
 
 impl LanguageList {
-    pub fn parse(
-        languages: &[impl Borrow<str>],
-    ) -> Result<Option<Self>, http::header::InvalidHeaderValue> {
+    pub fn parse(languages: &[impl Borrow<str>]) -> Result<Self, http::header::InvalidHeaderValue> {
         if languages.is_empty() {
-            return Ok(None);
+            return Ok(Self(None));
         }
-        Ok(Some(Self(languages.join(", ").parse()?)))
+        Ok(Self(Some(languages.join(",").parse()?)))
     }
-}
 
-impl AsStaticHttpHeader for LanguageList {
-    const HEADER_NAME: HeaderName = http::header::ACCEPT_LANGUAGE;
-
-    fn header_value(&self) -> HeaderValue {
-        self.0.clone()
+    pub fn into_header(self) -> Option<(HeaderName, HeaderValue)> {
+        self.0.map(|value| (http::header::ACCEPT_LANGUAGE, value))
     }
 }
 
@@ -185,11 +179,11 @@ pub struct PendingChatConnection<T = ChatTransportConnection> {
 pub struct AuthenticatedChatHeaders {
     pub auth: Auth,
     pub receive_stories: ReceiveStories,
-    pub languages: Option<LanguageList>,
+    pub languages: LanguageList,
 }
 
 pub struct UnauthenticatedChatHeaders {
-    pub languages: Option<LanguageList>,
+    pub languages: LanguageList,
 }
 
 #[derive(derive_more::From)]
@@ -208,10 +202,10 @@ impl ChatHeaders {
             }) => Either::Left(
                 [auth.as_header(), receive_stories.as_header()]
                     .into_iter()
-                    .chain(languages.as_ref().map(AsHttpHeader::as_header)),
+                    .chain(languages.into_header()),
             ),
             ChatHeaders::Unauth(UnauthenticatedChatHeaders { languages }) => {
-                Either::Right(languages.as_ref().map(AsHttpHeader::as_header).into_iter())
+                Either::Right(languages.into_header().into_iter())
             }
         }
     }
@@ -290,7 +284,7 @@ impl ChatConnection {
                 // is useful) while limiting us to one fully established connection
                 // at a time.
                 ThrottlingConnector::new(crate::infra::ws::Stateless, 1),
-                log_tag.clone(),
+                &log_tag,
             )
             .await?;
 
@@ -674,7 +668,7 @@ pub(crate) mod test {
         let client = std::sync::Mutex::new(Some(client));
         let connect_state = ConnectState::new_with_transport_connector(
             SUGGESTED_CONNECT_CONFIG,
-            ConnectFn(|_inner, _route, _log_tag| {
+            ConnectFn(|_inner, _route| {
                 std::future::ready(client.lock().expect("unpoisoned").take().ok_or(
                     WebSocketConnectError::Transport(TransportConnectError::TcpConnectionFailed),
                 ))
@@ -735,7 +729,7 @@ pub(crate) mod test {
     async fn preconnect_same_route() {
         let number_of_times_called = AtomicU8::new(0);
 
-        let inner_connector = ConnectFn(|_inner, _route, _log_tag| {
+        let inner_connector = ConnectFn(|_inner, _route| {
             // This acts like a successful TLS connection to a server that immediately closes
             // the connection before sending anything.
             let (client, _server) = tokio::io::duplex(1024);
@@ -791,7 +785,7 @@ pub(crate) mod test {
                     .cloned()
                     .map(|route| route.inner)
                     .collect_vec(),
-                "preconnect".into(),
+                "preconnect",
             )
             .await
             .expect("success");
@@ -805,7 +799,7 @@ pub(crate) mod test {
                 password: "****".into(),
             },
             receive_stories: ReceiveStories(true),
-            languages: None,
+            languages: LanguageList::default(),
         };
 
         let err = ChatConnection::start_connect_with_transport(

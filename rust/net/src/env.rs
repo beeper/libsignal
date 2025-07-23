@@ -29,7 +29,7 @@ use rand::seq::SliceRandom;
 use rand::{rng, Rng};
 
 use crate::certs::{PROXY_G_ROOT_CERTIFICATES, SIGNAL_ROOT_CERTIFICATES};
-use crate::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, Svr2};
+use crate::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, SvrSgx};
 
 const DEFAULT_HTTPS_PORT: NonZeroU16 = nonzero!(443_u16);
 pub const TIMESTAMP_HEADER_NAME: &str = "x-signal-timestamp";
@@ -145,6 +145,22 @@ const DOMAIN_CONFIG_SVR2_STAGING: DomainConfig = DomainConfig {
     ip_v6: &[],
 };
 
+const DOMAIN_CONFIG_SVRB_STAGING: DomainConfig = DomainConfig {
+    connect: ConnectionConfig {
+        hostname: "svrb.staging.signal.org",
+        port: DEFAULT_HTTPS_PORT,
+        cert: SIGNAL_ROOT_CERTIFICATES,
+        min_tls_version: Some(SslVersion::TLS1_3),
+        confirmation_header_name: None,
+        proxy: Some(ConnectionProxyConfig {
+            path_prefix: "/svrb-staging",
+            configs: [PROXY_CONFIG_F_STAGING, PROXY_CONFIG_G],
+        }),
+    },
+    ip_v4: &[ip_addr!(v4, "20.66.46.240")],
+    ip_v6: &[],
+};
+
 pub const PROXY_CONFIG_F_PROD: ProxyConfig = ProxyConfig {
     route_type: RouteType::ProxyF,
     http_host: "reflector-signal.global.ssl.fastly.net",
@@ -181,27 +197,29 @@ pub const PROXY_CONFIG_G: ProxyConfig = ProxyConfig {
 };
 
 pub(crate) const ENDPOINT_PARAMS_CDSI_STAGING: EndpointParams<'static, Cdsi> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI),
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_STAGING),
     raft_config: (),
 };
 
-pub(crate) const ENDPOINT_PARAMS_SVR2_STAGING: EndpointParams<'static, Svr2> = EndpointParams {
+pub(crate) const ENDPOINT_PARAMS_SVR2_STAGING: EndpointParams<'static, SvrSgx> = EndpointParams {
     mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_STAGING),
     raft_config: attest::constants::RAFT_CONFIG_SVR2_STAGING,
 };
 
+pub(crate) const ENDPOINT_PARAMS_SVRB_STAGING: EndpointParams<'static, SvrSgx> = EndpointParams {
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_STAGING),
+    raft_config: attest::constants::RAFT_CONFIG_SVRB_STAGING,
+};
+
 pub(crate) const ENDPOINT_PARAMS_CDSI_PROD: EndpointParams<'static, Cdsi> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI),
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_PROD),
     raft_config: (),
 };
 
-// Currently, the production SVR2 is prequantum while we're testing the postquantum
-// handshakes in staging.
-pub(crate) const ENDPOINT_PARAMS_SVR2_PROD_PREQUANTUM: EndpointParams<'static, Svr2> =
-    EndpointParams {
-        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_PROD_PREQUANTUM),
-        raft_config: attest::constants::RAFT_CONFIG_SVR2_PROD_PREQUANTUM,
-    };
+pub(crate) const ENDPOINT_PARAMS_SVR2_PROD: EndpointParams<'static, SvrSgx> = EndpointParams {
+    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_PROD),
+    raft_config: attest::constants::RAFT_CONFIG_SVR2_PROD,
+};
 
 pub(crate) const KEYTRANS_SIGNING_KEY_MATERIAL_STAGING: &[u8; 32] =
     &hex!("ac0de1fd7f33552bbeb6ebc12b9d4ea10bf5f025c45073d3fb5f5648955a749e");
@@ -505,9 +523,23 @@ impl From<KeyTransConfig> for PublicConfig {
     }
 }
 
+pub struct SvrBEnv<'a>(EnclaveEndpoint<'a, SvrSgx>);
+
+impl<'a> SvrBEnv<'a> {
+    pub const fn new(sgx: EnclaveEndpoint<'a, SvrSgx>) -> Self {
+        Self(sgx)
+    }
+
+    #[inline]
+    pub const fn sgx(&self) -> &EnclaveEndpoint<'a, SvrSgx> {
+        &self.0
+    }
+}
+
 pub struct Env<'a> {
     pub cdsi: EnclaveEndpoint<'a, Cdsi>,
-    pub svr2: EnclaveEndpoint<'a, Svr2>,
+    pub svr2: EnclaveEndpoint<'a, SvrSgx>,
+    pub svr_b: Option<SvrBEnv<'a>>, // TODO: once svrB is available in all environments, make this no longer optional.
     pub chat_domain_config: DomainConfig,
     pub keytrans_config: KeyTransConfig,
 }
@@ -539,6 +571,10 @@ pub const STAGING: Env<'static> = Env {
         domain_config: DOMAIN_CONFIG_SVR2_STAGING,
         params: ENDPOINT_PARAMS_SVR2_STAGING,
     },
+    svr_b: Some(SvrBEnv(EnclaveEndpoint {
+        domain_config: DOMAIN_CONFIG_SVRB_STAGING,
+        params: ENDPOINT_PARAMS_SVRB_STAGING,
+    })),
     keytrans_config: KEYTRANS_CONFIG_STAGING,
 };
 
@@ -550,10 +586,9 @@ pub const PROD: Env<'static> = Env {
     },
     svr2: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_SVR2,
-        // Currently, the production SVR2 is prequantum while we're testing the postquantum
-        // handshakes in staging.
-        params: ENDPOINT_PARAMS_SVR2_PROD_PREQUANTUM,
+        params: ENDPOINT_PARAMS_SVR2_PROD,
     },
+    svr_b: None,
     keytrans_config: KEYTRANS_CONFIG_PROD,
 };
 

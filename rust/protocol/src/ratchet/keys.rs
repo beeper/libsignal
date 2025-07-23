@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use arrayref::array_ref;
+use zerocopy::{FromBytes, IntoBytes, KnownLayout};
 
 use crate::proto::storage::session_structure;
 use crate::{crypto, PrivateKey, PublicKey, Result};
@@ -92,15 +92,21 @@ impl MessageKeys {
         optional_salt: Option<&[u8]>,
         counter: u32,
     ) -> Self {
-        let mut okm = [0; 80];
+        #[derive(Default, KnownLayout, IntoBytes, FromBytes)]
+        #[repr(C, packed)]
+        struct DerivedSecretBytes([u8; 32], [u8; 32], [u8; 16]);
+        let mut okm = DerivedSecretBytes::default();
+
         hkdf::Hkdf::<sha2::Sha256>::new(optional_salt, input_key_material)
-            .expand(b"WhisperMessageKeys", &mut okm)
+            .expand(b"WhisperMessageKeys", okm.as_mut_bytes())
             .expect("valid output length");
 
+        let DerivedSecretBytes(cipher_key, mac_key, iv) = okm;
+
         MessageKeys {
-            cipher_key: *array_ref![okm, 0, 32],
-            mac_key: *array_ref![okm, 32, 32],
-            iv: *array_ref![okm, 64, 16],
+            cipher_key,
+            mac_key,
+            iv,
             counter,
         }
     }
@@ -189,17 +195,21 @@ impl RootKey {
         our_ratchet_key: &PrivateKey,
     ) -> Result<(RootKey, ChainKey)> {
         let shared_secret = our_ratchet_key.calculate_agreement(their_ratchet_key)?;
-        let mut derived_secret_bytes = [0; 64];
+        #[derive(Default, KnownLayout, IntoBytes, FromBytes)]
+        #[repr(C, packed)]
+        struct DerivedSecretBytes([u8; 32], [u8; 32]);
+        let mut derived_secret_bytes = DerivedSecretBytes::default();
+
         hkdf::Hkdf::<sha2::Sha256>::new(Some(&self.key), &shared_secret)
-            .expand(b"WhisperRatchet", &mut derived_secret_bytes)
+            .expand(b"WhisperRatchet", derived_secret_bytes.as_mut_bytes())
             .expect("valid output length");
 
+        let DerivedSecretBytes(root_key, chain_key) = derived_secret_bytes;
+
         Ok((
-            RootKey {
-                key: *array_ref![derived_secret_bytes, 0, 32],
-            },
+            RootKey { key: root_key },
             ChainKey {
-                key: *array_ref![derived_secret_bytes, 32, 32],
+                key: chain_key,
                 index: 0,
             },
         ))

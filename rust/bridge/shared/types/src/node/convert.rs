@@ -389,13 +389,13 @@ impl SimpleArgTypeInfo for Box<[String]> {
     }
 }
 
-impl SimpleArgTypeInfo for libsignal_net_chat::api::registration::PushTokenType {
-    type ArgType = JsString;
+impl SimpleArgTypeInfo for libsignal_net::chat::LanguageList {
+    type ArgType = JsArray;
 
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
-        let s = foreign.value(cx);
-        s.parse()
-            .or_else(|_| cx.throw_type_error(format!("invalid push token type {s:?}")))
+        let entries = Box::<[String]>::convert_from(cx, foreign)?;
+        libsignal_net::chat::LanguageList::parse(&entries)
+            .or_else(|_| cx.throw_error("invalid language in list"))
     }
 }
 
@@ -404,23 +404,16 @@ impl SimpleArgTypeInfo for libsignal_net_chat::api::registration::CreateSession 
 
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         let number = foreign.get::<JsString, _, _>(cx, "number")?.value(cx);
-        let push_token = foreign
-            .get_opt::<JsString, _, _>(cx, "push_token")?
-            .map(|s| s.value(cx));
-        let push_token_type = foreign
-            .get_opt(cx, "push_token_type")?
-            .map(|s| SimpleArgTypeInfo::convert_from(cx, s))
-            .transpose()?;
         let mcc = foreign
             .get_opt::<JsString, _, _>(cx, "mcc")?
             .map(|s| s.value(cx));
         let mnc = foreign
             .get_opt::<JsString, _, _>(cx, "mnc")?
             .map(|s| s.value(cx));
+        let push_token = None;
         Ok(Self {
             number,
             push_token,
-            push_token_type,
             mcc,
             mnc,
         })

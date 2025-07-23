@@ -416,6 +416,7 @@ export function PrivateKey_Agree(privateKey: Wrapper<PrivateKey>, publicKey: Wra
 export function PrivateKey_Deserialize(data: Uint8Array): PrivateKey;
 export function PrivateKey_Generate(): PrivateKey;
 export function PrivateKey_GetPublicKey(k: Wrapper<PrivateKey>): PublicKey;
+export function PrivateKey_HpkeOpen(sk: Wrapper<PrivateKey>, ciphertext: Uint8Array, info: Uint8Array, associatedData: Uint8Array): Uint8Array;
 export function PrivateKey_Serialize(obj: Wrapper<PrivateKey>): Uint8Array;
 export function PrivateKey_Sign(key: Wrapper<PrivateKey>, message: Uint8Array): Uint8Array;
 export function ProfileKeyCiphertext_CheckValidContents(buffer: Uint8Array): void;
@@ -437,6 +438,7 @@ export function PublicKey_Compare(key1: Wrapper<PublicKey>, key2: Wrapper<Public
 export function PublicKey_Deserialize(data: Uint8Array): PublicKey;
 export function PublicKey_Equals(lhs: Wrapper<PublicKey>, rhs: Wrapper<PublicKey>): boolean;
 export function PublicKey_GetPublicKeyBytes(obj: Wrapper<PublicKey>): Uint8Array;
+export function PublicKey_HpkeSeal(pk: Wrapper<PublicKey>, plaintext: Uint8Array, info: Uint8Array, associatedData: Uint8Array): Uint8Array;
 export function PublicKey_Serialize(obj: Wrapper<PublicKey>): Uint8Array;
 export function PublicKey_Verify(key: Wrapper<PublicKey>, message: Uint8Array, signature: Uint8Array): boolean;
 export function ReceiptCredentialPresentation_CheckValidContents(buffer: Uint8Array): void;
@@ -470,13 +472,11 @@ export function RegistrationService_CheckSvr2Credentials(asyncRuntime: Wrapper<T
 export function RegistrationService_CreateSession(asyncRuntime: Wrapper<TokioAsyncContext>, createSession: RegistrationCreateSessionRequest, connectChat: ConnectChatBridge): CancellablePromise<RegistrationService>;
 export function RegistrationService_RegisterAccount(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, registerAccount: Wrapper<RegisterAccountRequest>, accountAttributes: Wrapper<RegistrationAccountAttributes>): CancellablePromise<RegisterAccountResponse>;
 export function RegistrationService_RegistrationSession(service: Wrapper<RegistrationService>): RegistrationSession;
-export function RegistrationService_RequestPushChallenge(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, pushToken: string, pushTokenType: RegistrationPushTokenType): CancellablePromise<void>;
 export function RegistrationService_RequestVerificationCode(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, transport: string, client: string, languages: string[]): CancellablePromise<void>;
 export function RegistrationService_ReregisterAccount(asyncRuntime: Wrapper<TokioAsyncContext>, connectChat: ConnectChatBridge, number: string, registerAccount: Wrapper<RegisterAccountRequest>, accountAttributes: Wrapper<RegistrationAccountAttributes>): CancellablePromise<RegisterAccountResponse>;
 export function RegistrationService_ResumeSession(asyncRuntime: Wrapper<TokioAsyncContext>, sessionId: string, number: string, connectChat: ConnectChatBridge): CancellablePromise<RegistrationService>;
 export function RegistrationService_SessionId(service: Wrapper<RegistrationService>): string;
 export function RegistrationService_SubmitCaptcha(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, captchaValue: string): CancellablePromise<void>;
-export function RegistrationService_SubmitPushChallenge(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, pushChallenge: string): CancellablePromise<void>;
 export function RegistrationService_SubmitVerificationCode(asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, code: string): CancellablePromise<void>;
 export function RegistrationSession_GetAllowedToRequestCode(session: Wrapper<RegistrationSession>): boolean;
 export function RegistrationSession_GetNextCallSeconds(session: Wrapper<RegistrationSession>): number | null;
@@ -679,6 +679,10 @@ export function TESTING_ServerMessageAck_Create(): ServerMessageAck;
 export function TESTING_SignedPublicPreKey_CheckBridgesCorrectly(sourcePublicKey: Wrapper<PublicKey>, signedPreKey: SignedPublicPreKey): void;
 export function TESTING_TestingHandleType_getValue(handle: Wrapper<TestingHandleType>): number;
 export function TESTING_TokioAsyncFuture(asyncRuntime: Wrapper<TokioAsyncContext>, input: number): CancellablePromise<number>;
+export function TestingSemaphore_AddPermits(semaphore: Wrapper<TestingSemaphore>, permits: number): void;
+export function TestingSemaphore_New(initial: number): TestingSemaphore;
+export function TestingValueHolder_Get(holder: Wrapper<TestingValueHolder>): number;
+export function TestingValueHolder_New(value: number): TestingValueHolder;
 export function TokioAsyncContext_cancel(context: Wrapper<TokioAsyncContext>, rawCancellationId: bigint): void;
 export function TokioAsyncContext_new(): TokioAsyncContext;
 export function UnauthenticatedChatConnection_connect(asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>, languages: string[]): CancellablePromise<UnauthenticatedChatConnection>;
@@ -780,6 +784,8 @@ interface SignalMessage { readonly __type: unique symbol; }
 interface SignedPreKeyRecord { readonly __type: unique symbol; }
 interface TestingFutureCancellationCounter { readonly __type: unique symbol; }
 interface TestingHandleType { readonly __type: unique symbol; }
+interface TestingSemaphore { readonly __type: unique symbol; }
+interface TestingValueHolder { readonly __type: unique symbol; }
 interface TokioAsyncContext { readonly __type: unique symbol; }
 interface UnauthenticatedChatConnection { readonly __type: unique symbol; }
 interface UnidentifiedSenderMessageContent { readonly __type: unique symbol; }

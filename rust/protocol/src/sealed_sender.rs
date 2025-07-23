@@ -8,7 +8,6 @@ use std::time::SystemTime;
 
 use aes_gcm_siv::aead::generic_array::typenum::Unsigned;
 use aes_gcm_siv::{AeadInPlace, Aes256GcmSiv, KeyInit};
-use arrayref::array_ref;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use prost::Message;
@@ -601,6 +600,8 @@ mod sealed_sender_v1 {
     #[cfg(test)]
     use std::fmt;
 
+    use zerocopy::IntoBytes;
+
     use super::*;
 
     /// A symmetric cipher key and a MAC key, along with a "chain key" consumed in
@@ -612,7 +613,6 @@ mod sealed_sender_v1 {
     }
 
     const SALT_PREFIX: &[u8] = b"UnidentifiedDelivery";
-    const EPHEMERAL_KEYS_KDF_LEN: usize = 96;
 
     impl EphemeralKeys {
         /// Derive a set of symmetric keys from the key agreement between the sender and
@@ -631,15 +631,20 @@ mod sealed_sender_v1 {
             .concat();
 
             let shared_secret = our_keys.private_key.calculate_agreement(their_public)?;
-            let mut derived_values = [0; EPHEMERAL_KEYS_KDF_LEN];
+            #[derive(Default, KnownLayout, IntoBytes, FromBytes)]
+            #[repr(C, packed)]
+            struct DerivedValues([u8; 32], [u8; 32], [u8; 32]);
+            let mut derived_values = DerivedValues::default();
             hkdf::Hkdf::<sha2::Sha256>::new(Some(&ephemeral_salt), &shared_secret)
-                .expand(&[], &mut derived_values)
+                .expand(&[], derived_values.as_mut_bytes())
                 .expect("valid output length");
 
+            let DerivedValues(chain_key, cipher_key, mac_key) = derived_values;
+
             Ok(Self {
-                chain_key: *array_ref![&derived_values, 0, 32],
-                cipher_key: *array_ref![&derived_values, 32, 32],
-                mac_key: *array_ref![&derived_values, 64, 32],
+                chain_key,
+                cipher_key,
+                mac_key,
             })
         }
     }
@@ -688,14 +693,19 @@ mod sealed_sender_v1 {
             // 96 bytes are derived, but the first 32 are discarded/unused. This is intended to
             // mirror the way the EphemeralKeys are derived, even though StaticKeys does not end up
             // requiring a third "chain key".
-            let mut derived_values = [0; 96];
+            #[derive(Default, KnownLayout, IntoBytes, FromBytes)]
+            #[repr(C, packed)]
+            struct DerivedValues(#[allow(unused)] [u8; 32], [u8; 32], [u8; 32]);
+            let mut derived_values = DerivedValues::default();
             hkdf::Hkdf::<sha2::Sha256>::new(Some(&salt), &shared_secret)
-                .expand(&[], &mut derived_values)
+                .expand(&[], derived_values.as_mut_bytes())
                 .expect("valid output length");
 
+            let DerivedValues(_, cipher_key, mac_key) = derived_values;
+
             Ok(Self {
-                cipher_key: *array_ref![&derived_values, 32, 32],
-                mac_key: *array_ref![&derived_values, 64, 32],
+                cipher_key,
+                mac_key,
             })
         }
     }

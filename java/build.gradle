@@ -6,8 +6,9 @@ plugins {
     id "signing"
     id "com.diffplug.spotless" version "6.20.0"
     id "io.github.gradle-nexus.publish-plugin" version "2.0.0"
-    id "org.jetbrains.kotlin.jvm" version "2.1.0"
-    id "org.jetbrains.dokka" version "2.0.0"
+
+    id "org.jetbrains.kotlin.jvm" version "2.1.0" apply false
+    id "org.jetbrains.dokka" version "2.0.0" apply false
 
     // These plugins need to be loaded together, so we must declare them up front.
     id 'com.android.library' version "8.9.0" apply false
@@ -15,7 +16,7 @@ plugins {
 }
 
 allprojects {
-    version = "0.76.1"
+    version = "0.76.7"
     group   = "org.signal"
 
     tasks.withType(KotlinCompile).configureEach {
@@ -130,6 +131,10 @@ nexusPublishing {
         sonatype {
             username = project.findProperty('sonatypeUsername') ?: ""
             password = project.findProperty('sonatypePassword') ?: ""
+            // This is the recommended configuration from the README for the plugin we use, gradle-nexus/publish-plugin.
+            // The URLs are from https://central.sonatype.org/publish/publish-portal-ossrh-staging-api/#configuration
+            nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+            snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
         }
     }
 }

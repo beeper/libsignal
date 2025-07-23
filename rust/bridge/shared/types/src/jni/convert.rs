@@ -5,6 +5,7 @@
 
 use std::num::ParseIntError;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use itertools::Itertools as _;
 use jni::objects::{AutoLocal, JByteBuffer, JMap, JObjectArray};
@@ -20,9 +21,9 @@ use super::*;
 use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
 use crate::net::chat::ChatListener;
-use crate::net::registration::ConnectChatBridge;
+use crate::net::registration::{ConnectChatBridge, RegistrationPushToken};
 use crate::protocol::KyberPublicKey;
-use crate::support::{Array, AsType, FixedLengthBincodeSerializable, Serialized};
+use crate::support::{extend_lifetime, Array, AsType, FixedLengthBincodeSerializable, Serialized};
 
 /// Converts arguments from their JNI form to their Rust form.
 ///
@@ -349,6 +350,19 @@ impl<'a> SimpleArgTypeInfo<'a> for Box<[String]> {
                 .try_collect()
         })
         .check_exceptions(env, "Box<[String]>::convert_from")
+    }
+}
+
+impl<'a> SimpleArgTypeInfo<'a> for libsignal_net::chat::LanguageList {
+    type ArgType = JObjectArray<'a>;
+
+    fn convert_from(
+        env: &mut JNIEnv<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        let entries = Box::<[String]>::convert_from(env, foreign)?;
+        libsignal_net::chat::LanguageList::parse(&entries)
+            .map_err(|_| BridgeLayerError::BadArgument("invalid language in list".to_owned()))
     }
 }
 
@@ -991,7 +1005,7 @@ pub trait BridgeHandle: Sized + 'static {
     ///
     /// Does some rudimentary checks that the handle probably does represent a real object, but
     /// cannot guarantee it.
-    fn native_handle_cast(handle: ObjectHandle) -> Result<NonNull<Self>, BridgeLayerError> {
+    unsafe fn native_handle_cast(handle: ObjectHandle) -> Result<NonNull<Self>, BridgeLayerError> {
         if handle == 0 {
             return Err(BridgeLayerError::NullPointer(None));
         }
@@ -1011,13 +1025,26 @@ pub trait BridgeHandle: Sized + 'static {
         // but the type tag is already a good check that we haven't been handed garbage.
 
         // SAFETY: For this to fail, we would have needed to be passed a handle that has a correct
-        // type tag but no actual address.
+        // type tag but no actual address. However, NonNull does require a *mut* pointer, and with
+        // shared access that may or may not be safe. It's up to call sites to get this right.
         Ok(unsafe { NonNull::new_unchecked(addr as *mut Self) })
     }
 
+    /// Converts from a raw pointer decoded by `native_handle_cast` into an owned reference.
+    ///
+    /// SAFETY: `raw` must have actually come from `encode_as_handle` followed by
+    /// `native_handle_cast`.
+    unsafe fn from_raw_without_consuming(raw: NonNull<Self>) -> Arc<Self> {
+        let ptr = raw.as_ptr().cast_const();
+        unsafe {
+            Arc::increment_strong_count(ptr);
+            Arc::from_raw(ptr)
+        }
+    }
+
     /// Converts `boxed_value` to a raw pointer and then encodes it as a handle.
-    fn encode_as_handle(boxed_value: Box<Self>) -> ObjectHandle {
-        let mut addr = Box::into_raw(boxed_value) as ObjectHandle;
+    fn encode_as_handle(boxed_value: Arc<Self>) -> ObjectHandle {
+        let mut addr = Arc::into_raw(boxed_value) as ObjectHandle;
         if cfg!(feature = "jni-type-tagging") {
             assert!(
                 (addr >> TYPE_TAG_POINTER_OFFSET) & 0xFF == 0,
@@ -1029,56 +1056,68 @@ pub trait BridgeHandle: Sized + 'static {
     }
 }
 
-impl<T: BridgeHandle> SimpleArgTypeInfo<'_> for &T {
+impl<'storage, 'param: 'storage, 'context: 'param, T: BridgeHandle>
+    ArgTypeInfo<'storage, 'param, 'context> for Option<&'storage T>
+where
+    &'storage T:
+        ArgTypeInfo<'storage, 'param, 'context, ArgType = ObjectHandle, StoredType = Arc<T>>,
+{
     type ArgType = ObjectHandle;
-    fn convert_from(_env: &mut JNIEnv, foreign: &Self::ArgType) -> Result<Self, BridgeLayerError> {
-        Ok(unsafe { T::native_handle_cast(*foreign)?.as_ref() })
-    }
-}
+    type StoredType = Option<Arc<T>>;
 
-impl<T: BridgeHandle> SimpleArgTypeInfo<'_> for Option<&T> {
-    type ArgType = ObjectHandle;
-    fn convert_from(env: &mut JNIEnv, foreign: &Self::ArgType) -> Result<Self, BridgeLayerError> {
+    fn borrow(
+        env: &mut JNIEnv<'context>,
+        foreign: &'param Self::ArgType,
+    ) -> Result<Self::StoredType, BridgeLayerError> {
         if *foreign == 0 {
             Ok(None)
         } else {
-            <&T>::convert_from(env, foreign).map(Some)
+            <&T>::borrow(env, foreign).map(Some)
         }
     }
-}
 
-impl<T: BridgeHandle> SimpleArgTypeInfo<'_> for &mut T {
-    type ArgType = ObjectHandle;
-    fn convert_from(_env: &mut JNIEnv, foreign: &Self::ArgType) -> Result<Self, BridgeLayerError> {
-        Ok(unsafe { T::native_handle_cast(*foreign)?.as_mut() })
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        stored.as_deref()
     }
 }
 
-impl<'storage, 'param: 'storage, 'context: 'param, T: BridgeHandle>
-    ArgTypeInfo<'storage, 'param, 'context> for &'storage [&'storage T]
+impl<'storage, 'param: 'storage, 'context: 'param, T> ArgTypeInfo<'storage, 'param, 'context>
+    for &'storage [&'storage T]
+where
+    &'storage T:
+        ArgTypeInfo<'storage, 'param, 'context, ArgType = ObjectHandle, StoredType = Arc<T>>,
 {
     type ArgType = JLongArray<'context>;
-    type StoredType = Vec<&'storage T>;
+    // Stored in this order so the references get dropped before the owners.
+    type StoredType = (Vec<&'storage T>, Vec<Arc<T>>);
     fn borrow(
         env: &mut JNIEnv<'context>,
         foreign: &'param Self::ArgType,
     ) -> Result<Self::StoredType, BridgeLayerError> {
         let array = unsafe { env.get_array_elements(foreign, ReleaseMode::NoCopyBack) }
             .check_exceptions(env, "<&[&T]>::borrow")?;
-        array
-            .iter()
-            .map(|raw_handle| SimpleArgTypeInfo::convert_from(env, raw_handle))
-            .collect()
+        let mut result_arcs = Vec::with_capacity(array.len());
+        let mut result_refs = Vec::with_capacity(array.len());
+        for raw_handle in array.iter() {
+            // SAFETY: ArgTypeInfo for BridgeHandles doesn't actually care about the lifetime of the
+            // parameter used to pass the handle address around.
+            let arc = <&T>::borrow(env, unsafe { extend_lifetime(raw_handle) })?;
+            // SAFETY: This address is kept alive as long as any of the Arcs are kept alive, which
+            // they will be.
+            result_refs.push(unsafe { extend_lifetime(&*arc) });
+            result_arcs.push(arc);
+        }
+        Ok((result_refs, result_arcs))
     }
     fn load_from(stored: &'storage mut Self::StoredType) -> &'storage [&'storage T] {
-        &*stored
+        &stored.0
     }
 }
 
 impl<T: BridgeHandle> ResultTypeInfo<'_> for T {
     type ResultType = ObjectHandle;
     fn convert_into(self, _env: &mut JNIEnv) -> Result<Self::ResultType, BridgeLayerError> {
-        Ok(T::encode_as_handle(Box::new(self)))
+        Ok(T::encode_as_handle(Arc::new(self)))
     }
 }
 
@@ -1272,67 +1311,79 @@ impl<'a> SimpleArgTypeInfo<'a> for libsignal_net_chat::api::registration::Create
             ClassName("org.signal.libsignal.net.RegistrationService$CreateSession"),
         )?;
 
-        let fields = env
-            .with_local_frame(8, |env| {
-                let number = env
-                    .get_field(foreign, "number", jni_signature!(java.lang.String))?
-                    .l()?;
-                let push_token = env
-                    .get_field(foreign, "fcmPushToken", jni_signature!(java.lang.String))?
-                    .l()?;
-                let mcc = env
-                    .get_field(foreign, "mcc", jni_signature!(java.lang.String))?
-                    .l()?;
-                let mnc = env
-                    .get_field(foreign, "mnc", jni_signature!(java.lang.String))?
-                    .l()?;
-                let number = env.get_string(&number.into())?.into();
+        let fields = try_scoped(|| {
+            let number = AutoLocal::new(
+                env.get_field(foreign, "number", jni_signature!(java.lang.String))?
+                    .l()?,
+                env,
+            );
+            let push_token = AutoLocal::new(
+                env.get_field(foreign, "fcmPushToken", jni_signature!(java.lang.String))?
+                    .l()?,
+                env,
+            );
+            let mcc = AutoLocal::new(
+                env.get_field(foreign, "mcc", jni_signature!(java.lang.String))?
+                    .l()?,
+                env,
+            );
+            let mnc = AutoLocal::new(
+                env.get_field(foreign, "mnc", jni_signature!(java.lang.String))?
+                    .l()?,
+                env,
+            );
+            let number = env.get_string((&*number).into())?.into();
 
-                let mut from_nullable_string = |obj: JObject<'_>| {
-                    (!obj.is_null())
-                        .then(|| env.get_string(&obj.into()).map(Into::into))
-                        .transpose()
-                };
-                Ok((
-                    number,
-                    from_nullable_string(push_token)?,
-                    from_nullable_string(mcc)?,
-                    from_nullable_string(mnc)?,
-                ))
-            })
-            .check_exceptions(env, "CreateSession::convert_from")?;
+            let mut from_nullable_string = |obj: AutoLocal<'_, JObject<'_>>| {
+                (!obj.is_null())
+                    .then(|| env.get_string((&*obj).into()).map(Into::into))
+                    .transpose()
+            };
+            Ok((
+                number,
+                push_token,
+                from_nullable_string(mcc)?,
+                from_nullable_string(mnc)?,
+            ))
+        })
+        .check_exceptions(env, "CreateSession::convert_from")?;
         let (number, push_token, mcc, mnc) = fields;
 
-        // Java push tokens are always FCM.
-        let push_token_type = push_token
-            .is_some()
-            .then(|| SimpleArgTypeInfo::convert_from(env, &JObject::null()))
-            .transpose()?;
+        let push_token = SimpleArgTypeInfo::convert_from(env, (&*push_token).into())?;
 
         Ok(Self {
             number,
             push_token,
-            push_token_type,
             mcc,
             mnc,
         })
     }
 }
 
-impl<'a> SimpleArgTypeInfo<'a> for libsignal_net_chat::api::registration::PushTokenType {
-    type ArgType = JObject<'a>;
+impl<'a> SimpleArgTypeInfo<'a> for RegistrationPushToken {
+    type ArgType = JString<'a>;
     fn convert_from(
-        _env: &mut JNIEnv<'a>,
+        env: &mut JNIEnv<'a>,
         foreign: &Self::ArgType,
     ) -> Result<Self, BridgeLayerError> {
-        if !foreign.is_null() {
-            return Err(BridgeLayerError::BadArgument(
-                "push token type is always null".to_owned(),
-            ));
-        }
-
         // Java push tokens are always FCM.
-        Ok(Self::Fcm)
+        Ok(Self::Fcm {
+            push_token: String::convert_from(env, foreign)?,
+        })
+    }
+}
+
+impl<'a> SimpleArgTypeInfo<'a> for Option<RegistrationPushToken> {
+    type ArgType = JString<'a>;
+    fn convert_from(
+        env: &mut JNIEnv<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        if foreign.is_null() {
+            Ok(None)
+        } else {
+            RegistrationPushToken::convert_from(env, foreign).map(Some)
+        }
     }
 }
 
@@ -1385,7 +1436,7 @@ impl<'a> SimpleArgTypeInfo<'a> for crate::net::registration::SignedPublicPreKey 
                 )
                 .expect_no_exceptions()?
             {
-                SimpleArgTypeInfo::convert_from(env, &native_handle).map(PublicKey::serialize)
+                unsafe { PublicKey::native_handle_cast(native_handle)?.as_ref() }.serialize()
             } else if env
                 .is_instance_of(
                     &public_key,
@@ -1393,12 +1444,12 @@ impl<'a> SimpleArgTypeInfo<'a> for crate::net::registration::SignedPublicPreKey 
                 )
                 .expect_no_exceptions()?
             {
-                SimpleArgTypeInfo::convert_from(env, &native_handle).map(KyberPublicKey::serialize)
+                unsafe { KyberPublicKey::native_handle_cast(native_handle)?.as_ref() }.serialize()
             } else {
-                Err(BridgeLayerError::BadArgument(
+                return Err(BridgeLayerError::BadArgument(
                     "publicKey type is not supported".to_owned(),
-                ))
-            }?
+                ));
+            }
         };
         let signature = <Box<[u8]>>::convert_from(env, &signature)?;
 
@@ -1751,6 +1802,73 @@ macro_rules! jni_bridge_as_handle {
         impl $crate::jni::BridgeHandle for $typ {
             const TYPE_TAG: u8 = $crate::jni::hash_location_for_type_tag(file!(), line!());
         }
+
+        // Unfortunately we have to implement these explicitly because
+        // `impl ArgTypeInfo for &T where T: BridgeHandle`
+        // conflicts (theoretically) with
+        // `impl ArgTypeInfo for T where T: SimpleArgTypeInfo`
+        impl<'storage, 'param: 'storage, 'context: 'param>
+            $crate::jni::ArgTypeInfo<'storage, 'param, 'context> for &'storage $typ
+        {
+            type ArgType = $crate::jni::ObjectHandle;
+            type StoredType = ::std::sync::Arc<$typ>;
+
+            fn borrow(
+                _env: &mut $crate::jni::JNIEnv<'context>,
+                foreign: &'param Self::ArgType,
+            ) -> ::std::result::Result<Self::StoredType, $crate::jni::BridgeLayerError> {
+                let addr =
+                    unsafe { <$typ as $crate::jni::BridgeHandle>::native_handle_cast(*foreign)? };
+                let owned = unsafe {
+                    <$typ as $crate::jni::BridgeHandle>::from_raw_without_consuming(addr)
+                };
+                Ok(owned)
+            }
+
+            fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+                &*stored
+            }
+        }
+
+        impl<'storage, 'param: 'storage, 'context: 'param>
+            $crate::jni::ArgTypeInfo<'storage, 'param, 'context> for &'storage mut $typ
+        {
+            type ArgType = $crate::jni::ObjectHandle;
+            type StoredType = ::std::sync::Arc<$typ>;
+
+            fn borrow(
+                _env: &mut $crate::jni::JNIEnv<'context>,
+                foreign: &'param Self::ArgType,
+            ) -> ::std::result::Result<Self::StoredType, $crate::jni::BridgeLayerError> {
+                let addr =
+                    unsafe { <$typ as $crate::jni::BridgeHandle>::native_handle_cast(*foreign)? };
+                let owned = unsafe {
+                    <$typ as $crate::jni::BridgeHandle>::from_raw_without_consuming(addr)
+                };
+                // This isn't perfect; the way we have things set up won't catch *later* uses of
+                // this object from Java while the modification is in progress. We'd have to use a
+                // proper Mutex/RwLock for that. But it's better than the nothing we had before.
+                assert_eq!(
+                    Self::StoredType::strong_count(&owned),
+                    2, // one covered by `owned`, one outstanding from `encode_as_handle`
+                    "modifying a {} while in use elsewhere",
+                    ::std::any::type_name::<$typ>()
+                );
+                Ok(owned)
+            }
+
+            fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+                // This is a manual version of the unstable Arc::get_mut_unchecked.
+                // https://github.com/rust-lang/rust/issues/63292
+                // We can't use get_mut because we *have* cloned a second Arc.
+                unsafe {
+                    Self::StoredType::as_ptr(stored)
+                        .cast_mut()
+                        .as_mut()
+                        .expect("cannot be null")
+                }
+            }
+        }
     };
     ( $typ:ty ) => {
         // `paste!` turns the type back into an identifier.
@@ -1855,8 +1973,8 @@ macro_rules! jni_arg_type {
     (RegistrationCreateSessionRequest) => {
         ::jni::objects::JObject<'local>
     };
-    (RegistrationPushTokenType) => {
-        ::jni::objects::JObject<'local>
+    (RegistrationPushToken) => {
+        ::jni::objects::JString<'local>
     };
     (SignedPublicPreKey) => {
         jni::JavaSignedPublicPreKey<'local>
@@ -1871,6 +1989,9 @@ macro_rules! jni_arg_type {
         ::jni::objects::JByteArray<'local>
     };
     (Box<[String]>) => {
+        ::jni::objects::JObjectArray<'local>
+    };
+    (LanguageList) => {
         ::jni::objects::JObjectArray<'local>
     };
     (Option<Box<[u8]> >) => {
