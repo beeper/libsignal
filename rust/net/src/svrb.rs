@@ -3,14 +3,14 @@
 //
 
 use hmac::{Hmac, Mac};
-use libsignal_account_keys::proto::backup_metadata::{self, MetadataPb, NextBackupPb};
-use libsignal_account_keys::proto::Message as _;
 use libsignal_account_keys::{
     BackupForwardSecrecyEncryptionKey, BackupForwardSecrecyToken, BackupKey,
 };
 use libsignal_net_infra::ws::WebSocketServiceError;
 use libsignal_net_infra::ws2::attested::AttestedConnectionError;
+use libsignal_svrb::proto::backup_metadata;
 use libsignal_svrb::{Backup4, Secret};
+use protobuf::Message;
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore};
 use sha2::Sha256;
@@ -26,6 +26,8 @@ pub mod traits;
 pub mod direct;
 
 use crate::ws::WebSocketServiceConnectError;
+
+const IV_SIZE: usize = Aes256Ctr32::NONCE_SIZE;
 
 /// SVRB-specific error type
 ///
@@ -45,8 +47,6 @@ pub enum Error {
     Protocol(String),
     /// Enclave attestation failed: {0}
     AttestationError(attest::enclave::Error),
-    /// SVRB request failed with status {0}
-    RequestFailed(libsignal_svrb::ErrorStatus),
     /// Failure to restore data. {0} tries remaining.
     ///
     /// This could be caused by an invalid password or share set.
@@ -93,16 +93,12 @@ impl From<libsignal_svrb::Error> for Error {
         use libsignal_svrb::Error as LogicError;
         match err {
             LogicError::RestoreFailed(tries_remaining) => Self::RestoreFailed(tries_remaining),
-            LogicError::BadResponseStatus(libsignal_svrb::ErrorStatus::Missing)
-            | LogicError::BadResponseStatus4(libsignal_svrb::V4Status::Missing) => {
-                Self::DataMissing
-            }
+            LogicError::BadResponseStatus4(libsignal_svrb::V4Status::MISSING) => Self::DataMissing,
             LogicError::BadData
             | LogicError::BadResponse
             | LogicError::NumServers { .. }
             | LogicError::NoUsableVersion
-            | LogicError::BadResponseStatus4(_)
-            | LogicError::BadResponseStatus(_) => Self::Protocol(err.to_string()),
+            | LogicError::BadResponseStatus4(_) => Self::Protocol(err.to_string()),
         }
     }
 }
@@ -136,9 +132,10 @@ fn random_32b<R: CryptoRng + Rng>(rng: &mut R) -> [u8; 32] {
 const HMAC_SHA256_TRUNCATED_BYTES: usize = 16;
 
 /// provide a HMAC-SHA256 as a 32-byte array.
-fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+fn hmac_sha256(key: &[u8], iv: &[u8; IV_SIZE], data: &[u8]) -> [u8; 32] {
     let mut hmac =
         Hmac::<Sha256>::new_from_slice(key).expect("HMAC-SHA256 should accept any size key");
+    hmac.update(iv);
     hmac.update(data);
     hmac.finalize().into_bytes().into()
 }
@@ -147,12 +144,13 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
 /// concatenating the results.  IV is not attached to the output.
 fn aes_256_ctr_encrypt_hmacsha256(
     ek: &BackupForwardSecrecyEncryptionKey,
+    iv: &[u8; IV_SIZE],
     ptext: &[u8],
 ) -> Result<Vec<u8>, signal_crypto::EncryptionError> {
-    let mut aes = Aes256Ctr32::from_key(&ek.cipher_key, &ek.iv, 0).expect("key size valid");
+    let mut aes = Aes256Ctr32::from_key(&ek.cipher_key, iv, 0).expect("key size valid");
     let mut ctext = ptext.to_vec();
     aes.process(&mut ctext);
-    ctext.extend_from_slice(&hmac_sha256(&ek.hmac_key, &ctext)[..HMAC_SHA256_TRUNCATED_BYTES]);
+    ctext.extend_from_slice(&hmac_sha256(&ek.hmac_key, iv, &ctext)[..HMAC_SHA256_TRUNCATED_BYTES]);
     Ok(ctext)
 }
 
@@ -161,6 +159,7 @@ fn aes_256_ctr_encrypt_hmacsha256(
 /// and must be provided separately.
 fn aes_256_ctr_hmacsha256_decrypt(
     ek: &BackupForwardSecrecyEncryptionKey,
+    iv: &[u8; IV_SIZE],
     ctext: &[u8],
 ) -> Result<Vec<u8>, signal_crypto::DecryptionError> {
     if ctext.len() < HMAC_SHA256_TRUNCATED_BYTES {
@@ -170,12 +169,12 @@ fn aes_256_ctr_hmacsha256_decrypt(
     }
     let ctext_len = ctext.len() - HMAC_SHA256_TRUNCATED_BYTES;
     let (ctext, their_mac) = (&ctext[..ctext_len], &ctext[ctext_len..]);
-    let our_mac = hmac_sha256(&ek.hmac_key, ctext);
+    let our_mac = hmac_sha256(&ek.hmac_key, iv, ctext);
     if our_mac[..HMAC_SHA256_TRUNCATED_BYTES]
         .ct_eq(their_mac)
         .into()
     {
-        let mut aes = Aes256Ctr32::from_key(&ek.cipher_key, &ek.iv, 0).expect("key size valid");
+        let mut aes = Aes256Ctr32::from_key(&ek.cipher_key, iv, 0).expect("key size valid");
         let mut ptext = ctext.to_vec();
         aes.process(&mut ptext);
         Ok(ptext)
@@ -192,65 +191,145 @@ pub struct BackupFileMetadataRef<'a>(pub &'a [u8]);
 pub struct BackupPreviousSecretData(pub Vec<u8>);
 pub struct BackupPreviousSecretDataRef<'a>(pub &'a [u8]);
 
-pub struct PrepareBackupResponse {
-    pub handle: BackupHandle,
+impl BackupFileMetadata {
+    pub fn as_ref(&self) -> BackupFileMetadataRef {
+        BackupFileMetadataRef(&self.0)
+    }
+}
+
+impl BackupPreviousSecretData {
+    pub fn as_ref(&self) -> BackupPreviousSecretDataRef {
+        BackupPreviousSecretDataRef(&self.0)
+    }
+}
+
+pub struct BackupStoreResponse {
     pub forward_secrecy_token: BackupForwardSecrecyToken,
     pub next_backup_data: BackupPreviousSecretData,
     pub metadata: BackupFileMetadata,
 }
 
-pub fn prepare_backup<SvrB: traits::Backup>(
+fn create_backup<SvrB: traits::Prepare, R: Rng + CryptoRng>(
     svrb: &SvrB,
     backup_key: &BackupKey,
-    previous_backup_data: Option<BackupPreviousSecretDataRef>,
-) -> Result<PrepareBackupResponse, Error> {
-    let mut rng = OsRng.unwrap_err();
-    let password_salt = random_32b(&mut rng);
+    rng: &mut R,
+) -> (Backup4, [u8; 32]) {
+    let password_salt = random_32b(rng);
     let password_key = backup_key.derive_forward_secrecy_password(&password_salt).0;
-    let forward_secrecy_token = BackupForwardSecrecyToken(random_32b(&mut rng));
-    let backup4 = svrb.prepare(&password_key);
-    let encryption_key_salt = backup4.output;
-    let encryption_key = backup_key.derive_forward_secrecy_encryption_key(&encryption_key_salt);
-    let mut next_backup_pb = NextBackupPb::default();
-    let mut metadata_pb = MetadataPb::default();
+    (svrb.prepare(&password_key), password_salt)
+}
 
-    next_backup_pb
-        .pair
-        .push(backup_metadata::next_backup_pb::Pair {
-            pw_salt: password_salt.to_vec(),
-            encryption_key_salt: encryption_key_salt.to_vec(),
-            ..Default::default()
-        });
-    metadata_pb.pair.push(backup_metadata::metadata_pb::Pair {
-        pw_salt: password_salt.to_vec(),
-        ct: aes_256_ctr_encrypt_hmacsha256(&encryption_key, &forward_secrecy_token.0)?,
-        ..Default::default()
-    });
-
-    if let Some(prev) = previous_backup_data {
-        let previous_backup_pb =
-            NextBackupPb::parse_from_bytes(prev.0).map_err(|_| Error::PreviousBackupDataInvalid)?;
-        if !previous_backup_pb.pair.is_empty() {
-            // Add in another pair using the most recent key.
-            let p = &previous_backup_pb.pair[0];
-            let encryption_key =
-                backup_key.derive_forward_secrecy_encryption_key(&p.encryption_key_salt);
-            next_backup_pb.pair.push(p.clone());
-            metadata_pb.pair.push(backup_metadata::metadata_pb::Pair {
-                pw_salt: p.pw_salt.clone(),
-                ct: aes_256_ctr_encrypt_hmacsha256(&encryption_key, &forward_secrecy_token.0)?,
+pub fn create_new_backup_chain<SvrB: traits::Prepare>(
+    svrb: &SvrB,
+    backup_key: &BackupKey,
+) -> BackupPreviousSecretData {
+    let mut rng = OsRng.unwrap_err();
+    let (backup4, pw_salt) = create_backup(svrb, backup_key, &mut rng);
+    let secret_data = backup_metadata::NextBackupPb {
+        from_previous: Some(backup_metadata::next_backup_pb::From_previous::Backup(
+            backup_metadata::next_backup_pb::Backup {
+                pw_salt: pw_salt.to_vec(),
+                backup4: protobuf::MessageField::some(backup4.into_pb()),
                 ..Default::default()
-            });
+            },
+        )),
+        ..Default::default()
+    };
+    BackupPreviousSecretData(secret_data.write_to_bytes().expect("can serialize"))
+}
+
+pub async fn store_backup<SvrB: traits::Backup + traits::Prepare>(
+    svrb: &SvrB,
+    backup_key: &BackupKey,
+    previous_backup_data: BackupPreviousSecretDataRef<'_>,
+) -> Result<BackupStoreResponse, Error> {
+    let mut rng = OsRng.unwrap_err();
+    let parsed_prev_data = backup_metadata::NextBackupPb::parse_from_bytes(previous_backup_data.0)
+        .map_err(|_| Error::PreviousBackupDataInvalid)?;
+    let (prev_encryption_key_salt, prev_backup4, prev_password_salt) = match parsed_prev_data
+        .from_previous
+        .ok_or(Error::PreviousBackupDataInvalid)?
+    {
+        backup_metadata::next_backup_pb::From_previous::Restore(restore) => {
+            // `previous_backup_data` came from a `restore_backup` call,
+            // not a `store_backup` call.  In this case, we want to just keep
+            // what's currently in SVRB still in SVRB.  There is no backup4
+            // to store, and we use the existing key_salt+pw_salt.
+            (
+                restore
+                    .enc_salt
+                    .try_into()
+                    .map_err(|_| Error::PreviousBackupDataInvalid)?,
+                None,
+                restore
+                    .pw_salt
+                    .try_into()
+                    .map_err(|_| Error::PreviousBackupDataInvalid)?,
+            )
+        }
+        backup_metadata::next_backup_pb::From_previous::Backup(mut backup) => {
+            // `previous_backup_data` came from a `store_backup` call,
+            // so we know that we can write a new backup into SVRB and still
+            // have the old backup file decrypt.  Do that.
+            let pw_salt = backup
+                .pw_salt
+                .try_into()
+                .map_err(|_| Error::PreviousBackupDataInvalid)?;
+            let backup4 = Backup4::from_pb(
+                backup
+                    .backup4
+                    .take()
+                    .ok_or(Error::PreviousBackupDataInvalid)?,
+            )?;
+            (backup4.output, Some(backup4), pw_salt)
+        }
+        _ => {
+            return Err(Error::PreviousBackupDataInvalid);
         }
     };
+    let (next_backup4, next_password_salt) = create_backup(svrb, backup_key, &mut rng);
+    let forward_secrecy_token = BackupForwardSecrecyToken(random_32b(&mut rng));
 
-    Ok(PrepareBackupResponse {
-        handle: BackupHandle(backup4),
+    let mut iv = [0u8; 12];
+    rng.try_fill_bytes(&mut iv)
+        .expect("should generate entropy");
+    let mut metadata_pb = backup_metadata::MetadataPb {
+        iv: iv.to_vec(),
+        ..Default::default()
+    };
+    for (encryption_key_salt, password_salt) in [
+        (prev_encryption_key_salt, prev_password_salt),
+        (next_backup4.output, next_password_salt),
+    ] {
+        let encryption_key = backup_key.derive_forward_secrecy_encryption_key(&encryption_key_salt);
+        metadata_pb.pair.push(backup_metadata::metadata_pb::Pair {
+            pw_salt: password_salt.to_vec(),
+            ct: aes_256_ctr_encrypt_hmacsha256(&encryption_key, &iv, &forward_secrecy_token.0)?,
+            ..Default::default()
+        });
+    }
+
+    let next_backup_pb = backup_metadata::NextBackupPb {
+        from_previous: Some(backup_metadata::next_backup_pb::From_previous::Backup(
+            backup_metadata::next_backup_pb::Backup {
+                pw_salt: next_password_salt.to_vec(),
+                backup4: protobuf::MessageField::some(next_backup4.into_pb()),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+
+    if let Some(prev_backup4) = prev_backup4 {
+        svrb.finalize(&prev_backup4).await?;
+    }
+
+    Ok(BackupStoreResponse {
         forward_secrecy_token,
         next_backup_data: BackupPreviousSecretData(
-            next_backup_pb.write_to_bytes().expect("can serialize"),
+            next_backup_pb.write_to_bytes().expect("should serialize"),
         ),
-        metadata: BackupFileMetadata(metadata_pb.write_to_bytes().expect("can serialize")),
+        metadata: BackupFileMetadata(metadata_pb.write_to_bytes().expect("should serialize")),
     })
 }
 
@@ -264,34 +343,60 @@ pub async fn finalize_backup<SvrB: traits::Backup>(
 async fn restore_backup_attempt<SvrB: traits::Restore>(
     svrb: &SvrB,
     backup_key: &BackupKey,
+    iv: &[u8; IV_SIZE],
     pair: &backup_metadata::metadata_pb::Pair,
-) -> Result<BackupForwardSecrecyToken, Error> {
+) -> Result<([u8; 32], BackupForwardSecrecyToken), Error> {
     let password_key = backup_key.derive_forward_secrecy_password(&pair.pw_salt).0;
     let encryption_key_salt = svrb.restore(&password_key).await?;
     let encryption_key = backup_key.derive_forward_secrecy_encryption_key(&encryption_key_salt);
-    Ok(BackupForwardSecrecyToken(
-        aes_256_ctr_hmacsha256_decrypt(&encryption_key, &pair.ct)?
-            .try_into()
-            .map_err(|_| {
-                signal_crypto::DecryptionError::BadCiphertext("should decrypt to 32 bytes")
-            })?,
+    Ok((
+        encryption_key_salt,
+        BackupForwardSecrecyToken(
+            aes_256_ctr_hmacsha256_decrypt(&encryption_key, iv, &pair.ct)?
+                .try_into()
+                .map_err(|_| {
+                    signal_crypto::DecryptionError::BadCiphertext("should decrypt to 32 bytes")
+                })?,
+        ),
     ))
+}
+
+pub struct BackupRestoreResponse {
+    pub forward_secrecy_token: BackupForwardSecrecyToken,
+    pub next_backup_data: BackupPreviousSecretData,
 }
 
 pub async fn restore_backup<SvrB: traits::Restore>(
     svrb: &SvrB,
     backup_key: &BackupKey,
     metadata: BackupFileMetadataRef<'_>,
-) -> Result<BackupForwardSecrecyToken, Error> {
-    let metadata = MetadataPb::parse_from_bytes(metadata.0).map_err(|_| Error::MetadataInvalid)?;
+) -> Result<BackupRestoreResponse, Error> {
+    let metadata = backup_metadata::MetadataPb::parse_from_bytes(metadata.0)
+        .map_err(|_| Error::MetadataInvalid)?;
     if metadata.pair.is_empty() {
         return Err(Error::MetadataInvalid);
     }
     let mut multiple_errors: Vec<Error> = Vec::new();
+    let iv: [u8; IV_SIZE] = metadata.iv.try_into().map_err(|_| Error::MetadataInvalid)?;
     for pair in metadata.pair {
-        match restore_backup_attempt(svrb, backup_key, &pair).await {
-            Ok(token) => {
-                return Ok(token);
+        match restore_backup_attempt(svrb, backup_key, &iv, &pair).await {
+            Ok((encryption_key_salt, forward_secrecy_token)) => {
+                let next_backup_pb = backup_metadata::NextBackupPb {
+                    from_previous: Some(backup_metadata::next_backup_pb::From_previous::Restore(
+                        backup_metadata::next_backup_pb::Restore {
+                            pw_salt: pair.pw_salt,
+                            enc_salt: encryption_key_salt.to_vec(),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                };
+                return Ok(BackupRestoreResponse {
+                    forward_secrecy_token,
+                    next_backup_data: BackupPreviousSecretData(
+                        next_backup_pb.write_to_bytes().expect("should serialize"),
+                    ),
+                });
             }
             Err(e) => {
                 multiple_errors.push(e);
@@ -334,10 +439,11 @@ where
 #[cfg(feature = "test-util")]
 pub mod test_support {
 
+    use libsignal_net_infra::testutil::no_network_change_events;
+
     use crate::auth::Auth;
     use crate::enclave::PpssSetup;
     use crate::env::SvrBEnv;
-    use crate::svrb::direct::DirectConnect as _;
 
     impl SvrBEnv<'static> {
         /// Simplest way to connect to an SVRB Environment in integration tests, command
@@ -346,8 +452,7 @@ pub mod test_support {
             &self,
             auth: &Auth,
         ) -> <Self as PpssSetup>::ConnectionResults {
-            let endpoints = self.sgx();
-            endpoints.connect(auth).await
+            super::direct::direct_connect(self.sgx(), auth, &no_network_change_events()).await
         }
     }
 }
@@ -381,11 +486,14 @@ mod test {
         }
     }
 
-    #[async_trait]
-    impl traits::Backup for TestSvrBClient {
+    impl traits::Prepare for TestSvrBClient {
         fn prepare(&self, _password: &[u8]) -> Backup4 {
             (self.prepare_fn)()
         }
+    }
+
+    #[async_trait]
+    impl traits::Backup for TestSvrBClient {
         async fn finalize(&self, _b4: &Backup4) -> Result<(), Error> {
             (self.finalize_fn)()
         }
@@ -473,18 +581,18 @@ mod test {
     #[test]
     fn aes_roundtrip() -> Result<(), Error> {
         let ek = BackupForwardSecrecyEncryptionKey {
-            iv: [0u8; 12],
             hmac_key: [1u8; 32],
             cipher_key: [2u8; 32],
         };
-        let mut ct = aes_256_ctr_encrypt_hmacsha256(&ek, b"plaintext")?;
+        let iv = [0u8; 12];
+        let mut ct = aes_256_ctr_encrypt_hmacsha256(&ek, &iv, b"plaintext")?;
         assert_eq!(
             b"plaintext" as &[u8],
-            &aes_256_ctr_hmacsha256_decrypt(&ek, &ct)?,
+            &aes_256_ctr_hmacsha256_decrypt(&ek, &iv, &ct)?,
         );
         ct[0] ^= 1;
         assert!(matches!(
-            aes_256_ctr_hmacsha256_decrypt(&ek, &ct).unwrap_err(),
+            aes_256_ctr_hmacsha256_decrypt(&ek, &iv, &ct).unwrap_err(),
             signal_crypto::DecryptionError::BadCiphertext("MAC verification failed")
         ));
         Ok(())
@@ -506,18 +614,24 @@ mod test {
         )
         .expect("should create AEP");
         let backup_key = BackupKey::derive_from_account_entropy_pool(&aep);
-        let prepared = prepare_backup(&svrb, &backup_key, None).expect("should prepare");
-        finalize_backup(&svrb, &prepared.handle)
-            .await
-            .expect("should finalize");
+        let backup = store_backup(
+            &svrb,
+            &backup_key,
+            create_new_backup_chain(&svrb, &backup_key).as_ref(),
+        )
+        .await
+        .expect("should store");
         let restored = restore_backup(
             &svrb,
             &backup_key,
-            BackupFileMetadataRef(&prepared.metadata.0),
+            BackupFileMetadataRef(&backup.metadata.0),
         )
         .await
         .expect("should restore");
-        assert_eq!(prepared.forward_secrecy_token.0, restored.0);
+        assert_eq!(
+            backup.forward_secrecy_token.0,
+            restored.forward_secrecy_token.0
+        );
     }
 
     #[tokio::test]
@@ -536,19 +650,90 @@ mod test {
         )
         .expect("should create AEP");
         let backup_key = BackupKey::derive_from_account_entropy_pool(&aep);
-        let prepared = prepare_backup(&svrb, &backup_key, None).expect("should prepare");
-        finalize_backup(&svrb, &prepared.handle)
+        let backup = store_backup(
+            &svrb,
+            &backup_key,
+            create_new_backup_chain(&svrb, &backup_key).as_ref(),
+        )
+        .await
+        .expect("should store");
+        assert!(restore_backup(
+            &svrb,
+            &backup_key,
+            BackupFileMetadataRef(&backup.metadata.0)
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn backup_store_restore_store() {
+        let svrb = TestSvrBClient {
+            prepare_fn: || Backup4 {
+                requests: vec![],
+                output: [1u8; 32],
+            },
+            finalize_fn: || Ok(()),
+            restore_fn: || Ok([1u8; 32]),
+            ..TestSvrBClient::default()
+        };
+        let aep = AccountEntropyPool::from_str(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("should create AEP");
+        let backup_key = BackupKey::derive_from_account_entropy_pool(&aep);
+        let backup = store_backup(
+            &svrb,
+            &backup_key,
+            create_new_backup_chain(&svrb, &backup_key).as_ref(),
+        )
+        .await
+        .expect("should store");
+        let restored = restore_backup(
+            &svrb,
+            &backup_key,
+            BackupFileMetadataRef(&backup.metadata.0),
+        )
+        .await
+        .expect("should restore");
+        assert_eq!(
+            backup.forward_secrecy_token.0,
+            restored.forward_secrecy_token.0
+        );
+
+        // The next store call should not actually finalize a backup,
+        // since it should just use the key in `restore_previous_secret_data`
+        let svrb = TestSvrBClient {
+            prepare_fn: || Backup4 {
+                requests: vec![],
+                output: [2u8; 32],
+            },
+            restore_fn: || Ok([1u8; 32]),
+            ..TestSvrBClient::default()
+        };
+        let backup = store_backup(&svrb, &backup_key, restored.next_backup_data.as_ref())
             .await
-            .expect("should finalize");
-        assert!(matches!(
-            restore_backup(
-                &svrb,
-                &backup_key,
-                BackupFileMetadataRef(&prepared.metadata.0)
-            )
-            .await
-            .unwrap_err(),
-            Error::MultipleErrors(_)
-        ));
+            .expect("should store");
+        let restored2 = restore_backup(
+            &svrb,
+            &backup_key,
+            BackupFileMetadataRef(&backup.metadata.0),
+        )
+        .await
+        .expect("should restore");
+        let r1 = assert_matches!(
+            backup_metadata::NextBackupPb::parse_from_bytes(&restored.next_backup_data.0)
+                .expect("should deserialize")
+                .from_previous
+                .unwrap(), backup_metadata::next_backup_pb::From_previous::Restore(r) => r);
+        let r2 = assert_matches!(
+            backup_metadata::NextBackupPb::parse_from_bytes(&restored2.next_backup_data.0)
+                .expect("should deserialize")
+                .from_previous
+                .unwrap(), backup_metadata::next_backup_pb::From_previous::Restore(r) => r);
+        assert_eq!(r1.enc_salt, r2.enc_salt);
+        assert_eq!(r1.pw_salt, r2.pw_salt);
+        // The actual forward secrecy tokens should differ.
+        assert!(restored2.forward_secrecy_token.0 != restored.forward_secrecy_token.0);
     }
 }

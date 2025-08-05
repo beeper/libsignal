@@ -2258,7 +2258,6 @@ dependencies = [
  "libcrux-intrinsics 0.0.2",
  "libcrux-platform",
  "libcrux-sha3 0.0.2",
- "rand 0.9.0",
 ]
 
 [[package]]
@@ -2347,6 +2346,7 @@ dependencies = [
  "signal-crypto",
  "static_assertions",
  "thiserror 2.0.12",
+ "zerocopy",
 ]
 
 [[package]]
@@ -2355,6 +2355,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm-siv",
  "assert_matches",
+ "async-trait",
  "attest",
  "base64 0.22.1",
  "bincode",
@@ -2466,6 +2467,7 @@ dependencies = [
  "libsignal-net",
  "libsignal-net-chat",
  "libsignal-protocol",
+ "libsignal-svrb",
  "linkme",
  "log",
  "mediasan-common",
@@ -2530,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-ffi"
-version = "0.76.7"
+version = "0.78.0"
 dependencies = [
  "cpufeatures",
  "hex",
@@ -2550,14 +2552,14 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni"
-version = "0.76.7"
+version = "0.78.0"
 dependencies = [
  "libsignal-jni-impl",
 ]
 
 [[package]]
 name = "libsignal-jni-impl"
-version = "0.76.7"
+version = "0.78.0"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -2574,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni-testing"
-version = "0.76.7"
+version = "0.78.0"
 dependencies = [
  "jni",
  "libsignal-bridge-testing",
@@ -2636,12 +2638,14 @@ dependencies = [
  "libsignal-message-backup",
  "libsignal-message-backup-macros",
  "libsignal-protocol",
+ "libsignal-svrb",
  "log",
  "macro_rules_attribute",
  "mediasan-common",
  "nonzero_ext",
  "once_cell",
  "pretty_assertions",
+ "prost",
  "protobuf",
  "protobuf-codegen",
  "protobuf-json-mapping",
@@ -2713,6 +2717,7 @@ dependencies = [
  "proptest",
  "prost",
  "prost-build",
+ "protobuf",
  "rand 0.9.0",
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
@@ -2740,7 +2745,6 @@ dependencies = [
  "visibility",
  "warp",
  "zerocopy",
- "zkgroup",
 ]
 
 [[package]]
@@ -2823,6 +2827,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "prost",
+ "prost-build",
  "rand 0.9.0",
  "rand_core 0.9.3",
  "rangemap",
@@ -2846,11 +2851,12 @@ dependencies = [
  "tungstenite 0.26.2",
  "visibility",
  "warp",
+ "zerocopy",
 ]
 
 [[package]]
 name = "libsignal-node"
-version = "0.76.7"
+version = "0.78.0"
 dependencies = [
  "cmake",
  "futures",
@@ -2873,6 +2879,7 @@ dependencies = [
  "aes-gcm-siv",
  "assert_matches",
  "async-trait",
+ "bitflags",
  "clap",
  "const-str",
  "criterion",
@@ -2921,8 +2928,8 @@ dependencies = [
  "hkdf",
  "nonzero_ext",
  "proptest",
- "prost",
- "prost-build",
+ "protobuf",
+ "protobuf-codegen",
  "rand 0.9.0",
  "rand_core 0.9.3",
  "sha2",
@@ -4722,8 +4729,8 @@ dependencies = [
 
 [[package]]
 name = "spqr"
-version = "0.1.0"
-source = "git+https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.0.0#d6c10734689ec5844d09c1a054a288d36cde2adc"
+version = "1.2.0"
+source = "git+https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.2.0#99a759a3fd40cd9304459fb007fcf177db9ed207"
 dependencies = [
  "cpufeatures",
  "curve25519-dalek",
@@ -4733,6 +4740,7 @@ dependencies = [
  "libcrux-hkdf",
  "libcrux-hmac",
  "libcrux-ml-kem",
+ "log",
  "num_enum",
  "prost",
  "prost-build",
@@ -6038,6 +6046,7 @@ dependencies = [
 name = "zkgroup"
 version = "0.9.0"
 dependencies = [
+ "aes",
  "aes-gcm-siv",
  "assert_matches",
  "base64 0.22.1",
@@ -6058,7 +6067,7 @@ dependencies = [
  "rayon",
  "serde",
  "sha2",
- "signal-crypto",
+ "static_assertions",
  "subtle",
  "test-case",
  "thiserror 2.0.12",

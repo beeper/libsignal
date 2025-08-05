@@ -5,7 +5,7 @@
 
 //! Keys used throughout the backup creation, storage, and recovery process.
 //!
-//! A client will generate a [`BackupKey`] from their master key. The client
+//! A client will generate a [`BackupKey`] from their account entropy pool. The client
 //! will then derive a [`BackupId`] from this key and their [`Aci`]. This
 //! ensures that the `BackupKey` is reconstructible using only state stored in
 //! SVR, so that a restorer can reconstruct the `BackupId`.
@@ -15,7 +15,6 @@ use libsignal_core::curve::PrivateKey;
 use libsignal_core::Aci;
 use partial_default::PartialDefault;
 use sha2::Sha256;
-use signal_crypto::Aes256Ctr32;
 
 use crate::AccountEntropyPool;
 
@@ -25,6 +24,7 @@ const LATEST: u8 = V1;
 pub const BACKUP_KEY_LEN: usize = 32;
 pub const LOCAL_BACKUP_METADATA_KEY_LEN: usize = 32;
 pub const MEDIA_ID_LEN: usize = 15;
+pub const BACKUP_FORWARD_SECRECY_TOKEN_LEN: usize = 32;
 pub const MEDIA_ENCRYPTION_KEY_LEN: usize = 32 + 32; // HMAC key + AES-CBC key
 
 /// Primary key for backups that is used to derive other keys.
@@ -33,7 +33,8 @@ pub const MEDIA_ENCRYPTION_KEY_LEN: usize = 32 + 32; // HMAC key + AES-CBC key
 /// from an [`AccountEntropyPool`]. Use [`BackupKeyV0`] if you want to derive keys using the "master
 /// key" scheme. (This will eventually go away.) The version will also be inferred if you use
 /// [`BackupKey::derive_from_master_key`] or [`BackupKey::derive_from_account_entropy_pool`].
-#[derive(Debug, PartialDefault)]
+#[derive(Debug, PartialDefault, zerocopy::FromBytes, zerocopy::Immutable)]
+#[repr(transparent)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
 pub struct BackupKey<const VERSION: u8 = LATEST>(pub [u8; BACKUP_KEY_LEN]);
 
@@ -100,15 +101,19 @@ impl BackupKey<V1> {
     }
 }
 
+impl<'a> From<&'a [u8; BACKUP_KEY_LEN]> for &'a BackupKey {
+    fn from(value: &'a [u8; BACKUP_KEY_LEN]) -> Self {
+        zerocopy::transmute_ref!(value)
+    }
+}
+
 const BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE: usize = 32;
 const BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE: usize = 32;
-const BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_IV_SIZE: usize = Aes256Ctr32::NONCE_SIZE;
 
 pub struct BackupForwardSecrecyPassword(pub [u8; 32]);
 pub struct BackupForwardSecrecyEncryptionKey {
     pub cipher_key: [u8; BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE],
     pub hmac_key: [u8; BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE],
-    pub iv: [u8; BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_IV_SIZE],
 }
 
 impl<const VERSION: u8> BackupKey<VERSION> {
@@ -153,8 +158,7 @@ impl<const VERSION: u8> BackupKey<VERSION> {
         salt: &[u8],
     ) -> BackupForwardSecrecyEncryptionKey {
         let mut bytes = [0u8; BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE
-            + BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE
-            + BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_IV_SIZE];
+            + BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE];
         const INFO: &[u8] =
             b"Signal Message Backup 20250627:BackupForwardSecrecyToken Encryption Key";
         Hkdf::<Sha256>::new(Some(salt), &self.0)
@@ -166,10 +170,6 @@ impl<const VERSION: u8> BackupKey<VERSION> {
                 .expect("should have enough bytes"),
             hmac_key: bytes[BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE..]
                 [..BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE]
-                .try_into()
-                .expect("should have enough bytes"),
-            iv: bytes[BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_CIPHER_KEY_SIZE..]
-                [BACKUP_FORWARD_SECRECY_ENCRYPTION_KEY_HMAC_KEY_SIZE..]
                 .try_into()
                 .expect("should have enough bytes"),
         }
@@ -201,11 +201,7 @@ impl BackupId {
     serde(transparent)
 )]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-pub struct BackupForwardSecrecyToken(pub [u8; BackupForwardSecrecyToken::LEN]);
-
-impl BackupForwardSecrecyToken {
-    pub const LEN: usize = 32;
-}
+pub struct BackupForwardSecrecyToken(pub [u8; BACKUP_FORWARD_SECRECY_TOKEN_LEN]);
 
 #[cfg(test)]
 pub(crate) mod test {

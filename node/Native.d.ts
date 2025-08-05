@@ -228,6 +228,11 @@ export function BackupKey_DeriveLocalBackupMetadataKey(backupKey: Uint8Array): U
 export function BackupKey_DeriveMediaEncryptionKey(backupKey: Uint8Array, mediaId: Uint8Array): Uint8Array;
 export function BackupKey_DeriveMediaId(backupKey: Uint8Array, mediaName: string): Uint8Array;
 export function BackupKey_DeriveThumbnailTransitEncryptionKey(backupKey: Uint8Array, mediaId: Uint8Array): Uint8Array;
+export function BackupRestoreResponse_GetForwardSecrecyToken(response: Wrapper<BackupRestoreResponse>): Uint8Array;
+export function BackupRestoreResponse_GetNextBackupSecretData(response: Wrapper<BackupRestoreResponse>): Uint8Array;
+export function BackupStoreResponse_GetForwardSecrecyToken(response: Wrapper<BackupStoreResponse>): Uint8Array;
+export function BackupStoreResponse_GetNextBackupSecretData(response: Wrapper<BackupStoreResponse>): Uint8Array;
+export function BackupStoreResponse_GetOpaqueMetadata(response: Wrapper<BackupStoreResponse>): Uint8Array;
 export function BridgedStringMap_insert(map: Wrapper<BridgedStringMap>, key: string, value: string): void;
 export function BridgedStringMap_new(initialCapacity: number): BridgedStringMap;
 export function CallLinkAuthCredentialPresentation_CheckValidContents(presentationBytes: Uint8Array): void;
@@ -373,8 +378,8 @@ export function LookupRequest_addE164(request: Wrapper<LookupRequest>, e164: str
 export function LookupRequest_addPreviousE164(request: Wrapper<LookupRequest>, e164: string): void;
 export function LookupRequest_new(): LookupRequest;
 export function LookupRequest_setToken(request: Wrapper<LookupRequest>, token: Uint8Array): void;
-export function MessageBackupKey_FromAccountEntropyPool(accountEntropy: AccountEntropyPool, aci: Uint8Array): MessageBackupKey;
-export function MessageBackupKey_FromBackupKeyAndBackupId(backupKey: Uint8Array, backupId: Uint8Array): MessageBackupKey;
+export function MessageBackupKey_FromAccountEntropyPool(accountEntropy: AccountEntropyPool, aci: Uint8Array, forwardSecrecyToken: Uint8Array | null): MessageBackupKey;
+export function MessageBackupKey_FromBackupKeyAndBackupId(backupKey: Uint8Array, backupId: Uint8Array, forwardSecrecyToken: Uint8Array | null): MessageBackupKey;
 export function MessageBackupKey_GetAesKey(key: Wrapper<MessageBackupKey>): Uint8Array;
 export function MessageBackupKey_GetHmacKey(key: Wrapper<MessageBackupKey>): Uint8Array;
 export function MessageBackupValidator_Validate(key: Wrapper<MessageBackupKey>, firstStream: InputStream, secondStream: InputStream, len: bigint, purpose: number): Promise<MessageBackupValidationOutcome>;
@@ -498,6 +503,9 @@ export function SealedSender_DecryptToUsmc(ctext: Uint8Array, identityStore: Ide
 export function SealedSender_Encrypt(destination: Wrapper<ProtocolAddress>, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore): Promise<Uint8Array>;
 export function SealedSender_MultiRecipientEncrypt(recipients: Wrapper<ProtocolAddress>[], recipientSessions: Wrapper<SessionRecord>[], excludedRecipients: Uint8Array, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore): Promise<Uint8Array>;
 export function SealedSender_MultiRecipientMessageForSingleRecipient(encodedMultiRecipientMessage: Uint8Array): Uint8Array;
+export function SecureValueRecoveryForBackups_CreateNewBackupChain(environment: number, backupKey: Uint8Array): Uint8Array;
+export function SecureValueRecoveryForBackups_RestoreBackupFromServer(asyncRuntime: Wrapper<TokioAsyncContext>, backupKey: Uint8Array, metadata: Uint8Array, connectionManager: Wrapper<ConnectionManager>, username: string, password: string): CancellablePromise<BackupRestoreResponse>;
+export function SecureValueRecoveryForBackups_StoreBackup(asyncRuntime: Wrapper<TokioAsyncContext>, backupKey: Uint8Array, previousSecretData: Uint8Array, connectionManager: Wrapper<ConnectionManager>, username: string, password: string): CancellablePromise<BackupStoreResponse>;
 export function SenderCertificate_Deserialize(data: Uint8Array): SenderCertificate;
 export function SenderCertificate_GetCertificate(obj: Wrapper<SenderCertificate>): Uint8Array;
 export function SenderCertificate_GetDeviceId(obj: Wrapper<SenderCertificate>): number;
@@ -609,7 +617,7 @@ export function TESTING_ChatRequestGetPath(request: Wrapper<HttpRequest>): strin
 export function TESTING_ChatResponseConvert(bodyPresent: boolean): ChatResponse;
 export function TESTING_ChatSendErrorConvert(errorDescription: string): void;
 export function TESTING_ConnectionManager_isUsingProxy(manager: Wrapper<ConnectionManager>): number;
-export function TESTING_ConnectionManager_newLocalOverride(userAgent: string, chatPort: number, cdsiPort: number, svr2Port: number, rootCertificateDer: Uint8Array): ConnectionManager;
+export function TESTING_ConnectionManager_newLocalOverride(userAgent: string, chatPort: number, cdsiPort: number, svr2Port: number, svrBPort: number, rootCertificateDer: Uint8Array): ConnectionManager;
 export function TESTING_ConvertOptionalUuid(present: boolean): Uuid | null;
 export function TESTING_ErrorOnBorrowAsync(_input: null): Promise<void>;
 export function TESTING_ErrorOnBorrowIo(asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>, _input: null): CancellablePromise<void>;
@@ -714,6 +722,8 @@ export function initLogger(maxLevel: LogLevel, callback: (level: LogLevel, targe
 export function test_only_fn_returns_123(): number;
 interface Aes256GcmSiv { readonly __type: unique symbol; }
 interface AuthenticatedChatConnection { readonly __type: unique symbol; }
+interface BackupRestoreResponse { readonly __type: unique symbol; }
+interface BackupStoreResponse { readonly __type: unique symbol; }
 interface BridgedStringMap { readonly __type: unique symbol; }
 interface CdsiLookup { readonly __type: unique symbol; }
 interface ChatConnectionInfo { readonly __type: unique symbol; }
