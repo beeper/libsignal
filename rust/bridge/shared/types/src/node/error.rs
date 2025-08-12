@@ -279,10 +279,10 @@ impl SignalNodeError for libsignal_net::svrb::Error {
         operation_name: &str,
     ) -> Handle<'a, JsError> {
         let (name, make_props) = match &self {
-            Self::Service(_) | Self::ConnectionTimedOut | Self::Connect(_) => {
-                // TODO: 429s will be included in this! We should probably handle them separately.
+            Self::Service(_) | Self::AllConnectionAttemptsFailed | Self::Connect(_) => {
                 (Some(IO_ERROR), None)
             }
+            Self::RateLimited(inner) => return inner.into_throwable(cx, module, operation_name),
             Self::AttestationError(_) => (Some("SvrAttestationError"), None),
             Self::RestoreFailed(tries_remaining) => (
                 Some("SvrRestoreFailed"),
@@ -297,9 +297,7 @@ impl SignalNodeError for libsignal_net::svrb::Error {
             Self::Protocol(_) => (Some("IoError"), None),
             Self::PreviousBackupDataInvalid => (Some("SvrInvalidData"), None),
             Self::MetadataInvalid => (Some("SvrInvalidData"), None),
-            Self::EncryptionError(_) => (Some("SvrInvalidData"), None),
             Self::DecryptionError(_) => (Some("SvrInvalidData"), None),
-            Self::MultipleErrors(_) => (Some("SvrMultipleErrors"), None),
         };
 
         let message = self.to_string();
@@ -627,7 +625,7 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
             Self::AttestationError(e) => return e.into_throwable(cx, module, operation_name),
             Self::InvalidArgument { server_reason: _ } => None,
             Self::InvalidToken => Some("CdsiInvalidToken"),
-            Self::ConnectionTimedOut
+            Self::AllConnectionAttemptsFailed
             | Self::ConnectTransport(_)
             | Self::WebSocket(_)
             | Self::CdsiProtocol(_)

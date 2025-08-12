@@ -7,6 +7,14 @@ import * as Native from '../../Native';
 import { TokioAsyncContext, Environment, Net } from '../net';
 import { BackupKey, BackupForwardSecrecyToken } from '../AccountKeys';
 import { MessageBackupKey } from '../MessageBackup';
+import type {
+  IoError,
+  RateLimitedError,
+  SvrAttestationError,
+  SvrDataMissingError,
+  SvrInvalidDataError,
+  SvrRestoreFailedError,
+} from '../Errors';
 
 type ConnectionManager = Native.Wrapper<Native.ConnectionManager>;
 
@@ -144,10 +152,13 @@ class RestoreBackupResponseImpl implements RestoreBackupResponse {
  * ## Secret handling
  *
  * When calling {@link SvrB#store}, the `previousSecretData` parameter must be from the last call to
- * {@link SvrB#store} or {@link SvrB#restore} that succeeded. The returned secret from a successful
- * store or restore should be persisted until it is overwritten by the value from a subsequent
- * successful call. The caller should use {@link SvrB#createNewBackupChain} only for the very first
- * backup with a particular backup key.
+ * {@link SvrB#store} or {@link SvrB#restore} that succeeded. This "chaining" is used to construct
+ * each backup file so that it can be decrypted with either the *previous* token stored in SVR-B, or
+ * the *next* one, which is important in case the overall backup upload is ever interrupted.
+ *
+ * The returned secret from a successful store or restore should be persisted until it is
+ * overwritten by the value from a subsequent successful call. The caller should use
+ * {@link SvrB#createNewBackupChain} only for the very first backup with a particular backup key.
  *
  * ## Restore Flow
  *
@@ -212,7 +223,14 @@ export class SvrB {
    * @param options.abortSignal An AbortSignal that will cancel the request.
    * @returns a {@link StoreBackupResponse} containing the forward secrecy token, metadata, and
    * secret data.
-   * @throws Error if the previous secret data is malformed, or if processing or upload fail.
+   * @throws {SvrInvalidDataError} if the previous secret data is malformed. There's no choice here
+   * but to **start a new chain**.
+   * @throws {RateLimitedError} if the server is rate limiting this client. This is **retryable**
+   * after waiting the designated delay.
+   * @throws {IoError} if the network operation fails (connection, service, or timeout errors).
+   * These are **retryable**, but some may indicate a possible bug in libsignal or in the enclave.
+   * @throws {SvrAttestationError} if enclave attestation fails. This indicates a possible bug in
+   * libsignal or in the enclave.
    */
   async store(
     backupKey: BackupKey,
@@ -238,8 +256,8 @@ export class SvrB {
    * Fetches the forward secrecy token needed to decrypt a backup.
    *
    * This function makes a network call to the SVR-B server to retrieve the forward secrecy token
-   * associated with a specific backup. The token is required to derive the message backup keys
-   * for decryption.
+   * associated with a specific backup. The token is required to derive the message backup keys for
+   * decryption.
    *
    * The typical restore flow:
    * 1. Fetch the backup metadata (stored in a header in the backup file)
@@ -249,12 +267,23 @@ export class SvrB {
    * 5. Store the returned {@link RestoreBackupResponse#nextBackupSecretData} locally.
    *
    * @param backupKey The backup key derived from the Account Entropy Pool (AEP).
-   * @param metadata The metadata that was stored in a header in the backup file during backup creation.
+   * @param metadata The metadata that was stored in a header in the backup file during backup
+   * creation.
    * @param options Optional configuration.
    * @param options.abortSignal An AbortSignal that will cancel the request.
    * @returns The forward secrecy token needed to derive keys for decrypting the backup.
-   * @throws Error if the metadata is invalid, the network operation fails, or the
-   *   backup cannot be found.
+   * @throws {SvrInvalidDataError} if the previous secret data is malformed. In this case the user's
+   * data is **not recoverable**.
+   * @throws {SvrRestoreFailedError} if restoration fails (with remaining tries count). This should
+   * never happen but if it does the user's data is **not recoverable**.
+   * @throws {SvrDataMissingError} if the backup data is not found on the server, indicating an
+   * **incorrect backup key** (which may in turn imply the user's data is not recoverable).
+   * @throws {RateLimitedError} if the server is rate limiting this client. This is **retryable**
+   * after waiting the designated delay.
+   * @throws {IoError} if the network operation fails (connection, service, or timeout errors).
+   * These are **retryable**, but some may indicate a possible bug in libsignal or in the enclave.
+   * @throws {SvrAttestationError} if enclave attestation fails. This indicates a possible bug in
+   * libsignal or in the enclave.
    */
   async restore(
     backupKey: BackupKey,

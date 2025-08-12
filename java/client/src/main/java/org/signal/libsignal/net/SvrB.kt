@@ -41,9 +41,12 @@ import org.signal.libsignal.messagebackup.BackupKey
  *
  * ## Secret handling
  *
- * When calling [SvrB.store], the `previousSecretData` parameter
- * must be from the last call to [SvrB.store] or [SvrB.restore] that
- * succeeded. The returned secret from a successful `store()` or `restore()` call should
+ * When calling [SvrB.store], the `previousSecretData` parameter must be from the last call to
+ * [SvrB.store] or [SvrB.restore] that succeeded. This "chaining" is used to construct each backup
+ * file so that it can be decrypted with either the *previous* token stored in SVR-B, or the *next*
+ * one, which is important in case the overall backup upload is ever interrupted.
+ *
+ * The returned secret from a successful `store()` or `restore()` call should
  * be persisted until it is overwritten by the value from a subsequent
  * successful call. The caller should use [SvrB.createNewBackupChain] only for the very first
  * backup with a particular backup key.
@@ -69,26 +72,26 @@ import org.signal.libsignal.messagebackup.BackupKey
  * // Securely persist stored.nextBackupSecretData for the next backup
  * ```
  *
- * @see [BackupKey], [MessageBackupKey], [BackupForwardSecrecyToken]
+ * @see [BackupKey]
+ * @see [MessageBackupKey](org.signal.libsignal.messagebackup.MessageBackupKey)
+ * @see [BackupForwardSecrecyToken]
  */
 public class SvrB internal constructor(
   private val network: Network,
   private val username: String,
   private val password: String,
 ) {
-
   /**
    * Generates backup "secret data" for a fresh install.
    *
    * Should not be used if any previous backups exist for this `backupKey`, whether uploaded or
    * restored by the local device. See [SvrB] for more information.
    */
-  public fun createNewBackupChain(backupKey: BackupKey): ByteArray {
-    return Native.SecureValueRecoveryForBackups_CreateNewBackupChain(
+  public fun createNewBackupChain(backupKey: BackupKey): ByteArray =
+    Native.SecureValueRecoveryForBackups_CreateNewBackupChain(
       network.connectionManager.environment().value,
       backupKey.internalContentsForJNI,
     )
-  }
 
   /**
    * Prepares a backup for storage with forward secrecy guarantees.
@@ -106,42 +109,55 @@ public class SvrB internal constructor(
    * - the already-persisted result from [createNewBackupChain], only if neither of the other
    *   two are available.
    * @return a [CompletableFuture] that completes with:
-   *   - [Result.success] containing [SvrBStoreResponse] with the forward secrecy token, metadata, and secret data on success
-   *   - [Result.failure] containing [SvrException] if the previous secret data is malformed, or for encryption/decryption errors
-   *   - [Result.failure] containing [NetworkException] if the network operation fails (connection, service, or timeout errors)
-   *   - [Result.failure] containing [NetworkProtocolException] if there is a protocol error
-   *   - [Result.failure] containing [AttestationFailedException] if enclave attestation fails
-   *   - [Result.failure] containing [SvrException] for other SVR request failures
+   * - **[Result.success]** containing [SvrBStoreResponse] with the forward secrecy token, metadata,
+   *   and secret data on success
+   * - [Result.failure] containing
+   *   [InvalidSvrBDataException](org.signal.libsignal.svr.InvalidSvrBDataException) if the previous
+   *   secret data is malformed. There's no choice here but to **start a new chain**.
+   * - [Result.failure] containing [RetryLaterException] if the server is rate limiting this client.
+   *   This is **retryable** after waiting the designated delay.
+   * - [Result.failure] containing [NetworkException] if the network operation fails (connection,
+   *   service, or timeout errors). These are **retryable**.
+   * - [Result.failure] containing [NetworkProtocolException] if there is a protocol error. This
+   *   indicates a possible bug in libsignal or in the enclave.
+   * - [Result.failure] containing
+   *   [AttestationFailedException](org.signal.libsignal.attest.AttestationFailedException),
+   *   [AttestationDataException](org.signal.libsignal.attest.AttestationDataException), or
+   *   [SgxCommunicationFailureException](org.signal.libsignal.sgxsession.SgxCommunicationFailureException)
+   *   if enclave attestation fails. This indicates a possible bug in libsignal or in the enclave.
    */
   public fun store(
     backupKey: BackupKey,
     previousSecretData: ByteArray,
   ): CompletableFuture<Result<SvrBStoreResponse>> {
-    val nativeFuture = network.asyncContext.guardedMap { asyncContextHandle ->
-      network.connectionManager.guardedMap { connectionManagerHandle ->
-        Native.SecureValueRecoveryForBackups_StoreBackup(
-          asyncContextHandle,
-          backupKey.internalContentsForJNI,
-          previousSecretData,
-          connectionManagerHandle,
-          username,
-          password,
-        )
+    val nativeFuture =
+      network.asyncContext.guardedMap { asyncContextHandle ->
+        network.connectionManager.guardedMap { connectionManagerHandle ->
+          Native.SecureValueRecoveryForBackups_StoreBackup(
+            asyncContextHandle,
+            backupKey.internalContentsForJNI,
+            previousSecretData,
+            connectionManagerHandle,
+            username,
+            password,
+          )
+        }
       }
-    }
 
-    return nativeFuture.thenApply { backupResponseHandle ->
-      val response = BackupStoreResponse(backupResponseHandle)
-      response.guardedMap { _ ->
-        SvrBStoreResponse(
-          forwardSecrecyToken = BackupForwardSecrecyToken(
-            response.guardedMapChecked(Native::BackupStoreResponse_GetForwardSecrecyToken),
-          ),
-          nextBackupSecretData = response.guardedMapChecked(Native::BackupStoreResponse_GetNextBackupSecretData),
-          metadata = response.guardedMapChecked(Native::BackupStoreResponse_GetOpaqueMetadata),
-        )
-      }
-    }.toResultFuture()
+    return nativeFuture
+      .thenApply { backupResponseHandle ->
+        val response = BackupStoreResponse(backupResponseHandle)
+        response.guardedMap { _ ->
+          SvrBStoreResponse(
+            forwardSecrecyToken =
+              BackupForwardSecrecyToken(
+                response.guardedMapChecked(Native::BackupStoreResponse_GetForwardSecrecyToken),
+              ),
+            nextBackupSecretData = response.guardedMapChecked(Native::BackupStoreResponse_GetNextBackupSecretData),
+            metadata = response.guardedMapChecked(Native::BackupStoreResponse_GetOpaqueMetadata),
+          )
+        }
+      }.toResultFuture()
   }
 
   /**
@@ -159,45 +175,62 @@ public class SvrB internal constructor(
    * 5. Store the returned [SvrBRestoreResponse.nextBackupSecretData] locally.
    *
    * @param backupKey The backup key derived from the Account Entropy Pool (AEP).
-   * @param metadata The metadata that was stored in a header in the backup file during backup creation.
+   * @param metadata The metadata that was stored in a header in the backup file during backup
+   * creation.
    * @return a [CompletableFuture] that completes with:
-   *   - [Result.success] containing [BackupForwardSecrecyToken] needed to derive keys for decrypting the backup
-   *   - [Result.failure] containing [SvrException] if the metadata is invalid
-   *   - [Result.failure] containing [RestoreFailedException] if restoration fails (with remaining tries count)
-   *   - [Result.failure] containing [DataMissingException] if the backup data is not found on the server
-   *   - [Result.failure] containing [NetworkException] if the network operation fails (connection, service, or timeout errors)
-   *   - [Result.failure] containing [NetworkProtocolException] if there is a protocol error
-   *   - [Result.failure] containing [AttestationFailedException] if enclave attestation fails
-   *   - [Result.failure] containing [SvrException] for other SVR request failures
+   * - **[Result.success]** containing [BackupForwardSecrecyToken] needed to derive keys for
+   *   decrypting the backup
+   * - [Result.failure] containing
+   *   [InvalidSvrBDataException](org.signal.libsignal.svr.InvalidSvrBDataException) if the backup
+   *   metadata is malformed. In this case the user's data is **not recoverable**.
+   * - [Result.failure] containing [RestoreFailedException] if restoration fails (with remaining
+   *   tries count). This should never happen but if it does the user's data is **not recoverable**.
+   * - [Result.failure] containing [DataMissingException] if the backup data is not found on the
+   *   server, indicating an **incorrect backup key** (which may in turn imply the user's data is
+   *   not recoverable).
+   * - [Result.failure] containing [RetryLaterException] if the server is rate limiting this client.
+   *   This is **retryable** after waiting the designated delay.
+   * - [Result.failure] containing [NetworkException] if the network operation fails (connection,
+   *   service, or timeout errors). These are **retryable**.
+   * - [Result.failure] containing [NetworkProtocolException] if there is a protocol error. This
+   *   indicates a possible bug in libsignal or in the enclave.
+   * - [Result.failure] containing
+   *   [AttestationFailedException](org.signal.libsignal.attest.AttestationFailedException),
+   *   [AttestationDataException](org.signal.libsignal.attest.AttestationDataException), or
+   *   [SgxCommunicationFailureException](org.signal.libsignal.sgxsession.SgxCommunicationFailureException)
+   *   if enclave attestation fails. This indicates a possible bug in libsignal or in the enclave.
    */
   public fun restore(
     backupKey: BackupKey,
     metadata: ByteArray,
   ): CompletableFuture<Result<SvrBRestoreResponse>> {
-    val nativeFuture = network.asyncContext.guardedMap { asyncContextHandle ->
-      network.connectionManager.guardedMap { connectionManagerHandle ->
-        Native.SecureValueRecoveryForBackups_RestoreBackupFromServer(
-          asyncContextHandle,
-          backupKey.internalContentsForJNI,
-          metadata,
-          connectionManagerHandle,
-          username,
-          password,
-        )
+    val nativeFuture =
+      network.asyncContext.guardedMap { asyncContextHandle ->
+        network.connectionManager.guardedMap { connectionManagerHandle ->
+          Native.SecureValueRecoveryForBackups_RestoreBackupFromServer(
+            asyncContextHandle,
+            backupKey.internalContentsForJNI,
+            metadata,
+            connectionManagerHandle,
+            username,
+            password,
+          )
+        }
       }
-    }
 
-    return nativeFuture.thenApply { backupResponseHandle ->
-      val response = BackupRestoreResponse(backupResponseHandle)
-      response.guardedMap { _ ->
-        SvrBRestoreResponse(
-          forwardSecrecyToken = BackupForwardSecrecyToken(
-            response.guardedMapChecked(Native::BackupRestoreResponse_GetForwardSecrecyToken),
-          ),
-          nextBackupSecretData = response.guardedMapChecked(Native::BackupRestoreResponse_GetNextBackupSecretData),
-        )
-      }
-    }.toResultFuture()
+    return nativeFuture
+      .thenApply { backupResponseHandle ->
+        val response = BackupRestoreResponse(backupResponseHandle)
+        response.guardedMap { _ ->
+          SvrBRestoreResponse(
+            forwardSecrecyToken =
+              BackupForwardSecrecyToken(
+                response.guardedMapChecked(Native::BackupRestoreResponse_GetForwardSecrecyToken),
+              ),
+            nextBackupSecretData = response.guardedMapChecked(Native::BackupRestoreResponse_GetNextBackupSecretData),
+          )
+        }
+      }.toResultFuture()
   }
 }
 
@@ -241,7 +274,6 @@ public data class SvrBStoreResponse(
    * the SVR-B server that must be retrieved during restoration.
    */
   public val forwardSecrecyToken: BackupForwardSecrecyToken,
-
   /**
    * Opaque value that must be persisted and provided to the next call to [SvrB.store].
    *
@@ -249,7 +281,6 @@ public data class SvrBStoreResponse(
    * for this value.
    */
   public val nextBackupSecretData: ByteArray,
-
   /**
    * Opaque metadata that must be stored in the backup file.
    *
@@ -279,7 +310,6 @@ public data class SvrBRestoreResponse(
    * the SVR-B server that must be retrieved during restoration.
    */
   public val forwardSecrecyToken: BackupForwardSecrecyToken,
-
   /**
    * Opaque value that must be persisted and provided to the next call to [SvrB.store].
    *

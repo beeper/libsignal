@@ -5,15 +5,13 @@
 
 use std::default::Default;
 
-use http::StatusCode;
 use libsignal_core::{Aci, Pni, E164};
 use libsignal_net_infra::errors::{LogSafeDisplay, RetryLater, TransportConnectError};
-use libsignal_net_infra::extract_retry_later;
 use libsignal_net_infra::route::{RouteProvider, UnresolvedWebsocketServiceRoute};
-use libsignal_net_infra::ws::{NextOrClose, WebSocketConnectError, WebSocketServiceError};
-use libsignal_net_infra::ws2::attested::{
+use libsignal_net_infra::ws::attested::{
     AttestedConnection, AttestedConnectionError, AttestedProtocolError,
 };
+use libsignal_net_infra::ws::{NextOrClose, WebSocketConnectError, WebSocketServiceError};
 use prost::Message as _;
 use thiserror::Error;
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -24,7 +22,6 @@ use crate::auth::Auth;
 use crate::connect_state::{ConnectionResources, WebSocketTransportConnectorFactory};
 use crate::enclave::{Cdsi, EndpointParams};
 use crate::proto::cds2::{ClientRequest, ClientResponse};
-use crate::ws::WebSocketServiceConnectError;
 
 trait FixedLengthSerializable {
     const SERIALIZED_LEN: usize;
@@ -248,8 +245,8 @@ pub enum LookupError {
     ConnectTransport(TransportConnectError),
     /// websocket error: {0}
     WebSocket(WebSocketServiceError),
-    /// connect attempt timed out
-    ConnectionTimedOut,
+    /// no connection attempts succeeded before timeout
+    AllConnectionAttemptsFailed,
     /// request was invalid: {server_reason}
     InvalidArgument { server_reason: String },
     /// server error: {reason}
@@ -278,28 +275,16 @@ impl From<crate::enclave::Error> for LookupError {
     fn from(value: crate::enclave::Error) -> Self {
         use crate::enclave::Error;
         match value {
-            Error::WebSocketConnect(err) => match err {
-                WebSocketServiceConnectError::RejectedByServer {
-                    response,
-                    received_at: _,
-                } => {
-                    if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                        if let Some(retry_later) = extract_retry_later(response.headers()) {
-                            return Self::RateLimited(retry_later);
-                        }
-                    }
-                    Self::WebSocket(WebSocketServiceError::Http(response))
-                }
-                WebSocketServiceConnectError::Connect(e, _) => match e {
-                    WebSocketConnectError::Timeout => Self::ConnectionTimedOut,
-                    WebSocketConnectError::Transport(e) => Self::ConnectTransport(e),
-                    WebSocketConnectError::WebSocketError(e) => Self::WebSocket(e.into()),
-                },
+            Error::WebSocketConnect(e) => match e {
+                WebSocketConnectError::Timeout => Self::AllConnectionAttemptsFailed,
+                WebSocketConnectError::Transport(e) => Self::ConnectTransport(e),
+                WebSocketConnectError::WebSocketError(e) => Self::WebSocket(e.into()),
             },
+            Error::RateLimited(inner) => Self::RateLimited(inner),
             Error::AttestationError(err) => Self::AttestationError(err),
             Error::WebSocket(err) => Self::WebSocket(err),
             Error::Protocol(error) => Self::EnclaveProtocol(error),
-            Error::ConnectionTimedOut => Self::ConnectionTimedOut,
+            Error::AllConnectionAttemptsFailed => Self::AllConnectionAttemptsFailed,
         }
     }
 }
@@ -323,9 +308,9 @@ impl CdsiConnection {
     pub async fn connect_with(
         connection_resources: ConnectionResources<'_, impl WebSocketTransportConnectorFactory>,
         route_provider: impl RouteProvider<Route = UnresolvedWebsocketServiceRoute>,
-        ws_config: crate::infra::ws2::Config,
+        ws_config: crate::infra::ws::Config,
         params: &EndpointParams<'_, Cdsi>,
-        auth: Auth,
+        auth: &Auth,
     ) -> Result<Self, LookupError> {
         let (connection, _route_info) = connection_resources
             .connect_attested_ws(route_provider, auth, ws_config, "cdsi".into(), params)
@@ -502,12 +487,12 @@ mod test {
     use libsignal_net_infra::route::testutils::ConnectFn;
     use libsignal_net_infra::route::DirectOrProxyProvider;
     use libsignal_net_infra::testutil::no_network_change_events;
-    use libsignal_net_infra::ws::testutil::fake_websocket;
-    use libsignal_net_infra::ws2::attested::testutil::{
+    use libsignal_net_infra::ws::attested::testutil::{
         run_attested_server, AttestedServerOutput, FAKE_ATTESTATION,
     };
+    use libsignal_net_infra::ws::testutil::fake_websocket;
     use libsignal_net_infra::{
-        AsStaticHttpHeader as _, EnableDomainFronting, RECOMMENDED_WS2_CONFIG,
+        AsStaticHttpHeader as _, EnableDomainFronting, RECOMMENDED_WS_CONFIG,
     };
     use nonzero_ext::nonzero;
     use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -691,7 +676,7 @@ mod test {
         }
     }
 
-    const FAKE_WS_CONFIG: libsignal_net_infra::ws2::Config = libsignal_net_infra::ws2::Config {
+    const FAKE_WS_CONFIG: libsignal_net_infra::ws::Config = libsignal_net_infra::ws::Config {
         local_idle_timeout: Duration::from_secs(5),
         remote_idle_ping_timeout: Duration::from_secs(100),
         remote_idle_disconnect_timeout: Duration::from_secs(100),
@@ -969,7 +954,7 @@ mod test {
         });
 
         let env = crate::env::PROD;
-        let ws2_config = RECOMMENDED_WS2_CONFIG;
+        let ws2_config = RECOMMENDED_WS_CONFIG;
         let auth = Auth {
             username: "username".to_string(),
             password: "password".to_string(),
@@ -997,7 +982,7 @@ mod test {
             ),
             ws2_config,
             &env.cdsi.params,
-            auth,
+            &auth,
         )
         .await;
 

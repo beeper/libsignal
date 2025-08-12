@@ -310,7 +310,7 @@ impl JniError for SignalProtocolError {
     }
 }
 
-impl MessageOnlyExceptionJniError for ConnectTimedOut {
+impl MessageOnlyExceptionJniError for AllConnectionAttemptsFailed {
     fn exception_class(&self) -> ClassName<'static> {
         ClassName("org.signal.libsignal.net.NetworkException")
     }
@@ -859,32 +859,26 @@ impl JniError for SvrbError {
                 &self.to_string(),
                 ClassName("org.signal.libsignal.svr.DataMissingException"),
             ),
-            SvrbError::AttestationError(_) => make_single_message_throwable(
-                env,
-                &self.to_string(),
-                ClassName("org.signal.libsignal.attest.AttestationFailedException"),
-            ),
+            SvrbError::AttestationError(inner) => inner.to_throwable(env),
             SvrbError::Protocol(_) => make_single_message_throwable(
                 env,
                 &self.to_string(),
                 ClassName("org.signal.libsignal.net.NetworkProtocolException"),
             ),
-            SvrbError::Connect(_) | SvrbError::Service(_) | SvrbError::ConnectionTimedOut => {
-                // TODO: 429s will be included in this! We should probably handle them separately.
-                make_single_message_throwable(
-                    env,
-                    &self.to_string(),
-                    ClassName("org.signal.libsignal.net.NetworkException"),
-                )
-            }
-            SvrbError::PreviousBackupDataInvalid
-            | SvrbError::MetadataInvalid
-            | SvrbError::EncryptionError(_)
-            | SvrbError::DecryptionError(_)
-            | SvrbError::MultipleErrors(_) => make_single_message_throwable(
+            SvrbError::Connect(_)
+            | SvrbError::Service(_)
+            | SvrbError::AllConnectionAttemptsFailed => make_single_message_throwable(
                 env,
                 &self.to_string(),
-                ClassName("org.signal.libsignal.svr.SvrException"),
+                ClassName("org.signal.libsignal.net.NetworkException"),
+            ),
+            SvrbError::RateLimited(inner) => inner.to_throwable(env),
+            SvrbError::PreviousBackupDataInvalid
+            | SvrbError::MetadataInvalid
+            | SvrbError::DecryptionError(_) => make_single_message_throwable(
+                env,
+                &self.to_string(),
+                ClassName("org.signal.libsignal.svr.InvalidSvrBDataException"),
             ),
         }
     }

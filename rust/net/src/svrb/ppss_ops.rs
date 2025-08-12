@@ -11,8 +11,8 @@ use std::collections::VecDeque;
 
 use futures_util::future::join_all;
 use futures_util::TryFutureExt as _;
+use libsignal_net_infra::ws::attested::AttestedConnectionError;
 use libsignal_net_infra::ws::NextOrClose;
-use libsignal_net_infra::ws2::attested::AttestedConnectionError;
 pub(crate) use libsignal_svrb::{Backup4, Secret};
 use libsignal_svrb::{Query4, Remove4, Restore1};
 use rand::rngs::OsRng;
@@ -153,7 +153,7 @@ async fn run_attested_interaction(
     connection: &mut LabeledConnection,
     request: impl AsRef<[u8]>,
 ) -> Result<(NextOrClose<Vec<u8>>, &ConnectionLabel), AttestedConnectionError> {
-    libsignal_net_infra::ws2::attested::run_attested_interaction(&mut connection.0, request)
+    libsignal_net_infra::ws::attested::run_attested_interaction(&mut connection.0, request)
         .map_ok(|n| (n, &connection.1))
         .await
 }
@@ -219,7 +219,7 @@ mod test {
 
         fn into_connection_results(self) -> Self::ConnectionResults {
             [
-                Err(Error::ConnectionTimedOut),
+                Err(Error::AllConnectionAttemptsFailed),
                 Err(Error::AttestationError(
                     attest::enclave::Error::InvalidBridgeStateError,
                 )),
@@ -231,19 +231,19 @@ mod test {
     async fn do_backup_fails_with_the_first_error() {
         let backup = do_prepare::<TestEnv>(b"");
         let result = do_backup::<TestEnv>(NotConnectedResults, &backup).await;
-        assert_matches!(result, Err(crate::svrb::Error::ConnectionTimedOut));
+        assert_matches!(result, Err(crate::svrb::Error::AllConnectionAttemptsFailed));
     }
 
     #[tokio::test]
     async fn do_restore_fails_with_the_first_error() {
         let result = do_restore::<TestEnv>(NotConnectedResults, b"").await;
-        assert_matches!(result, Err(crate::svrb::Error::ConnectionTimedOut));
+        assert_matches!(result, Err(crate::svrb::Error::AllConnectionAttemptsFailed));
     }
 
     #[tokio::test]
     async fn do_query_fails_with_the_first_error() {
         let result = do_query(NotConnectedResults).await;
-        assert_matches!(result, Err(crate::svrb::Error::ConnectionTimedOut));
+        assert_matches!(result, Err(crate::svrb::Error::AllConnectionAttemptsFailed));
     }
 
     #[tokio::test]

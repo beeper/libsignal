@@ -21,8 +21,8 @@ use libsignal_net_infra::route::{
     HttpsProvider, TlsRouteProvider,
 };
 use libsignal_net_infra::{
-    ws2, AsStaticHttpHeader, ConnectionParams, EnableDomainFronting, EnforceMinimumTls, RouteType,
-    TransportConnectionParams, RECOMMENDED_WS2_CONFIG,
+    ws, AsStaticHttpHeader, ConnectionParams, EnableDomainFronting, EnforceMinimumTls, RouteType,
+    TransportConnectionParams, RECOMMENDED_WS_CONFIG,
 };
 use nonzero_ext::nonzero;
 use rand::seq::SliceRandom;
@@ -544,16 +544,38 @@ impl From<KeyTransConfig> for PublicConfig {
     }
 }
 
-pub struct SvrBEnv<'a>(EnclaveEndpoint<'a, SvrSgx>);
+const SVRB_ENV_MAX_PREVIOUS: usize = 3;
+
+pub struct SvrBEnv<'a> {
+    current: EnclaveEndpoint<'a, SvrSgx>,
+    // There may be differing numbers of previous endpoints in staging vs prod,
+    // so rather than store a fixed-sized array of previous, we store
+    // a max-sized list of Options, which are often None but can be set.
+    // Thus, if staging has 2 and prod has 1, they can set [foo, bar, None] and
+    // [baz, None, None] respectively.
+    previous: [Option<EnclaveEndpoint<'a, SvrSgx>>; SVRB_ENV_MAX_PREVIOUS],
+}
 
 impl<'a> SvrBEnv<'a> {
-    pub const fn new(sgx: EnclaveEndpoint<'a, SvrSgx>) -> Self {
-        Self(sgx)
+    pub const fn new(
+        current: EnclaveEndpoint<'a, SvrSgx>,
+        previous: [Option<EnclaveEndpoint<'a, SvrSgx>>; SVRB_ENV_MAX_PREVIOUS],
+    ) -> Self {
+        Self { current, previous }
     }
 
-    #[inline]
-    pub const fn sgx(&self) -> &EnclaveEndpoint<'a, SvrSgx> {
-        &self.0
+    pub const fn current(&self) -> &EnclaveEndpoint<'a, SvrSgx> {
+        &self.current
+    }
+
+    pub fn previous(&self) -> impl std::iter::Iterator<Item = &EnclaveEndpoint<'a, SvrSgx>> {
+        self.previous.iter().filter_map(|a| a.as_ref())
+    }
+
+    pub fn current_and_previous(
+        &self,
+    ) -> impl std::iter::Iterator<Item = &EnclaveEndpoint<'a, SvrSgx>> {
+        std::iter::once(&self.current).chain(self.previous.iter().filter_map(|a| a.as_ref()))
     }
 }
 
@@ -562,7 +584,7 @@ pub struct Env<'a> {
     pub svr2: EnclaveEndpoint<'a, SvrSgx>,
     pub svr_b: SvrBEnv<'a>,
     pub chat_domain_config: DomainConfig,
-    pub chat_ws_config: ws2::Config,
+    pub chat_ws_config: ws::Config,
     pub keytrans_config: KeyTransConfig,
 }
 
@@ -573,55 +595,72 @@ impl<'a> Env<'a> {
             cdsi,
             svr2,
             chat_domain_config,
-            ..
+            svr_b,
+            chat_ws_config: _,
+            keytrans_config: _,
         } = self;
-        HashMap::from([
-            cdsi.domain_config.static_fallback(),
-            svr2.domain_config.static_fallback(),
-            chat_domain_config.static_fallback(),
-        ])
+
+        let svrb_static_fallbacks = svr_b
+            .current_and_previous()
+            .map(|enclave_endpoint| enclave_endpoint.domain_config.static_fallback());
+
+        HashMap::from_iter(
+            [
+                cdsi.domain_config.static_fallback(),
+                svr2.domain_config.static_fallback(),
+                chat_domain_config.static_fallback(),
+            ]
+            .into_iter()
+            .chain(svrb_static_fallbacks),
+        )
     }
 }
 
 pub const STAGING: Env<'static> = Env {
     chat_domain_config: DOMAIN_CONFIG_CHAT_STAGING,
-    chat_ws_config: RECOMMENDED_WS2_CONFIG,
+    chat_ws_config: RECOMMENDED_WS_CONFIG,
     cdsi: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_CDSI_STAGING,
-        ws_config: RECOMMENDED_WS2_CONFIG,
+        ws_config: RECOMMENDED_WS_CONFIG,
         params: ENDPOINT_PARAMS_CDSI_STAGING,
     },
     svr2: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_SVR2_STAGING,
-        ws_config: RECOMMENDED_WS2_CONFIG,
+        ws_config: RECOMMENDED_WS_CONFIG,
         params: ENDPOINT_PARAMS_SVR2_STAGING,
     },
-    svr_b: SvrBEnv(EnclaveEndpoint {
-        domain_config: DOMAIN_CONFIG_SVRB_STAGING,
-        ws_config: RECOMMENDED_WS2_CONFIG,
-        params: ENDPOINT_PARAMS_SVRB_STAGING,
-    }),
+    svr_b: SvrBEnv {
+        current: EnclaveEndpoint {
+            domain_config: DOMAIN_CONFIG_SVRB_STAGING,
+            ws_config: RECOMMENDED_WS_CONFIG,
+            params: ENDPOINT_PARAMS_SVRB_STAGING,
+        },
+        previous: [None, None, None],
+    },
     keytrans_config: KEYTRANS_CONFIG_STAGING,
 };
 
 pub const PROD: Env<'static> = Env {
     chat_domain_config: DOMAIN_CONFIG_CHAT,
-    chat_ws_config: RECOMMENDED_WS2_CONFIG,
+    chat_ws_config: RECOMMENDED_WS_CONFIG,
     cdsi: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_CDSI,
-        ws_config: RECOMMENDED_WS2_CONFIG,
+        ws_config: RECOMMENDED_WS_CONFIG,
         params: ENDPOINT_PARAMS_CDSI_PROD,
     },
     svr2: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_SVR2,
-        ws_config: RECOMMENDED_WS2_CONFIG,
+        ws_config: RECOMMENDED_WS_CONFIG,
         params: ENDPOINT_PARAMS_SVR2_PROD,
     },
-    svr_b: SvrBEnv(EnclaveEndpoint {
-        domain_config: DOMAIN_CONFIG_SVRB_PROD,
-        ws_config: RECOMMENDED_WS2_CONFIG,
-        params: ENDPOINT_PARAMS_SVRB_PROD,
-    }),
+    svr_b: SvrBEnv {
+        current: EnclaveEndpoint {
+            domain_config: DOMAIN_CONFIG_SVRB_PROD,
+            ws_config: RECOMMENDED_WS_CONFIG,
+            params: ENDPOINT_PARAMS_SVRB_PROD,
+        },
+        previous: [None, None, None],
+    },
     keytrans_config: KEYTRANS_CONFIG_PROD,
 };
 

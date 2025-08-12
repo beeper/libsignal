@@ -48,8 +48,8 @@ export enum ErrorCode {
   SvrDataMissing,
   SvrRequestFailed,
   SvrRestoreFailed,
-  SvrMultipleErrors,
   SvrAttestationError,
+  SvrInvalidData,
 
   ChatServiceInactive,
   AppExpired,
@@ -294,12 +294,12 @@ export type SvrRestoreFailedError = LibSignalErrorCommon & {
   readonly triesRemaining: number;
 };
 
-export type SvrMultipleErrorsError = LibSignalErrorCommon & {
-  code: ErrorCode.SvrMultipleErrors;
-};
-
 export type SvrAttestationError = LibSignalErrorCommon & {
   code: ErrorCode.SvrAttestationError;
+};
+
+export type SvrInvalidDataError = LibSignalErrorCommon & {
+  code: ErrorCode.SvrInvalidData;
 };
 
 export type BackupValidationError = LibSignalErrorCommon & {
@@ -351,8 +351,8 @@ export type LibSignalError =
   | SvrDataMissingError
   | SvrRestoreFailedError
   | SvrRequestFailedError
-  | SvrMultipleErrorsError
   | SvrAttestationError
+  | SvrInvalidDataError
   | UnsupportedMediaInputError
   | ChatServiceInactive
   | AppExpiredError
