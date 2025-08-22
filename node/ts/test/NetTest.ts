@@ -803,11 +803,6 @@ describe('cdsi lookup', () => {
           ErrorCode.Generic,
           'attestation data invalid: fake reason',
         ],
-        [
-          'InvalidResponse',
-          ErrorCode.IoError,
-          'invalid response received from the server',
-        ],
         ['RetryAfter42Seconds', ErrorCode.RateLimitedError, 'retry after 42s'],
         [
           'InvalidToken',
@@ -820,14 +815,9 @@ describe('cdsi lookup', () => {
           'request was invalid: fake reason',
         ],
         [
-          'Parse',
+          'TcpConnectFailed',
           ErrorCode.IoError,
-          'failed to parse the response from the server',
-        ],
-        [
-          'ConnectDnsFailed',
-          ErrorCode.IoError,
-          'transport failed: DNS lookup failed',
+          'transport failed: Failed to establish TCP connection to any of the IPs',
         ],
         [
           'WebSocketIdleTooLong',

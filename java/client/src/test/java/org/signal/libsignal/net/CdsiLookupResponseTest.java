@@ -57,15 +57,12 @@ public class CdsiLookupResponseTest {
   public void cdsiLookupErrorConvert() {
     assertLookupErrorIs(
         "Protocol", CdsiProtocolException.class, "Protocol error after establishing a connection");
-    assertLookupErrorIs("CdsiProtocol", CdsiProtocolException.class, "Response token was missing");
+    assertLookupErrorIs(
+        "CdsiProtocol", CdsiProtocolException.class, "CDS protocol: no token found in response");
     assertLookupErrorIs(
         "AttestationDataError",
         AttestationDataException.class,
         "attestation data invalid: fake reason");
-    assertLookupErrorIs(
-        "InvalidResponse",
-        CdsiProtocolException.class,
-        "Invalid response received from the server");
     RetryLaterException retryLater =
         assertLookupErrorIs(
             "RetryAfter42Seconds", RetryLaterException.class, "Retry after 42 seconds");
@@ -74,12 +71,11 @@ public class CdsiLookupResponseTest {
     assertLookupErrorIs(
         "InvalidToken", CdsiInvalidTokenException.class, "Request token was invalid");
     assertLookupErrorIs(
-        "InvalidArgument",
-        IllegalArgumentException.class,
-        "invalid argument: request was invalid: fake reason");
+        "InvalidArgument", IllegalArgumentException.class, "request was invalid: fake reason");
     assertLookupErrorIs(
-        "Parse", CdsiProtocolException.class, "Failed to parse the response from the server");
-    assertLookupErrorIs("ConnectDnsFailed", IOException.class, "DNS lookup failed");
+        "TcpConnectFailed",
+        IOException.class,
+        "Failed to establish TCP connection to any of the IPs");
     assertLookupErrorIs(
         "WebSocketIdleTooLong", NetworkException.class, "channel was idle for too long");
     assertLookupErrorIs(
@@ -96,7 +92,7 @@ public class CdsiLookupResponseTest {
             "for " + errorDescription,
             expectedErrorType,
             () -> NativeTesting.TESTING_CdsiLookupErrorConvert(errorDescription));
-    assertEquals(e.getMessage(), expectedMessage);
+    assertEquals(expectedMessage, e.getMessage());
     return e;
   }
 }

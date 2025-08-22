@@ -228,7 +228,8 @@ export class SvrB {
    * @throws {RateLimitedError} if the server is rate limiting this client. This is **retryable**
    * after waiting the designated delay.
    * @throws {IoError} if the network operation fails (connection, service, or timeout errors).
-   * These are **retryable**, but some may indicate a possible bug in libsignal or in the enclave.
+   * These can be **automatically retried** (backoff recommended), but some may indicate a possible
+   * bug in libsignal or in the enclave.
    * @throws {SvrAttestationError} if enclave attestation fails. This indicates a possible bug in
    * libsignal or in the enclave.
    */
@@ -281,7 +282,8 @@ export class SvrB {
    * @throws {RateLimitedError} if the server is rate limiting this client. This is **retryable**
    * after waiting the designated delay.
    * @throws {IoError} if the network operation fails (connection, service, or timeout errors).
-   * These are **retryable**, but some may indicate a possible bug in libsignal or in the enclave.
+   * These can be **automatically retried** (backoff recommended), but some may indicate a possible
+   * bug in libsignal or in the enclave.
    * @throws {SvrAttestationError} if enclave attestation fails. This indicates a possible bug in
    * libsignal or in the enclave.
    */
@@ -304,5 +306,36 @@ export class SvrB {
       promise
     );
     return new RestoreBackupResponseImpl(response);
+  }
+
+  /**
+   * Attempts to remove the info stored with SVR-B for this particular username/password pair.
+   *
+   * This is a best-effort operation; a successful return means the data has been removed from (or
+   * never was present in) the current SVR-B enclaves, but may still be present in previous ones
+   * that have yet to be decommissioned. Conversely, a thrown error may still have removed
+   * information from previous enclaves.
+   *
+   * This should not typically be needed; rather than explicitly removing an entry, the client
+   * should generally overwrite with a new {@link #store} instead.
+   *
+   * @param options Optional configuration.
+   * @param options.abortSignal An AbortSignal that will cancel the request.
+   * @throws {RateLimitedError} if the server is rate limiting this client. This is **retryable**
+   * after waiting the designated delay.
+   * @throws {IoError} if the network operation fails (connection, service, or timeout errors).
+   * These can be **automatically retried** (backoff recommended), but some may indicate a possible
+   * bug in libsignal or in the enclave.
+   * @throws {SvrAttestationError} if enclave attestation fails. This indicates a possible bug in
+   * libsignal or in the enclave.
+   */
+  async remove(options?: { abortSignal?: AbortSignal }): Promise<void> {
+    const promise = Native.SecureValueRecoveryForBackups_RemoveBackup(
+      this.asyncContext,
+      this.connectionManager,
+      this.auth.username,
+      this.auth.password
+    );
+    await this.asyncContext.makeCancellable(options?.abortSignal, promise);
   }
 }

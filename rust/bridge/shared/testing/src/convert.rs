@@ -11,7 +11,6 @@ use libsignal_bridge_macros::*;
 use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::support::*;
 use libsignal_bridge_types::*;
-use libsignal_protocol::SignalProtocolError;
 use uuid::Uuid;
 
 use crate::types::*;
@@ -69,9 +68,14 @@ async fn TESTING_FutureSuccess(input: u8) -> i32 {
     i32::from(input) * 2
 }
 
+#[bridge_io(TokioAsyncContext)]
+async fn TESTING_TokioAsyncContext_FutureSuccessBytes(count: i32) -> Vec<u8> {
+    vec![0; usize::try_from(count).unwrap()]
+}
+
 #[bridge_io(NonSuspendingBackgroundThreadRuntime)]
-async fn TESTING_FutureFailure(_input: u8) -> Result<i32, SignalProtocolError> {
-    Err(SignalProtocolError::InvalidArgument("failure".to_string()))
+async fn TESTING_FutureFailure(_input: u8) -> Result<i32, IllegalArgumentError> {
+    Err(IllegalArgumentError::new("failure"))
 }
 
 bridge_handle_fns!(TestingFutureCancellationCounter, clone = false);
@@ -342,8 +346,6 @@ async fn TESTING_InputStreamReadIntoZeroLengthSlice(
 fn TESTING_FingerprintVersionMismatchError(
     theirs: u32,
     ours: u32,
-) -> Result<(), SignalProtocolError> {
-    Err(SignalProtocolError::FingerprintVersionMismatch(
-        theirs, ours,
-    ))
+) -> Result<(), libsignal_protocol::FingerprintError> {
+    Err(libsignal_protocol::FingerprintError::VersionMismatch { theirs, ours })
 }

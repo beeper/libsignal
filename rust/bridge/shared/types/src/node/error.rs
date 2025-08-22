@@ -11,6 +11,7 @@ use signal_media::sanitize::mp4::{Error as Mp4Error, ParseError as Mp4ParseError
 use signal_media::sanitize::webp::{Error as WebpError, ParseError as WebpParseError};
 
 use super::*;
+use crate::support::IllegalArgumentError;
 
 const ERRORS_PROPERTY_NAME: &str = "Errors";
 const ERROR_CLASS_NAME: &str = "LibSignalErrorBase";
@@ -151,6 +152,8 @@ const INVALID_MEDIA_INPUT: &str = "InvalidMediaInput";
 const IO_ERROR: &str = "IoError";
 const UNSUPPORTED_MEDIA_INPUT: &str = "UnsupportedMediaInput";
 
+impl DefaultSignalNodeError for IllegalArgumentError {}
+
 impl SignalNodeError for SignalProtocolError {
     fn into_throwable<'a, C: Context<'a>>(
         self,
@@ -262,6 +265,8 @@ impl SignalNodeError for SignalProtocolError {
         }
     }
 }
+
+impl DefaultSignalNodeError for libsignal_protocol::FingerprintError {}
 
 impl DefaultSignalNodeError for device_transfer::Error {}
 
@@ -630,8 +635,6 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
             | Self::WebSocket(_)
             | Self::CdsiProtocol(_)
             | Self::EnclaveProtocol(_)
-            | Self::InvalidResponse
-            | Self::ParseError
             | Self::Server { reason: _ } => Some(IO_ERROR),
         };
         let message = self.to_string();

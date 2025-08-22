@@ -11,7 +11,7 @@ use libsignal_net_infra::route::{RouteProvider, UnresolvedWebsocketServiceRoute}
 use libsignal_net_infra::ws::attested::{
     AttestedConnection, AttestedConnectionError, AttestedProtocolError,
 };
-use libsignal_net_infra::ws::{NextOrClose, WebSocketConnectError, WebSocketServiceError};
+use libsignal_net_infra::ws::{NextOrClose, WebSocketConnectError, WebSocketError};
 use prost::Message as _;
 use thiserror::Error;
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -131,21 +131,8 @@ pub struct LookupResponseEntry {
     pub pni: Option<Pni>,
 }
 
-#[derive(Debug, PartialEq)]
-pub enum LookupResponseParseError {
-    InvalidNumberOfBytes { actual_length: usize },
-}
-
-impl From<LookupResponseParseError> for LookupError {
-    fn from(value: LookupResponseParseError) -> Self {
-        match value {
-            LookupResponseParseError::InvalidNumberOfBytes { .. } => Self::ParseError,
-        }
-    }
-}
-
 impl TryFrom<ClientResponse> for LookupResponse {
-    type Error = LookupResponseParseError;
+    type Error = CdsiProtocolError;
 
     fn try_from(response: ClientResponse) -> Result<Self, Self::Error> {
         let ClientResponse {
@@ -155,7 +142,7 @@ impl TryFrom<ClientResponse> for LookupResponse {
         } = response;
 
         if e164_pni_aci_triples.len() % LookupResponseEntry::SERIALIZED_LEN != 0 {
-            return Err(LookupResponseParseError::InvalidNumberOfBytes {
+            return Err(CdsiProtocolError::InvalidNumberOfBytes {
                 actual_length: e164_pni_aci_triples.len(),
             });
         }
@@ -231,20 +218,16 @@ impl AsMut<AttestedConnection> for CdsiConnection {
 pub enum LookupError {
     /// SGX attestation failed.
     AttestationError(attest::enclave::Error),
-    /// invalid response received from the server
-    InvalidResponse,
     /// retry later
     RateLimited(#[from] RetryLater),
     /// request token was invalid
     InvalidToken,
-    /// failed to parse the response from the server
-    ParseError,
     /// protocol error after establishing a connection: {0}
     EnclaveProtocol(AttestedProtocolError),
     /// transport failed: {0}
     ConnectTransport(TransportConnectError),
     /// websocket error: {0}
-    WebSocket(WebSocketServiceError),
+    WebSocket(WebSocketError),
     /// no connection attempts succeeded before timeout
     AllConnectionAttemptsFailed,
     /// request was invalid: {server_reason}
@@ -252,14 +235,19 @@ pub enum LookupError {
     /// server error: {reason}
     Server { reason: &'static str },
     /// CDS protocol: {0}
-    CdsiProtocol(CdsiProtocolError),
+    CdsiProtocol(#[from] CdsiProtocolError),
 }
 
 #[derive(Debug, Error, displaydoc::Display)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum CdsiProtocolError {
     /// no token found in response
     NoTokenInResponse,
+    /// could not parse response triples ({actual_length} bytes)
+    InvalidNumberOfBytes { actual_length: usize },
 }
+
+impl LogSafeDisplay for CdsiProtocolError {}
 
 impl From<AttestedConnectionError> for LookupError {
     fn from(value: AttestedConnectionError) -> Self {
@@ -276,9 +264,8 @@ impl From<crate::enclave::Error> for LookupError {
         use crate::enclave::Error;
         match value {
             Error::WebSocketConnect(e) => match e {
-                WebSocketConnectError::Timeout => Self::AllConnectionAttemptsFailed,
                 WebSocketConnectError::Transport(e) => Self::ConnectTransport(e),
-                WebSocketConnectError::WebSocketError(e) => Self::WebSocket(e.into()),
+                WebSocketConnectError::WebSocketError(e) => Self::WebSocket(e),
             },
             Error::RateLimited(inner) => Self::RateLimited(inner),
             Error::AttestationError(err) => Self::AttestationError(err),

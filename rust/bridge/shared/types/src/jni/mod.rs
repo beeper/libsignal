@@ -24,7 +24,7 @@ use libsignal_account_keys::Error as PinError;
 use libsignal_core::try_scoped;
 use libsignal_net::chat::{ConnectError as ChatConnectError, SendError as ChatSendError};
 use libsignal_net::infra::errors::RetryLater;
-use libsignal_net::infra::ws::WebSocketServiceError;
+use libsignal_net::infra::ws::WebSocketError;
 use libsignal_net::svrb::Error as SvrbError;
 use libsignal_net_chat::api::RateLimitChallenge;
 use libsignal_protocol::*;
@@ -33,6 +33,7 @@ use usernames::{UsernameError, UsernameLinkError};
 use zkgroup::{ZkGroupDeserializationFailure, ZkGroupVerificationFailure};
 
 use crate::net::cdsi::CdsiError;
+use crate::support::IllegalArgumentError;
 
 #[macro_use]
 mod args;
@@ -78,6 +79,10 @@ pub type JavaMap<'a> = JObject<'a>;
 /// Return type marker for `bridge_fn`s that return Result, which gen_java_decl.py will pick out
 /// when generating Native.java.
 pub type Throwing<T> = T;
+
+/// Type marker for arguments that are nullable, which gen_java_decl.py will pick out when
+/// generating Native.kt.
+pub type Nullable<T> = T;
 
 /// A Java wrapper for a `CompletableFuture` type.
 #[derive(Default)]
@@ -149,6 +154,16 @@ impl JniError for BridgeLayerError {
             BridgeLayerError::Jni(_) => ClassName("java.lang.RuntimeException"),
         };
         make_single_message_throwable(env, &self.to_string(), class_name)
+    }
+}
+
+impl JniError for IllegalArgumentError {
+    fn to_throwable<'a>(&self, env: &mut JNIEnv<'a>) -> Result<JThrowable<'a>, BridgeLayerError> {
+        make_single_message_throwable(
+            env,
+            &self.0,
+            ClassName("java.lang.IllegalArgumentException"),
+        )
     }
 }
 
@@ -227,14 +242,6 @@ impl JniError for SignalProtocolError {
                 .map(Into::into);
             }
 
-            SignalProtocolError::FingerprintVersionMismatch(theirs, ours) => return new_instance(
-                env,
-                ClassName(
-                    "org.signal.libsignal.protocol.fingerprint.FingerprintVersionMismatchException",
-                ),
-                jni_args!((*theirs as jint => int, *ours as jint => int) -> void),
-            )
-            .map(Into::into),
             SignalProtocolError::SealedSenderSelfSend => {
                 return new_instance(
                     env,
@@ -300,12 +307,28 @@ impl JniError for SignalProtocolError {
             SignalProtocolError::LegacyCiphertextVersion(_) => {
                 ClassName("org.signal.libsignal.protocol.LegacyMessageException")
             }
-
-            SignalProtocolError::FingerprintParsingError => {
-                ClassName("org.signal.libsignal.protocol.fingerprint.FingerprintParsingException")
-            }
         };
 
+        make_single_message_throwable(env, &self.to_string(), class_name)
+    }
+}
+
+impl JniError for libsignal_protocol::FingerprintError {
+    fn to_throwable<'a>(&self, env: &mut JNIEnv<'a>) -> Result<JThrowable<'a>, BridgeLayerError> {
+        let class_name = match self {
+            Self::VersionMismatch { theirs, ours } => return new_instance(
+                env,
+                ClassName(
+                    "org.signal.libsignal.protocol.fingerprint.FingerprintVersionMismatchException",
+                ),
+                jni_args!((*theirs as jint => int, *ours as jint => int) -> void),
+            )
+            .map(Into::into),
+            Self::ParsingError(_) => {
+                ClassName("org.signal.libsignal.protocol.fingerprint.FingerprintParsingException")
+            }
+            Self::InvalidIterationCount(_) => ClassName("java.lang.IllegalArgumentException"),
+        };
         make_single_message_throwable(env, &self.to_string(), class_name)
     }
 }
@@ -759,11 +782,7 @@ impl JniError for CdsiError {
             CdsiError::InvalidToken => {
                 ClassName("org.signal.libsignal.net.CdsiInvalidTokenException")
             }
-            CdsiError::InvalidResponse
-            | CdsiError::ParseError
-            | CdsiError::Protocol
-            | CdsiError::NoTokenInResponse
-            | CdsiError::Server { reason: _ } => {
+            CdsiError::Protocol | CdsiError::CdsiProtocol(_) | CdsiError::Server { reason: _ } => {
                 ClassName("org.signal.libsignal.net.CdsiProtocolException")
             }
         };
@@ -771,10 +790,10 @@ impl JniError for CdsiError {
     }
 }
 
-impl MessageOnlyExceptionJniError for WebSocketServiceError {
+impl MessageOnlyExceptionJniError for WebSocketError {
     fn exception_class(&self) -> ClassName<'static> {
         match self {
-            WebSocketServiceError::Http(_) => {
+            WebSocketError::Http(_) => {
                 // In practice, all WebSocket HTTP errors come from multi-route connections, so any
                 // that make it to the point of bridging are considered to have resulted from a
                 // successful *connection* that then gets an error status code, and so we use
