@@ -2,6 +2,7 @@
 // Copyright 2020-2021 Signal Messenger, LLC.
 // SPDX-License-Identifier: AGPL-3.0-only
 //
+use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::{Debug, Display};
 use std::io::Error as IoError;
@@ -12,21 +13,21 @@ use attest::enclave::Error as EnclaveError;
 use attest::hsm_enclave::Error as HsmEnclaveError;
 use device_transfer::Error as DeviceTransferError;
 use http::uri::InvalidUri;
+pub use jni::JNIEnv;
+use jni::JavaVM;
 pub use jni::objects::{
     AutoElements, JByteArray, JClass, JLongArray, JObject, JObjectArray, JString, JValue,
     ReleaseMode,
 };
 use jni::objects::{GlobalRef, JThrowable, JValueOwned};
 pub use jni::sys::{jboolean, jint, jlong};
-pub use jni::JNIEnv;
-use jni::JavaVM;
 use libsignal_account_keys::Error as PinError;
 use libsignal_core::try_scoped;
 use libsignal_net::chat::{ConnectError as ChatConnectError, SendError as ChatSendError};
 use libsignal_net::infra::errors::RetryLater;
 use libsignal_net::infra::ws::WebSocketError;
 use libsignal_net::svrb::Error as SvrbError;
-use libsignal_net_chat::api::RateLimitChallenge;
+use libsignal_net_chat::api::{RateLimitChallenge, RequestError as ChatRequestError};
 use libsignal_protocol::*;
 use signal_crypto::Error as SignalCryptoError;
 use usernames::{UsernameError, UsernameLinkError};
@@ -190,7 +191,7 @@ impl JniError for SignalProtocolError {
                 ClassName("java.lang.RuntimeException")
             }
 
-            SignalProtocolError::UntrustedIdentity(ref addr) => {
+            SignalProtocolError::UntrustedIdentity(addr) => {
                 let addr_name = to_java_string(env, addr.name())?;
                 return new_instance(
                     env,
@@ -199,7 +200,7 @@ impl JniError for SignalProtocolError {
                 )
                 .map(Into::into);
             }
-            SignalProtocolError::SessionNotFound(ref addr) => {
+            SignalProtocolError::SessionNotFound(addr) => {
                 let addr_object = protocol_address_to_jobject(env, addr)?;
                 let message = to_java_string(env, self.to_string())?;
                 return new_instance(
@@ -213,7 +214,7 @@ impl JniError for SignalProtocolError {
                 .map(Into::into);
             }
 
-            SignalProtocolError::InvalidRegistrationId(ref addr, _value) => {
+            SignalProtocolError::InvalidRegistrationId(addr, _value) => {
                 let addr_object = protocol_address_to_jobject(env, addr)?;
                 let message = to_java_string(env, self.to_string())?;
                 return new_instance(
@@ -274,6 +275,7 @@ impl JniError for SignalProtocolError {
 
             SignalProtocolError::NoKeyTypeIdentifier
             | SignalProtocolError::SignatureValidationFailed
+            | SignalProtocolError::UnknownSealedSenderServerCertificateId(_)
             | SignalProtocolError::BadKeyType(_)
             | SignalProtocolError::BadKeyLength(_, _)
             | SignalProtocolError::InvalidMacKeyLength(_)
@@ -575,12 +577,12 @@ mod registration {
             let message = match self {
                 RequestError::Other(inner) => return inner.to_throwable(env),
                 RequestError::Timeout => {
-                    return libsignal_net::chat::SendError::RequestTimedOut.to_throwable(env)
+                    return libsignal_net::chat::SendError::RequestTimedOut.to_throwable(env);
                 }
                 RequestError::RetryLater(retry_later) => return retry_later.to_throwable(env),
                 RequestError::Unexpected { log_safe } => log_safe,
                 RequestError::Challenge(rate_limit_challenge) => {
-                    return rate_limit_challenge.to_throwable(env)
+                    return rate_limit_challenge.to_throwable(env);
                 }
                 RequestError::ServerSideError => &self.to_string(),
                 RequestError::Disconnected(d) => match *d {},
@@ -846,8 +848,10 @@ impl MessageOnlyExceptionJniError for ChatSendError {
             ChatSendError::ConnectedElsewhere => {
                 ClassName("org.signal.libsignal.net.ConnectedElsewhereException")
             }
-            ChatSendError::WebSocket(_)
-            | ChatSendError::IncomingDataInvalid
+            ChatSendError::WebSocket(_) => {
+                ClassName("org.signal.libsignal.net.TransportFailureException")
+            }
+            ChatSendError::IncomingDataInvalid
             | ChatSendError::RequestHasInvalidHeader
             | ChatSendError::RequestTimedOut => {
                 ClassName("org.signal.libsignal.net.ChatServiceException")
@@ -908,7 +912,9 @@ impl MessageOnlyExceptionJniError for libsignal_net_chat::api::DisconnectedError
         match self {
             Self::ConnectedElsewhere => ChatSendError::ConnectedElsewhere.exception_class(),
             Self::ConnectionInvalidated => ChatSendError::ConnectionInvalidated.exception_class(),
-            Self::Transport { .. } => ClassName("org.signal.libsignal.net.ChatServiceException"),
+            Self::Transport { .. } => {
+                ClassName("org.signal.libsignal.net.TransportFailureException")
+            }
             Self::Closed => ChatSendError::Disconnected.exception_class(),
         }
     }
@@ -950,6 +956,12 @@ impl MessageOnlyExceptionJniError for TestingError {
     }
 }
 
+impl JniError for Infallible {
+    fn to_throwable<'a>(&self, _env: &mut JNIEnv<'a>) -> Result<JThrowable<'a>, BridgeLayerError> {
+        match *self {}
+    }
+}
+
 impl JniError for RetryLater {
     fn to_throwable<'a>(&self, env: &mut JNIEnv<'a>) -> Result<JThrowable<'a>, BridgeLayerError> {
         let Self {
@@ -980,6 +992,32 @@ impl JniError for RateLimitChallenge {
                 options => [org.signal.libsignal.net.ChallengeOption]) -> void),
         )
         .map(Into::into)
+    }
+}
+
+impl<E: JniError> JniError for ChatRequestError<E> {
+    fn to_throwable<'a>(&self, env: &mut JNIEnv<'a>) -> Result<JThrowable<'a>, BridgeLayerError> {
+        match self {
+            ChatRequestError::Timeout => make_single_message_throwable(
+                env,
+                "Request timed out",
+                ClassName("org.signal.libsignal.net.TimeoutException"),
+            ),
+            ChatRequestError::Disconnected(disconnected) => disconnected.to_throwable(env),
+            ChatRequestError::RetryLater(retry_later) => retry_later.to_throwable(env),
+            ChatRequestError::Challenge(challenge) => challenge.to_throwable(env),
+            ChatRequestError::ServerSideError => make_single_message_throwable(
+                env,
+                "Server-side error",
+                ClassName("org.signal.libsignal.net.ServerSideErrorException"),
+            ),
+            ChatRequestError::Unexpected { log_safe } => make_single_message_throwable(
+                env,
+                &format!("Unexpected error: {}", log_safe),
+                ClassName("org.signal.libsignal.net.UnexpectedResponseException"),
+            ),
+            ChatRequestError::Other(inner) => inner.to_throwable(env),
+        }
     }
 }
 
@@ -1234,11 +1272,11 @@ impl<'a> CiphertextMessageRef<'a> {
 macro_rules! jni_bridge_handle_destroy {
     ( $typ:ty as $jni_name:ident ) => {
         ::paste::paste! {
-            #[export_name = concat!(
+            #[unsafe(export_name = concat!(
                 env!("LIBSIGNAL_BRIDGE_FN_PREFIX_JNI"),
                 stringify!($jni_name),
                 "_1Destroy"
-            )]
+            ))]
             #[allow(non_snake_case)]
             pub unsafe extern "C" fn [<__bridge_handle_jni_ $jni_name _destroy>](
                 _env: ::jni::JNIEnv,

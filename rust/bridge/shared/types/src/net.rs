@@ -22,7 +22,7 @@ use libsignal_net::infra::route::{
 use libsignal_net::infra::tcp_ssl::{InvalidProxyConfig, TcpSslConnector};
 use libsignal_net::infra::{AsHttpHeader as _, EnableDomainFronting};
 
-use self::remote_config::{RemoteConfig, RemoteConfigKeys};
+use self::remote_config::{RemoteConfig, RemoteConfigKey};
 use crate::*;
 
 pub mod cdsi;
@@ -91,7 +91,7 @@ pub struct EnclaveConnectionResources<'a> {
 }
 
 impl EnclaveConnectionResources<'_> {
-    pub fn as_connection_resources(&self) -> ConnectionResources<PreconnectingFactory> {
+    pub fn as_connection_resources(&self) -> ConnectionResources<'_, PreconnectingFactory> {
         let Self {
             connect_state,
             dns_resolver,
@@ -127,7 +127,7 @@ impl ConnectionManager {
     pub fn new(
         environment: Environment,
         user_agent: &str,
-        remote_config: HashMap<String, String>,
+        remote_config: HashMap<String, Arc<str>>,
     ) -> Self {
         log::info!("Initializing connection manager for {}...", &environment);
         Self::new_from_static_environment(environment.env(), user_agent, remote_config)
@@ -136,7 +136,7 @@ impl ConnectionManager {
     pub fn new_from_static_environment(
         env: Env<'static>,
         user_agent: &str,
-        remote_config: HashMap<String, String>,
+        remote_config: HashMap<String, Arc<str>>,
     ) -> Self {
         let (network_change_event_tx, network_change_event_rx) = ::tokio::sync::watch::channel(());
         let user_agent = UserAgent::with_libsignal_version(user_agent);
@@ -146,7 +146,7 @@ impl ConnectionManager {
         let transport_connector =
             std::sync::Mutex::new(TcpSslConnector::new_direct(dns_resolver.clone()));
         let remote_config = RemoteConfig::new(remote_config);
-        let enforce_minimum_tls = if remote_config.is_enabled(RemoteConfigKeys::EnforceMinimumTls) {
+        let enforce_minimum_tls = if remote_config.is_enabled(RemoteConfigKey::EnforceMinimumTls) {
             EnforceMinimumTls::Yes
         } else {
             EnforceMinimumTls::No
@@ -212,7 +212,7 @@ impl ConnectionManager {
             .remote_config
             .lock()
             .expect("not poisoned")
-            .is_enabled(RemoteConfigKeys::EnforceMinimumTls)
+            .is_enabled(RemoteConfigKey::EnforceMinimumTls)
         {
             EnforceMinimumTls::Yes
         } else {
@@ -222,7 +222,7 @@ impl ConnectionManager {
         *self.endpoints.lock().expect("not poisoned") = Arc::new(new_endpoints);
     }
 
-    pub fn set_remote_config(&self, remote_config: HashMap<String, String>) {
+    pub fn set_remote_config(&self, remote_config: HashMap<String, Arc<str>>) {
         *self.remote_config.lock().expect("not poisoned") = RemoteConfig::new(remote_config);
     }
 
@@ -256,7 +256,7 @@ impl ConnectionManager {
         enclave: &EnclaveEndpoint<impl EnclaveKind>,
     ) -> Result<
         (
-            EnclaveConnectionResources,
+            EnclaveConnectionResources<'_>,
             impl RouteProvider<Route = UnresolvedWebsocketServiceRoute> + '_,
         ),
         InvalidProxyConfig,

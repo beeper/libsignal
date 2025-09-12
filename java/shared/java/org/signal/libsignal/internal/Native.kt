@@ -1023,8 +1023,8 @@ internal object Native {
   public external fun SenderCertificate_GetSignature(obj: ObjectHandle): ByteArray
   @JvmStatic @Throws(Exception::class)
   public external fun SenderCertificate_New(senderUuid: String, senderE164: String?, senderDeviceId: Int, senderKey: ObjectHandle, expiration: Long, signerCert: ObjectHandle, signerKey: ObjectHandle): ObjectHandle
-  @JvmStatic @Throws(Exception::class)
-  public external fun SenderCertificate_Validate(cert: ObjectHandle, key: ObjectHandle, time: Long): Boolean
+  @JvmStatic
+  public external fun SenderCertificate_Validate(cert: ObjectHandle, trustRoots: LongArray, time: Long): Boolean
 
   @JvmStatic @Throws(Exception::class)
   public external fun SenderKeyDistributionMessage_Deserialize(data: ByteArray): ObjectHandle
@@ -1265,6 +1265,8 @@ internal object Native {
   public external fun UnauthenticatedChatConnection_info(chat: ObjectHandle): ObjectHandle
   @JvmStatic
   public external fun UnauthenticatedChatConnection_init_listener(chat: ObjectHandle, listener: BridgeChatListener): Unit
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_look_up_username_hash(asyncRuntime: ObjectHandle, chat: ObjectHandle, hash: ByteArray): CompletableFuture<UUID?>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_send(asyncRuntime: ObjectHandle, chat: ObjectHandle, httpRequest: ObjectHandle, timeoutMillis: Int): CompletableFuture<Object>
 

@@ -14,12 +14,12 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use uuid::Uuid;
 
 use crate::chat::noise::{ChatNoiseFragment, HandshakeAuth};
+use crate::infra::Connection;
 use crate::infra::errors::{LogSafeDisplay, TransportConnectError};
 use crate::infra::noise::{
-    NoiseConnector, NoiseStream, SendError, Transport, EPHEMERAL_KEY_LEN, STATIC_KEY_LEN,
+    EPHEMERAL_KEY_LEN, NoiseConnector, NoiseStream, STATIC_KEY_LEN, SendError, Transport,
 };
 use crate::infra::route::{Connector, NoiseRouteFragment};
-use crate::infra::Connection;
 
 /// A Noise-encrypted stream that wraps an underlying block-based [`Transport`].
 ///
@@ -241,14 +241,14 @@ mod test {
     use bytes::Bytes;
     use const_str::{concat, hex};
     use futures_util::{SinkExt as _, StreamExt as _};
-    use libsignal_net_infra::noise::testutil::{echo_forever, new_transport_pair};
     use libsignal_net_infra::noise::FrameType;
+    use libsignal_net_infra::noise::testutil::{echo_forever, new_transport_pair};
     use prost::Message;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
     use crate::chat::noise::NK_NOISE_PATTERN;
-    use crate::proto::chat_noise::{handshake_response, HandshakeInit, HandshakeResponse};
+    use crate::proto::chat_noise::{HandshakeInit, HandshakeResponse, handshake_response};
 
     async fn authenticating_server_handshake<S: Transport + Unpin>(
         transport: &mut S,
@@ -365,7 +365,9 @@ mod test {
 
         let server_state = server_builder
             .local_private_key(&server_keypair.private)
+            .unwrap()
             .remote_public_key(&client_keypair.public)
+            .unwrap()
             .build_responder()
             .unwrap();
 
@@ -425,6 +427,7 @@ mod test {
         let server_keypair = server_builder.generate_keypair().unwrap();
         let server_state = server_builder
             .local_private_key(&server_keypair.private)
+            .unwrap()
             .build_responder()
             .unwrap();
 
@@ -470,6 +473,7 @@ mod test {
         let server_keypair = server_builder.generate_keypair().unwrap();
         let server_state = server_builder
             .local_private_key(&server_keypair.private)
+            .unwrap()
             .build_responder()
             .unwrap();
 

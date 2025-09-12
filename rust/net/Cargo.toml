@@ -1,8 +1,8 @@
 [package]
 name = "libsignal-net"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.83"
+edition = "2024"
+rust-version = "1.85"
 authors.workspace = true
 license.workspace = true
 
@@ -52,14 +52,14 @@ scopeguard = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-snow = { workspace = true }
+snow = { workspace = true, default-features = false }
 static_assertions = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time", "macros"] }
 tokio-boring-signal = { workspace = true }
-tokio-stream = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
@@ -79,7 +79,7 @@ env_logger = { workspace = true }
 futures = { workspace = true }
 proptest = { workspace = true }
 rand_chacha = { workspace = true }
-snow = { workspace = true, features = ["default-resolver"] }
+snow = { workspace = true, default-features = true }
 test-case = { workspace = true }
 test-log = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "io-std", "rt-multi-thread"] }

@@ -21,14 +21,15 @@ use libsignal_net_infra::route::{
     HttpsProvider, TlsRouteProvider,
 };
 use libsignal_net_infra::{
-    ws, AsStaticHttpHeader, ConnectionParams, EnableDomainFronting, EnforceMinimumTls, RouteType,
-    TransportConnectionParams, RECOMMENDED_WS_CONFIG,
+    AsStaticHttpHeader, ConnectionParams, EnableDomainFronting, EnforceMinimumTls,
+    RECOMMENDED_WS_CONFIG, RouteType, TransportConnectionParams,
 };
 use nonzero_ext::nonzero;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 use crate::certs::{PROXY_G_ROOT_CERTIFICATES, SIGNAL_ROOT_CERTIFICATES};
+use crate::chat::RECOMMENDED_CHAT_WS_CONFIG;
 use crate::enclave::{Cdsi, EnclaveEndpoint, EndpointParams, MrEnclave, SvrSgx};
 
 const DEFAULT_HTTPS_PORT: NonZeroU16 = nonzero!(443_u16);
@@ -506,12 +507,15 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
-    pub fn shuffled_connection_params(
+    pub fn shuffled_connection_params<R>(
         &self,
         proxy_path: &'static str,
         confirmation_header_name: Option<&'static str>,
-        rng: &mut impl Rng,
-    ) -> impl Iterator<Item = ConnectionParams> {
+        rng: &mut R,
+    ) -> impl Iterator<Item = ConnectionParams> + use<R>
+    where
+        R: Rng,
+    {
         let route_type = self.route_type;
         let http_host = Arc::from(self.http_host);
         let certs = self.certs.clone();
@@ -612,7 +616,7 @@ pub struct Env<'a> {
     pub svr2: EnclaveEndpoint<'a, SvrSgx>,
     pub svr_b: SvrBEnv<'a>,
     pub chat_domain_config: DomainConfig,
-    pub chat_ws_config: ws::Config,
+    pub chat_ws_config: crate::chat::ws::Config,
     pub keytrans_config: KeyTransConfig,
     pub chat_noise_config: Option<NoiseDomainConfig>,
 }
@@ -672,7 +676,7 @@ impl<'a> Env<'a> {
 pub const STAGING: Env<'static> = Env {
     chat_domain_config: DOMAIN_CONFIG_CHAT_STAGING,
     chat_noise_config: Some(DOMAIN_CONFIG_CHAT_NOISE_STAGING),
-    chat_ws_config: RECOMMENDED_WS_CONFIG,
+    chat_ws_config: RECOMMENDED_CHAT_WS_CONFIG,
     cdsi: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_CDSI_STAGING,
         ws_config: RECOMMENDED_WS_CONFIG,
@@ -697,7 +701,7 @@ pub const STAGING: Env<'static> = Env {
 pub const PROD: Env<'static> = Env {
     chat_domain_config: DOMAIN_CONFIG_CHAT,
     chat_noise_config: None,
-    chat_ws_config: RECOMMENDED_WS_CONFIG,
+    chat_ws_config: RECOMMENDED_CHAT_WS_CONFIG,
     cdsi: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_CDSI,
         ws_config: RECOMMENDED_WS_CONFIG,
@@ -726,8 +730,10 @@ pub mod constants {
 #[cfg(test)]
 mod test {
     use std::collections::HashSet;
+    use std::time::Duration;
 
     use itertools::Itertools as _;
+    use libsignal_net_infra::Alpn;
     use libsignal_net_infra::dns::build_custom_resolver_cloudflare_doh;
     use libsignal_net_infra::dns::dns_lookup::DnsLookupRequest;
     use libsignal_net_infra::route::testutils::FakeContext;
@@ -735,8 +741,7 @@ mod test {
         HttpRouteFragment, HttpsTlsRoute, RouteProvider as _, TcpRoute, TlsRoute, TlsRouteFragment,
         UnresolvedHost,
     };
-    use libsignal_net_infra::testutil::no_network_change_events;
-    use libsignal_net_infra::Alpn;
+    use libsignal_net_infra::utils::no_network_change_events;
     use test_case::test_matrix;
 
     use super::*;
@@ -862,7 +867,13 @@ mod test {
         // The point of this test isn't to test the resolver, but to use it to test something else.
         // So, I directly access the raw CustomDnsResolver::resolve method.
         // Other usages should use the higher level DnsResolver::lookup instead.
-        let resolver = build_custom_resolver_cloudflare_doh(&no_network_change_events());
+        let resolver = build_custom_resolver_cloudflare_doh(
+            &no_network_change_events(),
+            // We want to check responses for IPv4 and IPv6 so don't time out if
+            // one of them takes too long. We'll still be subject to the overall
+            // lookup timeout regardless.
+            Duration::MAX,
+        );
 
         let (hostname, static_hardcoded_ips) = config.static_fallback();
 

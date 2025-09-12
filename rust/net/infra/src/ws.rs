@@ -9,12 +9,12 @@ use std::time::Duration;
 use futures_util::{Sink, Stream, TryFutureExt};
 use http::uri::PathAndQuery;
 use tungstenite::protocol::CloseFrame;
-use tungstenite::{http, Message, Utf8Bytes};
+use tungstenite::{Message, Utf8Bytes, http};
 
+use crate::AsyncDuplexStream;
 use crate::errors::LogSafeDisplay;
 use crate::route::{Connector, HttpRouteFragment, WebSocketRouteFragment};
 use crate::ws::error::{HttpFormatError, ProtocolError, SpaceError};
-use crate::AsyncDuplexStream;
 
 pub mod error;
 pub use error::WebSocketConnectError;
@@ -80,7 +80,7 @@ pub enum WebSocketError {
     Io(std::io::Error),
     Protocol(ProtocolError),
     Capacity(SpaceError),
-    Http(http::Response<Option<Vec<u8>>>),
+    Http(Box<http::Response<Option<Vec<u8>>>>),
     HttpFormat(http::Error),
     Url(tungstenite::error::UrlError),
     Other(&'static str),
@@ -191,10 +191,10 @@ impl<T, Inner> Connector<(WebSocketRouteFragment, HttpRouteFragment), Inner>
     for WithoutResponseHeaders<T>
 where
     T: Connector<
-        (WebSocketRouteFragment, HttpRouteFragment),
-        Inner,
-        Connection = StreamWithResponseHeaders<tokio_tungstenite::WebSocketStream<Inner>>,
-    >,
+            (WebSocketRouteFragment, HttpRouteFragment),
+            Inner,
+            Connection = StreamWithResponseHeaders<tokio_tungstenite::WebSocketStream<Inner>>,
+        >,
 {
     type Connection = tokio_tungstenite::WebSocketStream<Inner>;
     type Error = T::Error;
@@ -245,9 +245,9 @@ impl From<tungstenite::Error> for WebSocketError {
             tungstenite::Error::Capacity(e) => Self::Capacity(e.into()),
             tungstenite::Error::WriteBufferFull(_) => Self::Capacity(SpaceError::SendQueueFull),
             tungstenite::Error::Url(e) => Self::Url(e),
-            tungstenite::Error::Http(response) => Self::Http(response),
+            tungstenite::Error::Http(response) => Self::Http(Box::new(response)),
             tungstenite::Error::HttpFormat(e) => Self::HttpFormat(e),
-            tungstenite::Error::Utf8 => Self::Other("UTF-8 error"),
+            tungstenite::Error::Utf8(_) => Self::Other("UTF-8 error"),
             tungstenite::Error::AttackAttempt => Self::Other("attack attempt"),
             tungstenite::Error::Tls(_) => unreachable!("all TLS is handled below tungstenite"),
         }

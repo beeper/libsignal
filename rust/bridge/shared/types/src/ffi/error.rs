@@ -12,15 +12,15 @@ use attest::hsm_enclave::Error as HsmEnclaveError;
 use device_transfer::Error as DeviceTransferError;
 use libsignal_account_keys::Error as PinError;
 use libsignal_net::infra::errors::LogSafeDisplay;
-use libsignal_net_chat::api::registration::{RegistrationLock, VerificationCodeNotDeliverable};
 use libsignal_net_chat::api::RateLimitChallenge;
+use libsignal_net_chat::api::registration::{RegistrationLock, VerificationCodeNotDeliverable};
 use libsignal_protocol::*;
 use signal_crypto::Error as SignalCryptoError;
 use usernames::{UsernameError, UsernameLinkError};
 use zkgroup::{ZkGroupDeserializationFailure, ZkGroupVerificationFailure};
 
 use super::{FutureCancelled, NullPointerError, UnexpectedPanic};
-use crate::support::{describe_panic, IllegalArgumentError};
+use crate::support::{IllegalArgumentError, describe_panic};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -265,6 +265,16 @@ impl<T: FfiError> IntoFfiError for T {
     }
 }
 
+impl FfiError for std::convert::Infallible {
+    fn describe(&self) -> Cow<'_, str> {
+        match *self {}
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match *self {}
+    }
+}
+
 impl<T: IntoFfiError> From<T> for SignalFfiError {
     fn from(value: T) -> Self {
         value.into_ffi_error().into()
@@ -352,7 +362,7 @@ impl IntoFfiError for SignalProtocolError {
     fn into_ffi_error(self) -> impl Into<SignalFfiError> {
         let code = match &self {
             &Self::InvalidSenderKeySession { distribution_id } => {
-                return SignalFfiError::from(InvalidSenderKeySession { distribution_id })
+                return SignalFfiError::from(InvalidSenderKeySession { distribution_id });
             }
             Self::InvalidRegistrationId(_, _) => {
                 // Re-match as owned.
@@ -409,6 +419,7 @@ impl IntoFfiError for SignalProtocolError {
             Self::FfiBindingError(_) => SignalErrorCode::InternalError,
             Self::ApplicationCallbackError(_, _) => SignalErrorCode::CallbackError,
             Self::SealedSenderSelfSend => SignalErrorCode::SealedSenderSelfSend,
+            Self::UnknownSealedSenderServerCertificateId(_) => SignalErrorCode::VerificationFailure,
         };
 
         SimpleError::new(code, self.to_string()).into()
@@ -678,6 +689,33 @@ impl IntoFfiError for libsignal_net::chat::SendError {
     }
 }
 
+// Special case for api::RequestError<Infallible, DisconnectedError>
+// (used outside the registration module)
+impl IntoFfiError
+    for libsignal_net_chat::api::RequestError<
+        std::convert::Infallible,
+        libsignal_net_chat::api::DisconnectedError,
+    >
+where
+    libsignal_net_chat::api::RequestError<std::convert::Infallible>: std::fmt::Display,
+{
+    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
+        match self {
+            libsignal_net_chat::api::RequestError::Timeout => SignalFfiError::from(
+                SimpleError::new(SignalErrorCode::RequestTimedOut, self.to_string()),
+            ),
+            libsignal_net_chat::api::RequestError::ServerSideError
+            | libsignal_net_chat::api::RequestError::Unexpected { log_safe: _ } => {
+                SimpleError::new(SignalErrorCode::NetworkProtocol, self.to_string()).into()
+            }
+            libsignal_net_chat::api::RequestError::Other(err) => match err {},
+            libsignal_net_chat::api::RequestError::RetryLater(retry_later) => retry_later.into(),
+            libsignal_net_chat::api::RequestError::Challenge(challenge) => challenge.into(),
+            libsignal_net_chat::api::RequestError::Disconnected(d) => d.into_ffi_error().into(),
+        }
+    }
+}
+
 impl IntoFfiError for libsignal_net_chat::api::DisconnectedError {
     fn into_ffi_error(self) -> impl Into<SignalFfiError> {
         let code = match self {
@@ -732,7 +770,6 @@ impl FfiError for RateLimitChallenge {
 }
 
 mod registration {
-    use libsignal_net::infra::errors::LogSafeDisplay;
     use libsignal_net_chat::api::registration::{
         CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError,
         RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
@@ -760,7 +797,7 @@ mod registration {
                 RequestError::Other(err) => err.into_ffi_error().into(),
                 RequestError::RetryLater(retry_later) => retry_later.into(),
                 RequestError::Challenge(challenge) => challenge.into(),
-                RequestError::Disconnected(d) => match d {},
+                RequestError::Disconnected(d) => d.into_ffi_error().into(),
             }
         }
     }

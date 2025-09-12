@@ -7,22 +7,30 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io::ErrorKind as IoErrorKind;
+use std::net::IpAddr;
+use std::ops::ControlFlow;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use futures_util::{pin_mut, Stream, StreamExt as _};
+use futures_util::future::Either;
+use futures_util::{FutureExt as _, Stream, StreamExt as _, pin_mut};
 use http::uri::PathAndQuery;
 use http::{Method, StatusCode};
 use itertools::Itertools as _;
+use libsignal_net_infra::TransportInfo;
+use libsignal_net_infra::route::GetCurrentInterface;
+use libsignal_net_infra::utils::NetworkChangeEvent;
+use libsignal_net_infra::utils::future::SomeOrPending;
 pub use libsignal_net_infra::ws::connection::FinishReason;
 use libsignal_net_infra::ws::connection::Outcome;
 use libsignal_net_infra::ws::{WebSocketError, WebSocketStreamLike};
 use pin_project::pin_project;
 use prost::Message as _;
-use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
+use tokio::sync::mpsc::WeakSender;
+use tokio::sync::{Mutex as TokioMutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
 use tungstenite::protocol::frame::coding::CloseCode;
 
@@ -30,8 +38,8 @@ use crate::chat::{ChatMessageType, MessageProto, Request, RequestProto, Response
 use crate::env::{
     ALERT_HEADER_NAME, CONNECTED_ELSEWHERE_CLOSE_CODE, CONNECTION_INVALIDATED_CLOSE_CODE,
 };
-use crate::infra::ws::connection::{MessageEvent, NextEventError, TungsteniteSendError};
 use crate::infra::ws::TextOrBinary;
+use crate::infra::ws::connection::{MessageEvent, NextEventError, TungsteniteSendError};
 
 /// Chat service avilable via a connected websocket.
 ///
@@ -60,6 +68,13 @@ pub struct Config {
     /// If this is too high, the server might time out the connection because it
     /// has been idle too long.
     pub local_idle_timeout: Duration,
+
+    /// How long to wait for a response to a request before checking if the connection is still on
+    /// the preferred network interface.
+    ///
+    /// If this is too high, the check may not happen before the connection would timeout anyway,
+    /// per `remote_idle_timeout`.
+    pub post_request_interface_check_timeout: Duration,
 
     /// How long to wait for an incoming message from the server before timing
     /// out the connection.
@@ -170,7 +185,10 @@ impl Chat {
         transport: T,
         connect_response_headers: http::HeaderMap,
         config: Config,
-        log_tag: Arc<str>,
+        connection_config: ConnectionConfig<
+            impl GetCurrentInterface<Representation = IpAddr> + Send + Sync + 'static,
+        >,
+        network_change_event: NetworkChangeEvent,
         mut listener: EventListener,
     ) -> Self
     where
@@ -179,8 +197,13 @@ impl Chat {
         let Config {
             initial_request_id,
             local_idle_timeout,
+            post_request_interface_check_timeout,
             remote_idle_timeout,
         } = config;
+        debug_assert_eq!(
+            post_request_interface_check_timeout,
+            connection_config.post_request_interface_check_timeout
+        );
 
         Self::report_alerts(connect_response_headers, &mut listener);
 
@@ -195,8 +218,9 @@ impl Chat {
                     remote_idle_disconnect_timeout: remote_idle_timeout,
                 },
             ),
+            connection_config,
+            network_change_event,
             initial_request_id,
-            log_tag,
             listener,
             tokio_runtime,
         )
@@ -312,16 +336,21 @@ impl Chat {
 
     fn new_inner(
         into_inner_connection: impl IntoInnerConnection,
+        connection_config: ConnectionConfig<
+            impl GetCurrentInterface<Representation = IpAddr> + Send + Sync + 'static,
+        >,
+        network_change_event: NetworkChangeEvent,
         initial_request_id: u64,
-        log_tag: Arc<str>,
         listener: EventListener,
         tokio_runtime: tokio::runtime::Handle,
     ) -> Self {
         let (request_tx, request_rx) = mpsc::channel(1);
         let (response_tx, response_rx) = mpsc::unbounded_channel();
+        let log_tag = connection_config.log_tag.clone();
 
         let requests_in_flight = InFlightRequests {
             outstanding_reqs: Default::default(),
+            oldest_outstanding_req_sent_at: None,
             log_tag: log_tag.clone(),
         };
 
@@ -345,17 +374,25 @@ impl Chat {
 
         let inner_connection = into_inner_connection.into_inner_connection(
             tokio_stream::StreamExt::merge(request_rx, response_rx),
-            log_tag.clone(),
+            log_tag,
         );
+
+        // Wrap our watch receiver stream so that when the last sender is
+        // dropped, polling the stream will return `Pending` forever.
+        let network_change_event =
+            tokio_stream::wrappers::WatchStream::from_changes(network_change_event)
+                .chain(futures_util::stream::pending());
 
         let connection = ConnectionImpl {
             inner: inner_connection,
             requests_in_flight,
+            network_change_event,
+            config: connection_config,
+            outgoing_request_tx: request_tx.downgrade(),
         };
 
         let task = tokio_runtime.spawn(spawned_task_body(
             connection,
-            log_tag,
             listener,
             response_tx.downgrade(),
         ));
@@ -410,6 +447,12 @@ enum TaskState {
 
 struct InFlightRequests {
     outstanding_reqs: HashMap<RequestId, oneshot::Sender<Result<Response, TaskSendError>>>,
+    /// Tracks a single request's initial send time and the number of times it's been followed up
+    /// on.
+    ///
+    /// ...where "followed up on" is, in practice, some kind of check to see if the connection is
+    /// still active.
+    oldest_outstanding_req_sent_at: Option<(RequestId, Instant, u32)>,
     log_tag: Arc<str>,
 }
 
@@ -533,15 +576,29 @@ enum IncomingEvent {
     ReceivedRequest { id: u64, request: RequestProto },
 }
 
+#[derive(Debug)]
+pub struct ConnectionConfig<GCI> {
+    pub log_tag: Arc<str>,
+    pub post_request_interface_check_timeout: Duration,
+    pub transport_info: TransportInfo,
+    pub get_current_interface: GCI,
+}
+
 #[pin_project(project = ConnectionImplProj)]
 /// State for the task running a connection.
 ///
 /// This type and its methods do not depend on being run inside of a `tokio`
 /// runtime.
-struct ConnectionImpl<I> {
+struct ConnectionImpl<I, GCI> {
     #[pin]
     inner: I,
     requests_in_flight: InFlightRequests,
+    network_change_event: futures_util::stream::Chain<
+        tokio_stream::wrappers::WatchStream<()>,
+        futures_util::stream::Pending<()>,
+    >,
+    outgoing_request_tx: WeakSender<OutgoingRequest>,
+    config: ConnectionConfig<GCI>,
 }
 
 /// The metadata for an outgoing message.
@@ -622,15 +679,18 @@ impl ListenerState {
 ///
 /// It will run until [`ConnectionImpl::handle_one_event`] returns
 /// [`Outcome::Finished`].
-async fn spawned_task_body<I: InnerConnection>(
-    connection: ConnectionImpl<I>,
-    log_tag: Arc<str>,
+async fn spawned_task_body<
+    I: InnerConnection,
+    GCI: GetCurrentInterface<Representation = IpAddr>,
+>(
+    connection: ConnectionImpl<I, GCI>,
     listener: EventListener,
     weak_response_tx: mpsc::WeakUnboundedSender<OutgoingResponse>,
 ) -> Result<FinishReason, TaskErrorState> {
     pin_mut!(connection);
     let tokio_rt = tokio::runtime::Handle::current();
     let listener_state = ListenerState::new(listener);
+    let log_tag = connection.config.log_tag.clone();
 
     // In case the task panics, make sure the callback at least knows about the
     // disconnection.
@@ -717,13 +777,13 @@ async fn send_request(
                 return Err(SendError::Disconnected(DisconnectedReason::SocketClosed {
                     #[cfg(test)]
                     reason: "task was already signalled to end",
-                }))
+                }));
             }
             TaskState::Finished(Ok(_reason)) => {
                 return Err(SendError::Disconnected(DisconnectedReason::SocketClosed {
                     #[cfg(test)]
                     reason: "task already ended gracefully",
-                }))
+                }));
             }
             TaskState::Finished(Err(err)) => return Err(SendError::from(&*err)),
         }
@@ -809,6 +869,7 @@ impl InFlightRequests {
     ) {
         let Self {
             outstanding_reqs,
+            oldest_outstanding_req_sent_at,
             log_tag: _,
         } = self;
         let prev = outstanding_reqs.insert(id, response_sender);
@@ -817,11 +878,15 @@ impl InFlightRequests {
             "tried to send a second request with ID {id}",
             id = id.0
         );
+        if oldest_outstanding_req_sent_at.is_none() {
+            *oldest_outstanding_req_sent_at = Some((id, Instant::now(), 0));
+        }
     }
 
     fn finish_send(&mut self, id: RequestId, result: Result<Response, TaskSendError>) {
         let Self {
             outstanding_reqs,
+            oldest_outstanding_req_sent_at,
             log_tag,
         } = self;
         if let Some(sender) = outstanding_reqs.remove(&id) {
@@ -832,6 +897,7 @@ impl InFlightRequests {
                 id.0
             );
         }
+        _ = oldest_outstanding_req_sent_at.take_if(|(oldest_id, _, _)| *oldest_id == id);
     }
 }
 
@@ -870,16 +936,14 @@ where
     }
 }
 
+type WsEvent = Outcome<MessageEvent<OutgoingMeta>, Result<FinishReason, NextEventError>>;
+
 /// The abstraction presented by [`crate::infra::ws::Connection`].
 ///
 /// This exists soley to provide a mock point for testing.
 trait InnerConnection {
     /// Blocks until an event is available, then returns it.
-    fn handle_next_event(
-        self: Pin<&mut Self>,
-    ) -> impl Future<
-        Output = Outcome<MessageEvent<OutgoingMeta>, Result<FinishReason, NextEventError>>,
-    > + Send;
+    fn handle_next_event(self: Pin<&mut Self>) -> impl Future<Output = WsEvent> + Send;
 }
 
 impl<S, R> InnerConnection for crate::infra::ws::Connection<S, R>
@@ -887,38 +951,190 @@ where
     S: WebSocketStreamLike + Send,
     R: Stream<Item = (TextOrBinary, OutgoingMeta)> + Send,
 {
-    fn handle_next_event(
-        self: Pin<&mut Self>,
-    ) -> impl Future<
-        Output = Outcome<MessageEvent<OutgoingMeta>, Result<FinishReason, NextEventError>>,
-    > + Send {
+    fn handle_next_event(self: Pin<&mut Self>) -> impl Future<Output = WsEvent> + Send {
         crate::infra::ws::Connection::handle_next_event(self)
     }
 }
 
-impl<I: InnerConnection> ConnectionImpl<I> {
+/// Things that could inject additional processing while waiting for an event.
+///
+/// See [`ConnectionImpl::handle_interruption`].
+enum ConnectionEventInterruption {
+    OutstandingRequestTimeout {
+        request_id: RequestId,
+        request_start: Instant,
+    },
+    NetworkChangeEvent,
+}
+
+impl<I: InnerConnection, GCI: GetCurrentInterface<Representation = IpAddr>> ConnectionImpl<I, GCI> {
     async fn handle_one_event(
         self: Pin<&mut Self>,
     ) -> Outcome<Option<IncomingEvent>, Result<FinishReason, TaskExitError>> {
         let ConnectionImplProj {
             mut inner,
             requests_in_flight,
+            network_change_event,
+            config,
+            outgoing_request_tx,
         } = self.project();
 
-        let inner_event = inner.as_mut().handle_next_event().await;
+        let mut event_fut = std::pin::pin!(inner.as_mut().handle_next_event());
 
-        Self::handle_inner_response(requests_in_flight, inner_event)
+        // Poll event_fut to completion while also listening for interruptions.
+        let event_to_process = loop {
+            let interruption_fut = if let Some((id, start, checks_completed)) =
+                requests_in_flight.oldest_outstanding_req_sent_at
+            {
+                // If there's a request in flight, see if it's timed out yet.
+                // (Assuming the timeout value doesn't overflow Instant.)
+                // Every time we complete a check and do *not* end the connection, we add one to
+                // a counter; we'll continue doing checks every X seconds until the request
+                // completes or we close the connection.
+                let sleep = config
+                    .post_request_interface_check_timeout
+                    .checked_mul(checks_completed)
+                    .and_then(|timeout| {
+                        timeout.checked_add(config.post_request_interface_check_timeout)
+                    })
+                    .and_then(|timeout| start.checked_add(timeout))
+                    .map(tokio::time::sleep_until);
+                Either::Left(SomeOrPending::from(sleep).map(move |_| {
+                    ConnectionEventInterruption::OutstandingRequestTimeout {
+                        request_id: id,
+                        request_start: start,
+                    }
+                }))
+            } else {
+                // If there are no requests in flight, watch for a network change so we can send an
+                // artificial one.
+                Either::Right(
+                    network_change_event
+                        .next()
+                        .map(|_| ConnectionEventInterruption::NetworkChangeEvent),
+                )
+            };
+
+            tokio::select! {
+                inner_event = &mut event_fut => break inner_event,
+                interruption = interruption_fut => match Self::handle_interruption(
+                    config,
+                    requests_in_flight,
+                    outgoing_request_tx,
+                    interruption,
+                )
+                .await
+                {
+                    ControlFlow::Continue(()) => {}
+                    // Note that since we're abandoning event_fut, we must produce a Finished
+                    // event, so that the websocket is not polled again.
+                    ControlFlow::Break(error) => break Outcome::Finished(Err(error)),
+                }
+            }
+        };
+
+        Self::handle_inner_response(requests_in_flight, event_to_process)
+    }
+
+    /// Handle an "interruption" that occurred while waiting for an event from the websocket.
+    ///
+    /// If this returns `ControlFlow::Break`, the websocket should be shut down.
+    async fn handle_interruption(
+        config: &ConnectionConfig<GCI>,
+        requests_in_flight: &mut InFlightRequests,
+        outgoing_request_tx: &WeakSender<OutgoingRequest>,
+        interruption: ConnectionEventInterruption,
+    ) -> ControlFlow<NextEventError> {
+        let ConnectionConfig {
+            log_tag,
+            post_request_interface_check_timeout: _,
+            transport_info,
+            get_current_interface,
+        } = config;
+
+        match interruption {
+            ConnectionEventInterruption::NetworkChangeEvent => {
+                debug_assert_eq!(
+                    requests_in_flight.oldest_outstanding_req_sent_at, None,
+                    "no events came in, so no new requests should be recorded"
+                );
+                if let Some(reservation) = outgoing_request_tx
+                    .upgrade()
+                    .as_ref()
+                    .and_then(|request_tx| request_tx.try_reserve().ok())
+                {
+                    log::info!(
+                        "sending internal keepalive to determine if connection is still usable"
+                    );
+                    reservation.send(OutgoingRequest {
+                        request: PartialRequestProto {
+                            verb: Method::GET,
+                            path: PathAndQuery::from_static("/v1/keepalive"),
+                            body: None,
+                            headers: vec![],
+                        },
+                        response_sender: oneshot::channel().0,
+                    });
+                    log::info!("finished sending off internal keepalive")
+                }
+            }
+            ConnectionEventInterruption::OutstandingRequestTimeout {
+                request_id,
+                request_start,
+            } => {
+                if let Some((id, _start, checks_completed)) =
+                    &mut requests_in_flight.oldest_outstanding_req_sent_at
+                {
+                    debug_assert_eq!(
+                        request_id, *id,
+                        "no events came in, so nothing should have changed",
+                    );
+                    *checks_completed = checks_completed.saturating_add(1);
+                } else {
+                    debug_assert!(false, "no events came in, so nothing should have changed");
+                }
+
+                let current_default_interface_ip = get_current_interface
+                    .get_interface_for(transport_info.remote_addr.ip())
+                    .await;
+
+                if current_default_interface_ip == transport_info.local_addr.ip() {
+                    log::info!(
+                        concat!(
+                            "[{}] current connection has not responded to request ",
+                            "sent {:.2?} ago; continuing to wait...",
+                        ),
+                        log_tag,
+                        request_start.elapsed(),
+                    );
+                } else {
+                    let elapsed = request_start.elapsed();
+                    log::warn!(
+                        concat!(
+                            "[{}] current connection is not on the default network interface ",
+                            "and failed to respond to a request within {:.2?}; disconnecting"
+                        ),
+                        log_tag,
+                        elapsed,
+                    );
+                    // Synthesize a Finished event so we don't get polled again.
+                    return ControlFlow::Break(NextEventError::ServerIdleTimeout(elapsed));
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
     }
 
     fn handle_inner_response(
         requests_in_flight: &mut InFlightRequests,
-        event: Outcome<MessageEvent<OutgoingMeta>, Result<FinishReason, NextEventError>>,
+        event: WsEvent,
     ) -> Outcome<Option<IncomingEvent>, Result<FinishReason, TaskExitError>> {
         let log_tag = &requests_in_flight.log_tag;
         match event {
             Outcome::Finished(Ok(finish)) => return Outcome::Finished(Ok(finish)),
             Outcome::Finished(Err(err)) => {
-                return Outcome::Finished(Err(TaskExitError::WebsocketError(err)))
+                return Outcome::Finished(Err(TaskExitError::WebsocketError(err)));
             }
             Outcome::Continue(MessageEvent::SentPing | MessageEvent::ReceivedPingPong) => {}
             Outcome::Continue(MessageEvent::SentMessage(OutgoingMeta::SentRequest(
@@ -1004,7 +1220,7 @@ impl<I: InnerConnection> ConnectionImpl<I> {
                         return Outcome::Continue(Some(IncomingEvent::ReceivedRequest {
                             id,
                             request: request_proto,
-                        }))
+                        }));
                     }
                 }
             }
@@ -1047,7 +1263,7 @@ impl TryFrom<TextOrBinary> for ChatMessage {
     fn try_from(message: TextOrBinary) -> Result<Self, Self::Error> {
         let data = match message {
             TextOrBinary::Text(text) => {
-                return Err(ChatProtocolError::ReceivedTextMessage { len: text.len() })
+                return Err(ChatProtocolError::ReceivedTextMessage { len: text.len() });
             }
             TextOrBinary::Binary(data) => data,
         };
@@ -1212,10 +1428,10 @@ impl From<TaskExitError> for crate::chat::SendError {
                 NextEventError::UnexpectedConnectionClose => WebSocketError::ChannelClosed,
                 NextEventError::AbnormalServerClose { code, reason: _ } => match code {
                     CloseCode::Library(CONNECTION_INVALIDATED_CLOSE_CODE) => {
-                        return Self::ConnectionInvalidated
+                        return Self::ConnectionInvalidated;
                     }
                     CloseCode::Library(CONNECTED_ELSEWHERE_CLOSE_CODE) => {
-                        return Self::ConnectedElsewhere
+                        return Self::ConnectedElsewhere;
                     }
                     _ => WebSocketError::ChannelClosed,
                 },
@@ -1266,10 +1482,16 @@ impl From<SendError> for super::SendError {
 #[cfg(test)]
 mod test {
     use std::io::Error as IoError;
+    use std::net::Ipv4Addr;
+    use std::sync::atomic::AtomicUsize;
 
     use assert_matches::assert_matches;
+    use const_str::ip_addr;
+    use futures::stream::FusedStream as _;
     use futures_util::stream::FuturesUnordered;
     use http::HeaderMap;
+    use rand::seq::IndexedRandom;
+    use rand::{Rng as _, SeedableRng};
     use test_case::test_case;
     use tokio::select;
     use tokio::sync::mpsc::error::TryRecvError;
@@ -1279,12 +1501,14 @@ mod test {
     mod fake {
         use futures_util::future::Either;
         use futures_util::stream::FusedStream;
+        use libsignal_net_infra::utils::no_network_change_events;
 
         use super::*;
 
         pub(super) const INITIAL_REQUEST_ID: u64 = 42;
+        pub(super) const POST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-        type FakeTxRxChannels = (
+        pub(super) type FakeTxRxChannels = (
             mpsc::UnboundedReceiver<OutgoingMessage>,
             mpsc::UnboundedSender<
                 OutcomeOrPanic<MessageEvent<OutgoingMeta>, Result<FinishReason, NextEventError>>,
@@ -1308,21 +1532,40 @@ mod test {
 
         pub(super) struct FakeConfig {
             pub initial_request_id: u64,
+            pub post_request_interface_check_timeout: Duration,
+            pub network_change_event: NetworkChangeEvent,
+        }
+
+        impl Default for FakeConfig {
+            fn default() -> Self {
+                Self {
+                    initial_request_id: INITIAL_REQUEST_ID,
+                    post_request_interface_check_timeout: POST_REQUEST_TIMEOUT,
+                    network_change_event: no_network_change_events(),
+                }
+            }
         }
 
         pub(super) fn new_chat(listener: EventListener) -> (Chat, FakeTxRxChannels) {
             new_chat_with_config(
-                FakeConfig {
-                    initial_request_id: INITIAL_REQUEST_ID,
-                },
+                Default::default(),
+                |_| std::future::ready(Ipv4Addr::LOCALHOST.into()),
                 listener,
             )
         }
         pub(super) fn new_chat_with_config(
             config: FakeConfig,
+            get_current_interface: impl GetCurrentInterface<Representation = IpAddr>
+            + Send
+            + Sync
+            + 'static,
             listener: EventListener,
         ) -> (Chat, FakeTxRxChannels) {
-            let FakeConfig { initial_request_id } = config;
+            let FakeConfig {
+                initial_request_id,
+                post_request_interface_check_timeout,
+                network_change_event,
+            } = config;
             let (outgoing_events_tx, outgoing_events_rx) = mpsc::unbounded_channel();
             let (incoming_events_tx, incoming_events_rx) = mpsc::unbounded_channel();
             let chat = Chat::new_inner(
@@ -1330,8 +1573,17 @@ mod test {
                     outgoing_events: outgoing_events_tx,
                     incoming_events: incoming_events_rx,
                 },
+                ConnectionConfig {
+                    log_tag: "test".into(),
+                    post_request_interface_check_timeout,
+                    transport_info: TransportInfo {
+                        local_addr: (Ipv4Addr::LOCALHOST, 1000).into(),
+                        remote_addr: (Ipv4Addr::LOCALHOST, 443).into(),
+                    },
+                    get_current_interface,
+                },
+                network_change_event,
                 initial_request_id,
-                "test".into(),
                 listener,
                 tokio::runtime::Handle::current(),
             );
@@ -1357,10 +1609,7 @@ mod test {
         where
             R: FusedStream<Item = (TextOrBinary, OutgoingMeta)> + Send + 'static,
         {
-            async fn handle_next_event(
-                self: Pin<&mut Self>,
-            ) -> Outcome<MessageEvent<OutgoingMeta>, Result<FinishReason, NextEventError>>
-            {
+            async fn handle_next_event(self: Pin<&mut Self>) -> WsEvent {
                 let FakeInnerConnectionProj {
                     outgoing_events,
                     mut outgoing_tx,
@@ -1399,7 +1648,7 @@ mod test {
                                 OutcomeOrPanic::IntentionalPanic(message) => {
                                     panic!("intentional panic: {message}")
                                 }
-                            }
+                            };
                         }
                     }
                 }
@@ -1741,8 +1990,7 @@ mod test {
             headers: HeaderMap::default(),
             body: None,
         };
-        let send_request = chat.send(request);
-        pin_mut!(send_request);
+        let mut send_request = std::pin::pin!(chat.send(request));
 
         let receive_outbound_request = async {
             let fake::OutgoingMessage(_message, meta) =
@@ -2054,7 +2302,9 @@ mod test {
         let (chat, (mut inner_events, inner_responses)) = fake::new_chat_with_config(
             fake::FakeConfig {
                 initial_request_id: u64::MAX,
+                ..Default::default()
             },
+            |_| std::future::ready(Ipv4Addr::LOCALHOST.into()),
             Box::new(|_| ()),
         );
 
@@ -2327,5 +2577,657 @@ mod test {
             .expect("Task should not panic");
 
         assert_eq!(send_result, Err(expected_error));
+    }
+
+    fn stream_of_events_other_than_responses() -> impl Stream<Item = WsEvent> {
+        let seed = std::env::var("LIBSIGNAL_TESTING_SEED")
+            .map(|seed| seed.parse().expect("valid integer"))
+            .unwrap_or_else(|_| rand::random());
+        log::info!("LIBSIGNAL_TESTING_SEED={seed}");
+
+        // These are functions because MessageEvent isn't Clone.
+        let items = [
+            || MessageEvent::SentPing,
+            || MessageEvent::ReceivedPingPong,
+            || MessageEvent::ReceivedMessage(TextOrBinary::Binary(vec![].into())),
+            || MessageEvent::SentMessage(OutgoingMeta::ResponseToIncoming),
+        ];
+        let mut next_event = Instant::now();
+        let mut rng1 = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+        let mut rng2 = rng1.clone();
+        futures_util::stream::repeat_with(move || {
+            next_event += Duration::from_millis(100 * rng1.random_range(0..20));
+            next_event
+        })
+        .then(tokio::time::sleep_until)
+        .map(move |_| {
+            let item = items.choose(&mut rng2).expect("non-empty")();
+            log::debug!("injecting {item:?}");
+            Outcome::Continue(item)
+        })
+    }
+
+    async fn expect_connection_closed(
+        expected_elapsed: Duration,
+        mut listener_rx: mpsc::UnboundedReceiver<ListenerEvent>,
+        (mut chat_events, inner_responses): fake::FakeTxRxChannels,
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        let start = Instant::now();
+        let mut other_events = std::pin::pin!(other_events.fuse());
+
+        // Let the "server" process the end of the request stream,
+        // and then the client can receive the Finished event.
+        let mut received_close = false;
+        loop {
+            tokio::task::yield_now().await;
+            let event = select! {
+                biased;
+                event = listener_rx.recv() => event,
+                event = chat_events.recv() => {
+                    assert!(event.is_none(), "no further outgoing messages expected");
+                    inner_responses
+                        .send(Outcome::Finished(Ok(FinishReason::LocalDisconnect)).into())
+                        .expect("not hung up on");
+                    continue;
+                }
+                extra_ws_event = other_events.next(),
+                if !other_events.is_terminated() && !received_close => {
+                    if let Some(event) = extra_ws_event {
+                        inner_responses.send(event.into()).expect("not hung up on");
+                    }
+                    continue;
+                }
+            };
+            let Some(event) = event else {
+                break;
+            };
+            received_close = matches!(event, ListenerEvent::Finished(_));
+        }
+
+        assert!(
+            received_close,
+            "Listener should have received a close event"
+        );
+        assert_eq!(start.elapsed(), expected_elapsed);
+    }
+
+    async fn expect_connection_not_closed(
+        time_to_wait: Duration,
+        mut listener_rx: mpsc::UnboundedReceiver<ListenerEvent>,
+        (mut chat_events, inner_responses): fake::FakeTxRxChannels,
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        let mut deadline = std::pin::pin!(tokio::time::sleep(time_to_wait));
+        let mut other_events = std::pin::pin!(other_events.fuse());
+
+        // Let the "server" process the end of the request stream,
+        // and then the client can receive the Finished event.
+        loop {
+            tokio::task::yield_now().await;
+            let event = select! {
+                biased;
+                event = listener_rx.recv() => event,
+                event = chat_events.recv() => {
+                    if event.is_some() {
+                        panic!("no additional outgoing messages should be sent");
+                    } else {
+                        panic!("the connection should not be closed");
+                    }
+                }
+                extra_ws_event = other_events.next(), if !other_events.is_terminated() => {
+                    if let Some(event) = extra_ws_event {
+                        inner_responses.send(event.into()).expect("not hung up on");
+                    }
+                    continue;
+                }
+                _ = &mut deadline => {
+                    break;
+                }
+            };
+            let event = event.expect("should not have closed yet");
+            assert_matches!(
+                event,
+                ListenerEvent::ReceivedMessage { .. },
+                "should not have Finished"
+            );
+        }
+
+        // We reached the deadline without a post-request timeout, as expected.
+    }
+
+    #[test_case(futures_util::stream::empty())]
+    #[test_case(stream_of_events_other_than_responses())]
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn connection_close_if_no_response_for_x_seconds(
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        // Create channels for listener events
+        let (listener_tx, listener_rx) = mpsc::unbounded_channel();
+        let (chat, (mut chat_events, inner_responses)) = fake::new_chat_with_config(
+            Default::default(),
+            |_| {
+                // Behave as if we've switched interfaces immediately after connecting.
+                std::future::ready(ip_addr!("192.168.0.1"))
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+
+        let request = Request {
+            method: Method::GET,
+            path: PathAndQuery::from_static("/request"),
+            headers: HeaderMap::default(),
+            body: None,
+        };
+        let mut send_request = std::pin::pin!(chat.send(request));
+
+        let receive_outbound_request = async {
+            let fake::OutgoingMessage(_message, meta) =
+                chat_events.recv().await.expect("not ended");
+            let request_id = assert_matches!(&meta, OutgoingMeta::SentRequest(id, _) => *id);
+            inner_responses
+                .send(Outcome::Continue(MessageEvent::SentMessage(meta)).into())
+                .expect("not closed");
+            request_id
+        };
+
+        // Start polling the client sending future and the server receive end.
+        // The client sends won't finish until the response to the request is
+        // received, so do't use `join!`. The server receive will complete,
+        // though.
+        let _sent_request_id = select! {
+            biased;
+            response = &mut send_request => unreachable!("send finished before responses were sent: {response:?}"),
+            req = receive_outbound_request => req,
+        };
+
+        expect_connection_closed(
+            fake::POST_REQUEST_TIMEOUT,
+            listener_rx,
+            (chat_events, inner_responses),
+            other_events,
+        )
+        .await;
+    }
+
+    #[test_case(futures_util::stream::empty())]
+    #[test_case(stream_of_events_other_than_responses())]
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn connection_close_if_no_response_for_x_seconds_handles_max_timeout(
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        // Create channels for listener events
+        let (listener_tx, listener_rx) = mpsc::unbounded_channel();
+        let (chat, (mut chat_events, inner_responses)) = fake::new_chat_with_config(
+            fake::FakeConfig {
+                post_request_interface_check_timeout: Duration::MAX,
+                ..Default::default()
+            },
+            |_| {
+                // Behave as if we've switched interfaces immediately after connecting.
+                std::future::ready(ip_addr!("192.168.0.1"))
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+
+        let request = Request {
+            method: Method::GET,
+            path: PathAndQuery::from_static("/request"),
+            headers: HeaderMap::default(),
+            body: None,
+        };
+        let mut send_request = std::pin::pin!(chat.send(request));
+
+        let receive_outbound_request = async {
+            let fake::OutgoingMessage(_message, meta) =
+                chat_events.recv().await.expect("not ended");
+            let request_id = assert_matches!(&meta, OutgoingMeta::SentRequest(id, _) => *id);
+            inner_responses
+                .send(Outcome::Continue(MessageEvent::SentMessage(meta)).into())
+                .expect("not closed");
+            request_id
+        };
+
+        // Start polling the client sending future and the server receive end.
+        // The client sends won't finish until the response to the request is
+        // received, so do't use `join!`. The server receive will complete,
+        // though.
+        let _sent_request_id = select! {
+            biased;
+            response = &mut send_request => unreachable!("send finished before responses were sent: {response:?}"),
+            req = receive_outbound_request => req,
+        };
+
+        expect_connection_not_closed(
+            10 * fake::POST_REQUEST_TIMEOUT,
+            listener_rx,
+            (chat_events, inner_responses),
+            other_events,
+        )
+        .await;
+    }
+
+    #[test_case(futures_util::stream::empty())]
+    #[test_case(stream_of_events_other_than_responses())]
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn connection_close_if_no_response_for_x_seconds_only_if_interface_actually_changed(
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        // Create channels for listener events
+        let (listener_tx, listener_rx) = mpsc::unbounded_channel();
+        let (chat, (mut chat_events, inner_responses)) = fake::new_chat_with_config(
+            Default::default(),
+            |_| {
+                // If we didn't switch interfaces, we shouldn't close the connection.
+                std::future::ready(Ipv4Addr::LOCALHOST.into())
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+
+        let request = Request {
+            method: Method::GET,
+            path: PathAndQuery::from_static("/request"),
+            headers: HeaderMap::default(),
+            body: None,
+        };
+        let mut send_request = std::pin::pin!(chat.send(request));
+
+        let receive_outbound_request = async {
+            let fake::OutgoingMessage(_message, meta) =
+                chat_events.recv().await.expect("not ended");
+            let request_id = assert_matches!(&meta, OutgoingMeta::SentRequest(id, _) => *id);
+            inner_responses
+                .send(Outcome::Continue(MessageEvent::SentMessage(meta)).into())
+                .expect("not closed");
+            request_id
+        };
+
+        // Start polling the client sending future and the server receive end.
+        // The client sends won't finish until the response to the request is
+        // received, so do't use `join!`. The server receive will complete,
+        // though.
+        let _sent_request_id = select! {
+            biased;
+            response = &mut send_request => unreachable!("send finished before responses were sent: {response:?}"),
+            req = receive_outbound_request => req,
+        };
+
+        expect_connection_not_closed(
+            10 * fake::POST_REQUEST_TIMEOUT,
+            listener_rx,
+            (chat_events, inner_responses),
+            other_events,
+        )
+        .await;
+    }
+
+    #[test_case(futures_util::stream::empty())]
+    #[test_case(stream_of_events_other_than_responses())]
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn connection_close_if_no_response_for_x_seconds_only_does_one_check_per_x_seconds(
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        let start = Instant::now();
+
+        // Create channels for listener events
+        let (listener_tx, listener_rx) = mpsc::unbounded_channel();
+        let (chat, (mut chat_events, inner_responses)) = fake::new_chat_with_config(
+            Default::default(),
+            move |_| {
+                std::future::ready(
+                    if start.elapsed() < fake::POST_REQUEST_TIMEOUT.mul_f32(1.5) {
+                        Ipv4Addr::LOCALHOST.into()
+                    } else {
+                        ip_addr!("192.168.0.1")
+                    },
+                )
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+
+        let request = Request {
+            method: Method::GET,
+            path: PathAndQuery::from_static("/request"),
+            headers: HeaderMap::default(),
+            body: None,
+        };
+        let mut send_request = std::pin::pin!(chat.send(request));
+
+        let receive_outbound_request = async {
+            let fake::OutgoingMessage(_message, meta) =
+                chat_events.recv().await.expect("not ended");
+            let request_id = assert_matches!(&meta, OutgoingMeta::SentRequest(id, _) => *id);
+            inner_responses
+                .send(Outcome::Continue(MessageEvent::SentMessage(meta)).into())
+                .expect("not closed");
+            request_id
+        };
+
+        // Start polling the client sending future and the server receive end.
+        // The client sends won't finish until the response to the request is
+        // received, so do't use `join!`. The server receive will complete,
+        // though.
+        let _sent_request_id = select! {
+            biased;
+            response = &mut send_request => unreachable!("send finished before responses were sent: {response:?}"),
+            req = receive_outbound_request => req,
+        };
+
+        expect_connection_closed(
+            2 * fake::POST_REQUEST_TIMEOUT,
+            listener_rx,
+            (chat_events, inner_responses),
+            other_events,
+        )
+        .await;
+    }
+
+    #[test_case(futures_util::stream::empty())]
+    #[test_case(stream_of_events_other_than_responses())]
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn connection_close_if_no_response_for_x_seconds_only_waits_for_first_in_set(
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        // Create channels for listener events
+        let (listener_tx, listener_rx) = mpsc::unbounded_channel();
+        let (chat, (mut chat_events, inner_responses)) = fake::new_chat_with_config(
+            Default::default(),
+            |_| {
+                // Behave as if we've switched interfaces immediately after connecting.
+                std::future::ready(ip_addr!("192.168.0.1"))
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+
+        let mut send_requests = FuturesUnordered::from_iter(["/a", "/b"].map(|path| {
+            chat.send(Request {
+                method: Method::GET,
+                path: PathAndQuery::from_static(path),
+                headers: Default::default(),
+                body: None,
+            })
+        }));
+
+        let receive_outbound_requests = async {
+            let mut messages = Vec::with_capacity(2);
+            for _ in 0..messages.capacity() {
+                let fake::OutgoingMessage(message, meta) =
+                    chat_events.recv().await.expect("not ended");
+                inner_responses
+                    .send(Outcome::Continue(MessageEvent::SentMessage(meta)).into())
+                    .expect("not closed");
+                let msg = assert_matches!(message, TextOrBinary::Binary(msg) => msg);
+                messages.push(MessageProto::decode(&*msg).expect("valid proto"))
+            }
+            messages
+        };
+
+        let sent_messages = tokio::select! {
+            biased;
+            _ = send_requests.next() => unreachable!("sends don't complete until responses are received"),
+            outgoing = receive_outbound_requests => outgoing
+        };
+
+        // Respond to the first one promptly.
+        let response = ResponseProto {
+            id: sent_messages[0].request.as_ref().expect("is request").id,
+            status: Some(200),
+            message: None,
+            headers: vec!["resp-header: value".to_string()],
+            body: None,
+        };
+        inner_responses
+            .send(
+                Outcome::Continue(MessageEvent::ReceivedMessage(TextOrBinary::Binary(
+                    MessageProto::from(ChatMessageProto::Response(response))
+                        .encode_to_vec()
+                        .into(),
+                )))
+                .into(),
+            )
+            .expect("can send response");
+
+        expect_connection_not_closed(
+            10 * fake::POST_REQUEST_TIMEOUT,
+            listener_rx,
+            (chat_events, inner_responses),
+            other_events,
+        )
+        .await;
+    }
+
+    #[test_case(futures_util::stream::empty())]
+    #[test_case(stream_of_events_other_than_responses())]
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn connection_close_if_no_response_for_x_seconds_only_checks_first_in_set(
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        // Create channels for listener events
+        let (listener_tx, listener_rx) = mpsc::unbounded_channel();
+        let (chat, (mut chat_events, inner_responses)) = fake::new_chat_with_config(
+            Default::default(),
+            |_| {
+                // Behave as if we've switched interfaces immediately after connecting.
+                std::future::ready(ip_addr!("192.168.0.1"))
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+
+        let mut send_requests = FuturesUnordered::from_iter(["/a", "/b"].map(|path| {
+            chat.send(Request {
+                method: Method::GET,
+                path: PathAndQuery::from_static(path),
+                headers: Default::default(),
+                body: None,
+            })
+        }));
+
+        let receive_outbound_requests = async {
+            let mut messages = Vec::with_capacity(2);
+            for _ in 0..messages.capacity() {
+                let fake::OutgoingMessage(message, meta) =
+                    chat_events.recv().await.expect("not ended");
+                inner_responses
+                    .send(Outcome::Continue(MessageEvent::SentMessage(meta)).into())
+                    .expect("not closed");
+                let msg = assert_matches!(message, TextOrBinary::Binary(msg) => msg);
+                messages.push(MessageProto::decode(&*msg).expect("valid proto"))
+            }
+            messages
+        };
+
+        let sent_messages = tokio::select! {
+            biased;
+            _ = send_requests.next() => unreachable!("sends don't complete until responses are received"),
+            outgoing = receive_outbound_requests => outgoing
+        };
+
+        // Respond to the *second* one promptly.
+        let response = ResponseProto {
+            id: sent_messages[1].request.as_ref().expect("is request").id,
+            status: Some(200),
+            message: None,
+            headers: vec!["resp-header: value".to_string()],
+            body: None,
+        };
+        inner_responses
+            .send(
+                Outcome::Continue(MessageEvent::ReceivedMessage(TextOrBinary::Binary(
+                    MessageProto::from(ChatMessageProto::Response(response))
+                        .encode_to_vec()
+                        .into(),
+                )))
+                .into(),
+            )
+            .expect("can send response");
+
+        expect_connection_closed(
+            fake::POST_REQUEST_TIMEOUT,
+            listener_rx,
+            (chat_events, inner_responses),
+            other_events,
+        )
+        .await;
+    }
+
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn send_keepalive_on_network_change() {
+        let (network_change_event_tx, network_change_event) = tokio::sync::watch::channel(());
+        let (listener_tx, _listener_rx) = mpsc::unbounded_channel();
+        let (chat, (mut chat_events, _inner_responses)) = fake::new_chat_with_config(
+            fake::FakeConfig {
+                network_change_event,
+                ..Default::default()
+            },
+            |_| {
+                // Behave as if we've switched interfaces immediately after connecting.
+                std::future::ready(ip_addr!("192.168.0.1"))
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+
+        network_change_event_tx.send_replace(());
+
+        let fake::OutgoingMessage(message, _meta) =
+            chat_events.recv().await.expect("a request is sent");
+        let msg = assert_matches!(message, TextOrBinary::Binary(msg) => msg);
+        let decoded = MessageProto::decode(&*msg).expect("valid proto");
+        assert_eq!(
+            decoded.request.expect("should have request").path(),
+            "/v1/keepalive"
+        );
+    }
+
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn network_change_sender_can_be_dropped() {
+        let (network_change_event_tx, network_change_event) = tokio::sync::watch::channel(());
+        let (listener_tx, _listener_rx) = mpsc::unbounded_channel();
+        let interface_check_count = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&interface_check_count);
+        let (chat, (mut chat_events, _inner_responses)) = fake::new_chat_with_config(
+            fake::FakeConfig {
+                network_change_event,
+                ..Default::default()
+            },
+            move |_| {
+                // Behave as if we haven't switched interfaces.
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::task::yield_now().map(|()| Ipv4Addr::LOCALHOST.into())
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+        tokio::task::yield_now().await;
+
+        // Dropping the sender should prevent any future network events.
+        drop(network_change_event_tx);
+        tokio::task::yield_now().await;
+
+        let _: tokio::time::error::Elapsed =
+            tokio::time::timeout(Duration::from_secs(300), chat_events.recv())
+                .await
+                .expect_err("should time out");
+
+        assert_eq!(
+            interface_check_count.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[test_case(futures_util::stream::empty())]
+    #[test_case(stream_of_events_other_than_responses())]
+    #[test_log::test(tokio::test(start_paused = true, flavor = "current_thread"))]
+    async fn do_not_send_keepalive_on_network_change_if_there_is_already_an_outstanding_request(
+        other_events: impl Stream<Item = WsEvent>,
+    ) {
+        let (network_change_event_tx, network_change_event) = tokio::sync::watch::channel(());
+        let (listener_tx, listener_rx) = mpsc::unbounded_channel();
+        let (chat, (mut chat_events, inner_responses)) = fake::new_chat_with_config(
+            fake::FakeConfig {
+                network_change_event,
+                ..Default::default()
+            },
+            |_| {
+                // Behave as if we've switched interfaces immediately after connecting.
+                std::future::ready(ip_addr!("192.168.0.1"))
+            },
+            Box::new(move |evt| {
+                let _ = listener_tx.send(evt);
+            }),
+        );
+
+        assert!(chat.is_connected().await);
+
+        let request = Request {
+            method: Method::GET,
+            path: PathAndQuery::from_static("/request"),
+            headers: HeaderMap::default(),
+            body: None,
+        };
+        let mut send_request = std::pin::pin!(chat.send(request));
+
+        let receive_outbound_request = async {
+            let fake::OutgoingMessage(_message, meta) =
+                chat_events.recv().await.expect("not ended");
+            let request_id = assert_matches!(&meta, OutgoingMeta::SentRequest(id, _) => *id);
+            inner_responses
+                .send(Outcome::Continue(MessageEvent::SentMessage(meta)).into())
+                .expect("not closed");
+            request_id
+        };
+
+        // Start polling the client sending future and the server receive end.
+        // The client sends won't finish until the response to the request is
+        // received, so do't use `join!`. The server receive will complete,
+        // though.
+        let _sent_request_id = select! {
+            biased;
+            response = &mut send_request => unreachable!("send finished before responses were sent: {response:?}"),
+            req = receive_outbound_request => req,
+        };
+
+        // Yield first so the independent client task can record the send,
+        // *then* change the network.
+        tokio::task::yield_now().await;
+        network_change_event_tx.send_replace(());
+
+        expect_connection_closed(
+            fake::POST_REQUEST_TIMEOUT,
+            listener_rx,
+            (chat_events, inner_responses),
+            other_events,
+        )
+        .await;
     }
 }

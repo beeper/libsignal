@@ -7,18 +7,19 @@ use std::sync::Arc;
 
 use clap::{Parser, ValueEnum};
 use const_str::ip_addr;
-use either::{for_both, Either};
+use either::{Either, for_both};
 use libsignal_net::infra::certs::RootCertificates;
 use libsignal_net::infra::dns::custom_resolver::CustomDnsResolver;
 use libsignal_net::infra::dns::dns_lookup::{DnsLookup, DnsLookupRequest};
 use libsignal_net::infra::host::Host;
+use libsignal_net_infra::Alpn;
 use libsignal_net_infra::dns::dns_transport_doh::DohTransportConnectorFactory;
 use libsignal_net_infra::dns::dns_transport_udp::UdpTransportConnectorFactory;
 use libsignal_net_infra::route::{
     HttpRouteFragment, HttpsTlsRoute, TcpRoute, TlsRoute, TlsRouteFragment, UdpRoute,
 };
-use libsignal_net_infra::testutil::no_network_change_events;
-use libsignal_net_infra::Alpn;
+use libsignal_net_infra::timeouts::DNS_LATER_RESPONSE_GRACE_PERIOD;
+use libsignal_net_infra::utils::no_network_change_events;
 use nonzero_ext::nonzero;
 use tokio::time::Instant;
 
@@ -59,6 +60,7 @@ async fn main() {
                 vec![ns_address],
                 UdpTransportConnectorFactory,
                 &no_network_change_events(),
+                DNS_LATER_RESPONSE_GRACE_PERIOD,
             ))
         }
         Transport::Doh => {
@@ -86,6 +88,7 @@ async fn main() {
                 vec![target],
                 DohTransportConnectorFactory,
                 &no_network_change_events(),
+                DNS_LATER_RESPONSE_GRACE_PERIOD,
             ))
         }
     };

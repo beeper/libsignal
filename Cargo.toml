@@ -37,10 +37,10 @@ default-members = [
 resolver = "2" # so that our dev-dependency features don't leak into products
 
 [workspace.package]
-version = "0.79.0"
+version = "0.80.3"
 authors = ["Signal Messenger LLC"]
 license = "AGPL-3.0-only"
-rust-version = "1.83.0"
+rust-version = "1.85"
 
 [workspace.lints.clippy]
 # Prefer TryFrom between integers unless truncation is desired.
@@ -81,10 +81,10 @@ signal-neon-futures = { path = "rust/bridge/node/futures" }
 # Our forks of some dependencies, accessible as xxx_signal so that usages of them are obvious in source code. Crates
 # that want to use the real things can depend on those directly.
 
-boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v4.15.0", package = "boring", default-features = false }
+boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v4.18.0", package = "boring", default-features = false }
 curve25519-dalek-signal = { git = 'https://github.com/signalapp/curve25519-dalek', package = "curve25519-dalek", tag = 'signal-curve25519-4.1.3' }
 spqr = { git = "https://github.com/signalapp/SparsePostQuantumRatchet.git", tag = "v1.2.0" }
-tokio-boring-signal = { git = "https://github.com/signalapp/boring", package = "tokio-boring", tag = "signal-v4.15.0" }
+tokio-boring-signal = { git = "https://github.com/signalapp/boring", package = "tokio-boring", tag = "signal-v4.18.0" }
 
 aes = "0.8.3"
 aes-gcm-siv = "0.11.1"
@@ -174,7 +174,6 @@ quote = "1.0.38"
 rand = "0.9"
 rand_chacha = "0.9"
 rand_core = "0.9"
-rand_core_06 = { version = "0.6.4", package = "rand_core" }
 rangemap = "1.5.1"
 rayon = "1.8.0"
 rcgen = "0.13.0"
@@ -186,7 +185,7 @@ serde_json = "1.0.45"
 serde_with = "3.1.0"
 sha1 = "0.10"
 sha2 = "0.10"
-snow = { version = "0.9.6", default-features = false }
+snow = { version = "0.10", default-features = false }
 socks5-server = "0.10.1"
 static_assertions = "1.1"
 strum = "0.27.0"
@@ -201,12 +200,12 @@ tls-parser = "0.12.2"
 tokio = "1.45"
 tokio-socks = "0.5.2"
 tokio-stream = "0.1.16"
-tokio-tungstenite = "0.26.0"
+tokio-tungstenite = "0.27.0"
 tokio-util = "0.7.11"
 tonic = "0.13.1"
 tonic-build = "0.13.1"
 tower = "0.5.2"
-tungstenite = "0.26.0"
+tungstenite = "0.27.0"
 url = "2.4.1"
 uuid = "1.5"
 visibility = "0.1.1"
@@ -218,8 +217,8 @@ zerocopy = "0.8.24"
 [patch.crates-io]
 # When building libsignal, just use our forks so we don't end up with two different versions of the libraries.
 
-boring = { git = 'https://github.com/signalapp/boring', tag = 'signal-v4.15.0' }
-boring-sys = { git = 'https://github.com/signalapp/boring', tag = 'signal-v4.15.0' }
+boring = { git = 'https://github.com/signalapp/boring', tag = 'signal-v4.18.0' }
+boring-sys = { git = 'https://github.com/signalapp/boring', tag = 'signal-v4.18.0' }
 curve25519-dalek = { git = 'https://github.com/signalapp/curve25519-dalek', tag = 'signal-curve25519-4.1.3' }
 
 [profile.dev.package.argon2]

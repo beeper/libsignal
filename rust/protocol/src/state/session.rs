@@ -11,11 +11,11 @@ use prost::Message;
 use rand::{CryptoRng, Rng};
 use subtle::ConstantTimeEq;
 
-use crate::proto::storage::{session_structure, RecordStructure, SessionStructure};
+use crate::proto::storage::{RecordStructure, SessionStructure, session_structure};
 use crate::protocol::CIPHERTEXT_MESSAGE_PRE_KYBER_VERSION;
 use crate::ratchet::{ChainKey, MessageKeyGenerator, RootKey};
 use crate::state::{KyberPreKeyId, PreKeyId, SignedPreKeyId};
-use crate::{consts, kem, IdentityKey, KeyPair, PrivateKey, PublicKey, SignalProtocolError};
+use crate::{IdentityKey, KeyPair, PrivateKey, PublicKey, SignalProtocolError, consts, kem};
 
 /// A distinct error type to keep from accidentally propagating deserialization errors.
 #[derive(Debug)]
@@ -535,7 +535,7 @@ impl SessionState {
 
     pub(crate) fn unacknowledged_pre_key_message_items(
         &self,
-    ) -> Result<Option<UnacknowledgedPreKeyMessageItems>, InvalidSessionError> {
+    ) -> Result<Option<UnacknowledgedPreKeyMessageItems<'_>>, InvalidSessionError> {
         if let Some(ref pending_pre_key) = self.session.pending_pre_key {
             Ok(Some(UnacknowledgedPreKeyMessageItems::new(
                 pending_pre_key.pre_key_id.map(Into::into),

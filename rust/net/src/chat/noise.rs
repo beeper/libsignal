@@ -6,8 +6,9 @@
 use std::future::Future;
 use std::net::IpAddr;
 
+use libsignal_core::try_scoped;
 use libsignal_net_infra::noise::{
-    HandshakeAuthKind, NoiseHandshake, EPHEMERAL_KEY_LEN, STATIC_KEY_LEN,
+    EPHEMERAL_KEY_LEN, HandshakeAuthKind, NoiseHandshake, STATIC_KEY_LEN,
 };
 use libsignal_net_infra::route::{
     ComposedConnector, Connector, ResolveHostnames, ResolvedRoute, UnresolvedHost,
@@ -51,19 +52,21 @@ impl NoiseHandshake for HandshakeAuth<'_> {
     }
     fn into_handshake_state(self) -> snow::HandshakeState {
         let resolver = Box::new(attest::snow_resolver::Resolver);
-        match self {
-            HandshakeAuth::IK {
-                server_public_key,
-                client_private_key,
-            } => snow::Builder::with_resolver(IK_NOISE_PATTERN.parse().unwrap(), resolver)
-                .remote_public_key(server_public_key)
-                .local_private_key(client_private_key),
-            HandshakeAuth::NK { server_public_key } => {
-                snow::Builder::with_resolver(NK_NOISE_PATTERN.parse().unwrap(), resolver)
-                    .remote_public_key(server_public_key)
+        try_scoped(|| {
+            match self {
+                HandshakeAuth::IK {
+                    server_public_key,
+                    client_private_key,
+                } => snow::Builder::with_resolver(IK_NOISE_PATTERN.parse().unwrap(), resolver)
+                    .remote_public_key(server_public_key)?
+                    .local_private_key(client_private_key)?,
+                HandshakeAuth::NK { server_public_key } => {
+                    snow::Builder::with_resolver(NK_NOISE_PATTERN.parse().unwrap(), resolver)
+                        .remote_public_key(server_public_key)?
+                }
             }
-        }
-        .build_initiator()
+            .build_initiator()
+        })
         .expect("building handshake failed")
     }
     fn auth_kind(&self) -> HandshakeAuthKind {

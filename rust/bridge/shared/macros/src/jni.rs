@@ -8,8 +8,8 @@ use quote::*;
 use syn::*;
 use syn_mid::Signature;
 
-use crate::util::{extract_arg_names_and_types, result_type};
 use crate::BridgingKind;
+use crate::util::{extract_arg_names_and_types, result_type};
 
 pub(crate) fn bridge_fn(
     name: &str,
@@ -59,7 +59,7 @@ pub(crate) fn bridge_fn(
 
     Ok(quote! {
         #[cfg(feature = "jni")]
-        #[export_name = concat!(env!("LIBSIGNAL_BRIDGE_FN_PREFIX_JNI"), #name)]
+        #[unsafe(export_name = concat!(env!("LIBSIGNAL_BRIDGE_FN_PREFIX_JNI"), #name))]
         #[allow(non_snake_case)]
         pub unsafe extern "C" fn #wrapper_name<'local>(
             mut env: ::jni::JNIEnv<'local>,

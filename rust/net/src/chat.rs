@@ -13,12 +13,15 @@ use ::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use bytes::Bytes;
 use either::Either;
 use libsignal_net_infra::route::{
-    Connector, HttpsTlsRoute, RouteProvider, RouteProviderExt, ThrottlingConnector, TransportRoute,
-    UnresolvedHttpsServiceRoute, UnresolvedWebsocketServiceRoute, UsePreconnect, WebSocketRoute,
-    WebSocketRouteFragment,
+    Connector, DefaultGetCurrentInterface, HttpsTlsRoute, RouteProvider, RouteProviderExt,
+    ThrottlingConnector, TransportRoute, UnresolvedHttpsServiceRoute,
+    UnresolvedWebsocketServiceRoute, UsePreconnect, WebSocketRoute, WebSocketRouteFragment,
 };
+use libsignal_net_infra::utils::NetworkChangeEvent;
 use libsignal_net_infra::ws::StreamWithResponseHeaders;
-use libsignal_net_infra::{AsHttpHeader, AsStaticHttpHeader, Connection, IpType, TransportInfo};
+use libsignal_net_infra::{
+    AsHttpHeader, AsStaticHttpHeader, Connection, IpType, RECOMMENDED_WS_CONFIG, TransportInfo,
+};
 use tokio_tungstenite::WebSocketStream;
 
 use crate::auth::Auth;
@@ -42,6 +45,13 @@ pub type ResponseProto = proto::chat_websocket::WebSocketResponseMessage;
 pub type ChatMessageType = proto::chat_websocket::web_socket_message::Type;
 
 const RECEIVE_STORIES_HEADER_NAME: &str = "x-signal-receive-stories";
+
+pub const RECOMMENDED_CHAT_WS_CONFIG: ws::Config = ws::Config {
+    local_idle_timeout: RECOMMENDED_WS_CONFIG.local_idle_timeout,
+    post_request_interface_check_timeout: Duration::MAX,
+    remote_idle_timeout: RECOMMENDED_WS_CONFIG.remote_idle_disconnect_timeout,
+    initial_request_id: 0,
+};
 
 #[derive(Debug)]
 pub struct DebugInfo {
@@ -172,6 +182,7 @@ pub struct PendingChatConnection<T = ChatTransportConnection> {
     connect_response_headers: http::HeaderMap,
     ws_config: ws::Config,
     route_info: RouteInfo,
+    network_change_event: NetworkChangeEvent,
     log_tag: Arc<str>,
 }
 
@@ -224,9 +235,9 @@ impl ChatConnection {
     ) -> Result<PendingChatConnection, ConnectError>
     where
         TC: WebSocketTransportConnectorFactory<
-            UsePreconnect<TransportRoute>,
-            Connection = ChatTransportConnection,
-        >,
+                UsePreconnect<TransportRoute>,
+                Connection = ChatTransportConnection,
+            >,
     {
         Self::start_connect_with_transport(
             connection_resources,
@@ -251,6 +262,8 @@ impl ChatConnection {
     where
         TC: WebSocketTransportConnectorFactory<UsePreconnect<TransportRoute>>,
     {
+        let network_change_event_for_established_connection =
+            connection_resources.network_change_event.clone();
         let should_preconnect = matches!(headers, Some(ChatHeaders::Auth(_)));
         let headers = headers
             .into_iter()
@@ -300,6 +313,7 @@ impl ChatConnection {
             connect_response_headers: response_headers,
             route_info,
             ws_config,
+            network_change_event: network_change_event_for_established_connection,
             log_tag,
         })
     }
@@ -314,19 +328,28 @@ impl ChatConnection {
             connect_response_headers,
             ws_config,
             route_info,
+            network_change_event,
             log_tag,
         } = pending;
+        let transport_info = connection.transport_info();
         Self {
             connection_info: ConnectionInfo {
                 route_info,
-                transport_info: connection.transport_info(),
+                transport_info: transport_info.clone(),
             },
             inner: ws::Chat::new(
                 tokio_runtime,
                 connection,
                 connect_response_headers,
                 ws_config,
-                log_tag,
+                ws::ConnectionConfig {
+                    log_tag,
+                    post_request_interface_check_timeout: ws_config
+                        .post_request_interface_check_timeout,
+                    transport_info,
+                    get_current_interface: DefaultGetCurrentInterface,
+                },
+                network_change_event,
                 listener,
             ),
         }
@@ -371,12 +394,12 @@ impl Display for ConnectionInfo {
         let Self {
             transport_info:
                 TransportInfo {
-                    local_port,
-                    ip_version,
+                    local_addr,
+                    remote_addr: _,
                 },
             route_info,
         } = self;
-        write!(f, "from {ip_version}:{local_port} via {route_info}")
+        write!(f, "from {local_addr} via {route_info}")
     }
 }
 
@@ -385,13 +408,13 @@ pub mod test_support {
 
     use std::time::Duration;
 
+    use libsignal_net_infra::EnableDomainFronting;
     use libsignal_net_infra::dns::DnsResolver;
     use libsignal_net_infra::route::ConnectionProxyConfig;
-    use libsignal_net_infra::testutil::no_network_change_events;
-    use libsignal_net_infra::EnableDomainFronting;
+    use libsignal_net_infra::utils::no_network_change_events;
 
     use super::*;
-    use crate::chat::{ws, ChatConnection};
+    use crate::chat::{ChatConnection, ws};
     use crate::connect_state::{
         ConnectState, DefaultConnectorFactory, PreconnectingFactory, SUGGESTED_CONNECT_CONFIG,
     };
@@ -426,6 +449,7 @@ pub mod test_support {
         let ws_config = ws::Config {
             initial_request_id: 0,
             local_idle_timeout: Duration::from_secs(60),
+            post_request_interface_check_timeout: Duration::MAX,
             remote_idle_timeout: Duration::from_secs(60),
         };
 
@@ -468,19 +492,19 @@ pub(crate) mod test {
     use assert_matches::assert_matches;
     use http::{HeaderName, HeaderValue};
     use itertools::Itertools;
+    use libsignal_net_infra::Alpn;
     use libsignal_net_infra::certs::RootCertificates;
-    use libsignal_net_infra::dns::lookup_result::LookupResult;
     use libsignal_net_infra::dns::DnsResolver;
+    use libsignal_net_infra::dns::lookup_result::LookupResult;
     use libsignal_net_infra::errors::{RetryLater, TransportConnectError};
     use libsignal_net_infra::host::Host;
     use libsignal_net_infra::route::testutils::ConnectFn;
     use libsignal_net_infra::route::{
-        DirectOrProxyRoute, HttpRouteFragment, HttpsTlsRoute, PreconnectingFactory, TcpRoute,
-        TlsRoute, TlsRouteFragment, UnresolvedHost, DEFAULT_HTTPS_PORT,
+        DEFAULT_HTTPS_PORT, DirectOrProxyRoute, HttpRouteFragment, HttpsTlsRoute,
+        PreconnectingFactory, TcpRoute, TlsRoute, TlsRouteFragment, UnresolvedHost,
     };
-    use libsignal_net_infra::testutil::no_network_change_events;
+    use libsignal_net_infra::utils::no_network_change_events;
     use libsignal_net_infra::ws::WebSocketConnectError;
-    use libsignal_net_infra::Alpn;
     use test_case::test_case;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -711,6 +735,7 @@ pub(crate) mod test {
             ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
+                post_request_interface_check_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
@@ -809,6 +834,7 @@ pub(crate) mod test {
             ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
+                post_request_interface_check_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
@@ -829,6 +855,7 @@ pub(crate) mod test {
             ws::Config {
                 // We shouldn't get to timing out anyway.
                 local_idle_timeout: Duration::ZERO,
+                post_request_interface_check_timeout: Duration::ZERO,
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },

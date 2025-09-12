@@ -12,6 +12,7 @@ use std::time::Duration;
 use atomic_take::AtomicTake;
 use bytes::Bytes;
 use futures_util::FutureExt as _;
+use futures_util::future::BoxFuture;
 use http::status::InvalidStatusCode;
 use http::uri::{InvalidUri, PathAndQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
@@ -35,8 +36,9 @@ use libsignal_net_chat::api::Unauth;
 use libsignal_protocol::Timestamp;
 use static_assertions::assert_impl_all;
 
-use crate::net::remote_config::RemoteConfigKeys;
 use crate::net::ConnectionManager;
+use crate::net::remote_config::RemoteConfigKey;
+use crate::support::LimitedLifetimeRef;
 use crate::*;
 
 pub type ChatConnectionInfo = ConnectionInfo;
@@ -97,6 +99,27 @@ impl UnauthenticatedChatConnection {
             )
             .into(),
         })
+    }
+
+    /// Provides access to the inner ChatConnection using the [`Unauth`] wrapper of
+    /// libsignal-net-chat.
+    ///
+    /// This callback signature unfortunately requires boxing; there is not yet Rust syntax to say
+    /// "I return an unknown Future that might capture from its arguments" in closure position
+    /// specifically. It's also extra complicated to promise that the result doesn't have to outlive
+    /// &self; unfortunately there doesn't seem to be a simpler way to express this at this time!
+    /// (e.g. `for<'inner where 'outer: 'inner>`)
+    pub async fn as_typed<'outer, F, R>(&'outer self, callback: F) -> R
+    where
+        F: for<'inner> FnOnce(
+            LimitedLifetimeRef<'outer, 'inner, Unauth<ChatConnection>>,
+        ) -> BoxFuture<'inner, R>,
+    {
+        let guard = self.as_ref().read().await;
+        let MaybeChatConnection::Running(inner) = &*guard else {
+            panic!("listener was not set")
+        };
+        callback(LimitedLifetimeRef::from(<&Unauth<_>>::from(inner))).await
     }
 }
 
@@ -161,7 +184,7 @@ impl AuthenticatedChatConnection {
 
 fn maybe_shadow<'a>(
     connection_manager: &'a ConnectionManager,
-    remote_config_key: RemoteConfigKeys,
+    remote_config_key: RemoteConfigKey,
     languages: &LanguageList,
 ) -> Option<NoiseDirectConnectShadow<'a>> {
     let ConnectionManager {
@@ -337,11 +360,11 @@ async fn establish_chat_connection(
         let (languages, remote_config) = match headers {
             chat::ChatHeaders::Auth(auth) => (
                 &auth.languages,
-                RemoteConfigKeys::ShadowAuthChatWithNoiseDirect,
+                RemoteConfigKey::ShadowAuthChatWithNoiseDirect,
             ),
             chat::ChatHeaders::Unauth(unauth) => (
                 &unauth.languages,
-                RemoteConfigKeys::ShadowUnauthChatWithNoiseDirect,
+                RemoteConfigKey::ShadowUnauthChatWithNoiseDirect,
             ),
         };
 
@@ -355,6 +378,7 @@ async fn establish_chat_connection(
         user_agent,
         endpoints,
         network_change_event_tx,
+        remote_config,
         ..
     } = connection_manager;
 
@@ -365,12 +389,6 @@ async fn establish_chat_connection(
             endpoints_guard.enforce_minimum_tls,
         )
     };
-
-    let libsignal_net::infra::ws::Config {
-        local_idle_timeout,
-        remote_idle_disconnect_timeout,
-        ..
-    } = env.chat_ws_config;
 
     let chat_connect = &env.chat_domain_config.connect;
     let connection_resources = ConnectionResources {
@@ -389,15 +407,31 @@ async fn establish_chat_connection(
 
     log::info!("connecting {auth_type} chat");
 
+    let mut chat_ws_config = env.chat_ws_config;
+    if let Some(timeout_millis) = remote_config
+        .lock()
+        .expect("unpoisoned")
+        .get(RemoteConfigKey::ChatRequestConnectionCheckTimeoutMilliseconds)
+        .as_option()
+        .and_then(|v| match u64::from_str(v) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log::error!(
+                    "bad {}: {v:?} ({e})",
+                    RemoteConfigKey::ChatRequestConnectionCheckTimeoutMilliseconds
+                );
+                None
+            }
+        })
+    {
+        chat_ws_config.post_request_interface_check_timeout = Duration::from_millis(timeout_millis);
+    }
+
     let connection = ChatConnection::start_connect_with(
         connection_resources,
         route_provider,
         user_agent,
-        libsignal_net::chat::ws::Config {
-            local_idle_timeout,
-            remote_idle_timeout: remote_idle_disconnect_timeout,
-            initial_request_id: 0,
-        },
+        chat_ws_config,
         headers,
         auth_type,
     )
@@ -417,7 +451,7 @@ async fn establish_chat_connection(
         tokio::spawn(async move {
             match connect.await {
                 Ok(stream) => {
-                    let ip_type = stream.transport_info().ip_version;
+                    let ip_type = stream.transport_info().ip_version();
                     log::info!(
                         "{auth_type} shadow: Noise Direct connection succeeded over IP{ip_type}"
                     );

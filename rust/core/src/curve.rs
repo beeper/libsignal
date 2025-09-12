@@ -9,7 +9,7 @@ mod utils;
 use std::cmp::Ordering;
 use std::fmt;
 
-use curve25519_dalek::scalar;
+use curve25519_dalek::{MontgomeryPoint, scalar};
 use rand::{CryptoRng, Rng};
 use subtle::ConstantTimeEq;
 
@@ -141,7 +141,7 @@ impl PublicKey {
 
     fn key_data(&self) -> &[u8] {
         match &self.key {
-            PublicKeyData::DjbPublicKey(ref k) => k.as_ref(),
+            PublicKeyData::DjbPublicKey(k) => k.as_ref(),
         }
     }
 
@@ -149,6 +149,33 @@ impl PublicKey {
         match &self.key {
             PublicKeyData::DjbPublicKey(_) => KeyType::Djb,
         }
+    }
+
+    fn is_torsion_free(&self) -> bool {
+        match &self.key {
+            PublicKeyData::DjbPublicKey(k) => {
+                let mont_point = MontgomeryPoint(*k);
+                mont_point
+                    .to_edwards(0)
+                    .is_some_and(|ed| ed.is_torsion_free())
+            }
+        }
+    }
+
+    fn scalar_is_in_range(&self) -> bool {
+        match &self.key {
+            PublicKeyData::DjbPublicKey(k) => {
+                // it is not true that the scalar is greater than 2^255 - 19
+                // specifically, it is not true that either the high bit is set
+                // or that the high 247 bits are all 1 and the bottom byte is >(2^8 - 19)
+                !(k[31] & 0b1000_0000_u8 != 0
+                    || (k[0] >= 0u8.wrapping_sub(19) && k[1..31] == [0xFFu8; 30] && k[31] == 0x7F))
+            }
+        }
+    }
+
+    pub fn is_canonical(&self) -> bool {
+        self.is_torsion_free() && self.scalar_is_in_range()
     }
 }
 
@@ -356,8 +383,10 @@ impl TryFrom<PrivateKey> for KeyPair {
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
-    use rand::rngs::OsRng;
+    use const_str::hex;
+    use curve25519_dalek::constants::EIGHT_TORSION;
     use rand::TryRngCore as _;
+    use rand::rngs::OsRng;
 
     use super::*;
 
@@ -377,8 +406,12 @@ mod tests {
         let public_key = key_pair.private_key.public_key()?;
         assert!(public_key.verify_signature(&message, &signature));
 
-        assert!(public_key
-            .verify_signature_for_multipart_message(&[&message[..7], &message[7..]], &signature));
+        assert!(
+            public_key.verify_signature_for_multipart_message(
+                &[&message[..7], &message[7..]],
+                &signature
+            )
+        );
 
         let signature = key_pair
             .private_key
@@ -428,5 +461,101 @@ mod tests {
         let error = CurveError::BadKeyType(u8::MAX);
         let error = Box::new(error) as Box<dyn std::error::Error>;
         assert_matches!(error.downcast_ref(), Some(CurveError::BadKeyType(_)));
+    }
+
+    #[test]
+    fn honest_keys_are_torsion_free() {
+        let mut csprng = OsRng.unwrap_err();
+        let key_pair = KeyPair::generate(&mut csprng);
+        assert!(key_pair.public_key.is_torsion_free());
+    }
+
+    #[test]
+    fn tweaked_keys_are_not_torsion_free() {
+        let mut csprng = OsRng.unwrap_err();
+        let key_pair = KeyPair::generate(&mut csprng);
+        let pk_bytes: [u8; 32] = key_pair.public_key.public_key_bytes().try_into().unwrap();
+        let mont_pt = MontgomeryPoint(pk_bytes);
+        let ed_pt = mont_pt.to_edwards(0).unwrap();
+        for t in EIGHT_TORSION.iter().skip(1) {
+            let tweaked = ed_pt + *t; // add a torsion point
+            let tweaked_mont = tweaked.to_montgomery();
+            let tweaked_pk_bytes: [u8; 32] = tweaked_mont.to_bytes();
+            let tweaked_pk = PublicKey::from_djb_public_key_bytes(&tweaked_pk_bytes).unwrap();
+            assert!(!tweaked_pk.is_torsion_free());
+        }
+    }
+
+    #[test]
+    fn keys_with_the_high_bit_set_are_out_of_range() {
+        assert!(
+            PublicKey::from_djb_public_key_bytes(&[0; 32])
+                .expect("structurally valid")
+                .scalar_is_in_range(),
+            "0 should be in range"
+        );
+        assert!(
+            !PublicKey::from_djb_public_key_bytes(&hex!(
+                "0000000000000000000000000000000000000000000000000000000000000080"
+            ))
+            .expect("structurally valid")
+            .scalar_is_in_range(),
+            "2^255 should be out of range"
+        );
+        assert!(
+            !PublicKey::from_djb_public_key_bytes(&[0xFF; 32])
+                .expect("structurally valid")
+                .scalar_is_in_range(),
+            "2^256 - 1 should be out of range"
+        );
+        {
+            let mut csprng = OsRng.unwrap_err();
+            let key_pair = KeyPair::generate(&mut csprng);
+            assert!(key_pair.public_key.scalar_is_in_range());
+            let mut pk_bytes: [u8; 32] = key_pair.public_key.public_key_bytes().try_into().unwrap();
+            assert!(pk_bytes[31] & 0x80 == 0);
+            pk_bytes[31] |= 0x80;
+            assert!(
+                !PublicKey::from_djb_public_key_bytes(&pk_bytes)
+                    .expect("structurally valid")
+                    .scalar_is_in_range(),
+                ">2^255 should be out of range"
+            );
+        }
+    }
+
+    #[test]
+    fn keys_above_the_prime_modulus_are_out_of_range() {
+        // Curve25519 scalars use a little-endian representation.
+        let two_to_the_255_minus_one =
+            hex!("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
+
+        for i in 1..=19 {
+            let mut pk_bytes = two_to_the_255_minus_one;
+            pk_bytes[0] -= i;
+            pk_bytes[0] += 1; // because our original literal was 2^255 - 1
+            assert!(
+                !PublicKey::from_djb_public_key_bytes(&pk_bytes)
+                    .expect("structurally valid")
+                    .scalar_is_in_range(),
+                "2^255 - {i} should be out of range",
+            );
+
+            let mut canonical_representative = [0; 32];
+            canonical_representative[0] = 19 - i;
+
+            assert_eq!(
+                MontgomeryPoint(pk_bytes),
+                MontgomeryPoint(canonical_representative)
+            );
+        }
+
+        let mut pk_bytes = two_to_the_255_minus_one;
+        pk_bytes[0] -= 19; // resulting in the value 2^255 - 20
+        assert!(
+            PublicKey::from_djb_public_key_bytes(&pk_bytes)
+                .expect("structurally valid")
+                .scalar_is_in_range()
+        );
     }
 }

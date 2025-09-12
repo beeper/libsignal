@@ -216,13 +216,13 @@ pub struct BackupPreviousSecretData(pub Vec<u8>);
 pub struct BackupPreviousSecretDataRef<'a>(pub &'a [u8]);
 
 impl BackupFileMetadata {
-    pub fn as_ref(&self) -> BackupFileMetadataRef {
+    pub fn as_ref(&self) -> BackupFileMetadataRef<'_> {
         BackupFileMetadataRef(&self.0)
     }
 }
 
 impl BackupPreviousSecretData {
-    pub fn as_ref(&self) -> BackupPreviousSecretDataRef {
+    pub fn as_ref(&self) -> BackupPreviousSecretDataRef<'_> {
         BackupPreviousSecretDataRef(&self.0)
     }
 }
@@ -485,7 +485,7 @@ pub async fn remove_backup<R: traits::Remove>(
 #[cfg(feature = "test-util")]
 pub mod test_support {
 
-    use libsignal_net_infra::testutil::no_network_change_events;
+    use libsignal_net_infra::utils::no_network_change_events;
 
     use crate::auth::Auth;
     use crate::enclave::PpssSetup;
@@ -655,13 +655,15 @@ mod test {
         )
         .await
         .expect("should store");
-        assert!(restore_backup(
-            &[svrb],
-            &backup_key,
-            BackupFileMetadataRef(&backup.metadata.0)
-        )
-        .await
-        .is_err());
+        assert!(
+            restore_backup(
+                &[svrb],
+                &backup_key,
+                BackupFileMetadataRef(&backup.metadata.0)
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[tokio::test]
@@ -851,13 +853,15 @@ mod test {
         )
         .await
         .expect("should store");
-        assert!(restore_backup(
-            &[svrb, fallback],
-            &backup_key,
-            BackupFileMetadataRef(&backup.metadata.0),
-        )
-        .await
-        .is_err());
+        assert!(
+            restore_backup(
+                &[svrb, fallback],
+                &backup_key,
+                BackupFileMetadataRef(&backup.metadata.0),
+            )
+            .await
+            .is_err()
+        );
     }
 
     static BACKUP_DELETES_PREVIOUS_ALL_CALLED: AtomicU8 = AtomicU8::new(0);

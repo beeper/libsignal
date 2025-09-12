@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use http::HeaderMap;
 use http::response::Parts;
 use http::uri::PathAndQuery;
-use http::HeaderMap;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::client::conn::http2;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -16,7 +16,7 @@ use static_assertions::assert_impl_all;
 
 use crate::errors::{LogSafeDisplay, TransportConnectError};
 use crate::route::{Connector, HttpRouteFragment, HttpsTlsRoute};
-use crate::{AsyncDuplexStream, Connection, TransportInfo};
+use crate::{AsyncDuplexStream, Connection};
 
 #[derive(displaydoc::Display, Debug)]
 pub enum HttpError {
@@ -97,7 +97,7 @@ impl AggregatingHttp2Client {
 
         let content = match content_length {
             Some(content_length) if content_length > self.max_response_size => {
-                return Err(HttpError::ResponseTooLarge)
+                return Err(HttpError::ResponseTooLarge);
             }
             Some(content_length) => Limited::new(body, content_length)
                 .collect()
@@ -170,8 +170,8 @@ where
         // Starting a thread to drive client connection events.
         // The task will complete once the connection is closed due to an error
         // or if all clients are dropped.
-        let TransportInfo { ip_version, .. } = info;
         let log_tag = log_tag.to_owned();
+        let ip_version = info.ip_version();
         tokio::spawn(async move {
             match connection.await {
                 Ok(_) => log::info!("[{log_tag}] HTTP2 connection [{ip_version}] closed"),
@@ -252,8 +252,8 @@ mod test {
         server.bind_ephemeral((Ipv6Addr::LOCALHOST, 0))
     }
 
-    fn outcome_record_for_testing(
-    ) -> tokio::sync::RwLock<ConnectionOutcomes<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>>> {
+    fn outcome_record_for_testing()
+    -> tokio::sync::RwLock<ConnectionOutcomes<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>>> {
         const MAX_DELAY: Duration = Duration::from_secs(100);
         const AGE_CUTOFF: Duration = Duration::from_secs(1000);
         const MAX_COUNT: u8 = 5;

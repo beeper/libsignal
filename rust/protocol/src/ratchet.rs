@@ -12,7 +12,7 @@ pub(crate) use self::keys::{ChainKey, MessageKeyGenerator, RootKey};
 pub use self::params::{AliceSignalProtocolParameters, BobSignalProtocolParameters, UsePQRatchet};
 use crate::protocol::CIPHERTEXT_MESSAGE_CURRENT_VERSION;
 use crate::state::SessionState;
-use crate::{consts, KeyPair, Result, SessionRecord, SignalProtocolError};
+use crate::{KeyPair, Result, SessionRecord, SignalProtocolError, consts};
 
 type InitialPQRKey = [u8; 32];
 
@@ -139,6 +139,14 @@ pub(crate) fn initialize_alice_session<R: Rng + CryptoRng>(
 pub(crate) fn initialize_bob_session(
     parameters: &BobSignalProtocolParameters,
 ) -> Result<SessionState> {
+    // validate their base key
+    if !parameters.their_base_key().is_canonical() {
+        return Err(SignalProtocolError::InvalidMessage(
+            crate::CiphertextMessageType::PreKey,
+            "incoming base key is invalid",
+        ));
+    }
+
     let local_identity = parameters.our_identity_key_pair().identity_key();
 
     let mut secrets = Vec::with_capacity(32 * 6);

@@ -735,10 +735,16 @@ bridge_get!(SenderCertificate::key -> PublicKey);
 #[bridge_fn]
 fn SenderCertificate_Validate(
     cert: &SenderCertificate,
-    key: &PublicKey,
+    trust_roots: &[&PublicKey],
     time: Timestamp,
-) -> Result<bool> {
-    cert.validate(key, time)
+) -> bool {
+    cert.validate_with_trust_roots(trust_roots, time)
+        .inspect_err(|e| {
+            // Not all of the apps bother to inspect an Err failure before just saying "validate
+            // failed", so we log it here to be sure it won't be lost.
+            log::warn!("unable to validate certificate: {e}");
+        })
+        .unwrap_or(false)
 }
 
 #[bridge_fn]

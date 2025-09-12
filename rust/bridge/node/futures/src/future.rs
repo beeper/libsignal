@@ -6,7 +6,7 @@
 use std::future::Future;
 use std::marker::PhantomData;
 use std::mem;
-use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Poll, Waker};
@@ -190,7 +190,7 @@ impl<T: 'static + Send> JsFuture<T> {
     /// The future will not be ready until it is given a result `transform`. See [JsFutureBuilder].
     ///
     /// [then]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/then
-    pub fn get_promise<F>(channel: &Channel, get_promise: F) -> JsFutureBuilder<F, T>
+    pub fn get_promise<F>(channel: &Channel, get_promise: F) -> JsFutureBuilder<'_, F, T>
     where
         F: for<'a> FnOnce(&mut TaskContext<'a>) -> JsResult<'a, JsObject> + Send + 'static,
     {

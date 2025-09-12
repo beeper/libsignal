@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::abort;
 
 use jni::objects::{AutoLocal, GlobalRef, JClass, JObject, JStaticMethodID, JValue};
@@ -160,7 +160,7 @@ fn set_max_level_from_java_level(max_level: jint) {
     log::set_max_level(log::Level::from(level).to_level_filter());
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn Java_org_signal_libsignal_internal_Native_Logger_1Initialize(
     env: JNIEnv,
     _class: JClass,
@@ -200,7 +200,7 @@ pub unsafe extern "C" fn Java_org_signal_libsignal_internal_Native_Logger_1Initi
     });
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn Java_org_signal_libsignal_internal_Native_Logger_1SetMaxLevel(
     _env: JNIEnv,
     _class: JClass,

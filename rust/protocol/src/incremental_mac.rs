@@ -4,8 +4,8 @@
 //
 
 use aes::cipher::Unsigned;
-use hmac::digest::generic_array::{ArrayLength, GenericArray};
 use hmac::Mac;
+use hmac::digest::generic_array::{ArrayLength, GenericArray};
 use sha2::digest::{FixedOutput, MacError, Output};
 
 #[derive(Clone)]
@@ -141,8 +141,8 @@ mod test {
     use proptest::prelude::*;
     use rand::distr::uniform::{UniformSampler as _, UniformUsize};
     use rand::prelude::{Rng, ThreadRng};
-    use sha2::digest::OutputSizeUser;
     use sha2::Sha256;
+    use sha2::digest::OutputSizeUser;
 
     use super::*;
     use crate::crypto::hmac_sha256;
@@ -433,11 +433,11 @@ mod test {
     }
 
     trait RandomChunksIterator<T> {
-        fn random_chunks(&self, max_size: usize) -> RandomChunks<T, ThreadRng>;
+        fn random_chunks(&self, max_size: usize) -> RandomChunks<'_, T, ThreadRng>;
     }
 
     impl<T> RandomChunksIterator<T> for [T] {
-        fn random_chunks(&self, max_size: usize) -> RandomChunks<T, ThreadRng> {
+        fn random_chunks(&self, max_size: usize) -> RandomChunks<'_, T, ThreadRng> {
             assert!(max_size > 0, "Maximal chunk size should be positive");
             RandomChunks {
                 base: self,

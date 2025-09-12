@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use std::borrow::Cow;
 use std::fmt;
 
 #[cfg(feature = "signal-media")]
@@ -486,7 +487,7 @@ impl SignalNodeError for libsignal_net::chat::ConnectError {
             Self::AppExpired => "AppExpired",
             Self::DeviceDeregistered => "DeviceDelinked",
             Self::RetryLater(retry_later) => {
-                return retry_later.into_throwable(cx, module, operation_name)
+                return retry_later.into_throwable(cx, module, operation_name);
             }
             Self::WebSocket(_)
             | Self::Timeout
@@ -625,7 +626,7 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
     ) -> Handle<'a, JsError> {
         let name = match self {
             Self::RateLimited(retry_later) => {
-                return retry_later.into_throwable(cx, module, operation_name)
+                return retry_later.into_throwable(cx, module, operation_name);
             }
             Self::AttestationError(e) => return e.into_throwable(cx, module, operation_name),
             Self::InvalidArgument { server_reason: _ } => None,
@@ -646,6 +647,56 @@ impl SignalNodeError for libsignal_net::cdsi::LookupError {
             operation_name,
             no_extra_properties,
         )
+    }
+}
+
+impl<E: SignalNodeError> SignalNodeError for libsignal_net_chat::api::RequestError<E> {
+    fn into_throwable<'a, C: Context<'a>>(
+        self,
+        cx: &mut C,
+        module: Handle<'a, JsObject>,
+        operation_name: &str,
+    ) -> Handle<'a, JsError> {
+        let io_error_message: Cow<'static, str> = match self {
+            Self::Other(inner) => return inner.into_throwable(cx, module, operation_name),
+            Self::Challenge(challenge) => {
+                return challenge.into_throwable(cx, module, operation_name);
+            }
+            Self::RetryLater(retry_later) => {
+                return retry_later.into_throwable(cx, module, operation_name);
+            }
+            Self::Disconnected(disconnected) => {
+                return disconnected.into_throwable(cx, module, operation_name);
+            }
+            Self::Timeout => {
+                return libsignal_net::chat::SendError::RequestTimedOut.into_throwable(
+                    cx,
+                    module,
+                    operation_name,
+                );
+            }
+            Self::Unexpected { log_safe } => log_safe.into(),
+            Self::ServerSideError => "server-side error".into(),
+        };
+        new_js_error(
+            cx,
+            module,
+            Some(IO_ERROR),
+            &io_error_message,
+            operation_name,
+            no_extra_properties,
+        )
+    }
+}
+
+impl SignalNodeError for std::convert::Infallible {
+    fn into_throwable<'a, C: Context<'a>>(
+        self,
+        _cx: &mut C,
+        _module: Handle<'a, JsObject>,
+        _operation_name: &str,
+    ) -> Handle<'a, JsError> {
+        match self {}
     }
 }
 
@@ -673,7 +724,7 @@ mod registration {
                         cx,
                         module,
                         operation_name,
-                    )
+                    );
                 }
                 e @ (RequestError::Unexpected { log_safe: _ } | RequestError::ServerSideError) => {
                     return new_js_error(
@@ -683,13 +734,13 @@ mod registration {
                         &e.to_string(),
                         operation_name,
                         no_extra_properties,
-                    )
+                    );
                 }
                 RequestError::RetryLater(retry_later) => {
-                    return retry_later.into_throwable(cx, module, operation_name)
+                    return retry_later.into_throwable(cx, module, operation_name);
                 }
                 RequestError::Challenge(challenge) => {
-                    return challenge.into_throwable(cx, module, operation_name)
+                    return challenge.into_throwable(cx, module, operation_name);
                 }
                 RequestError::Disconnected(d) => match d {},
             };
@@ -914,7 +965,7 @@ impl SignalNodeError for crate::keytrans::BridgeError {
         let message = self.to_string();
         let name = match self.into() {
             RequestError::Disconnected(inner) => {
-                return inner.into_throwable(cx, module, operation_name)
+                return inner.into_throwable(cx, module, operation_name);
             }
             RequestError::Timeout => IO_ERROR,
             RequestError::Other(libsignal_net_chat::api::keytrans::Error::VerificationFailed(
