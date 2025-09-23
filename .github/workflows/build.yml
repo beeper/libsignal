@@ -116,7 +116,7 @@ jobs:
 
     - name: build libsignal
       run: |
-        if [[ "${{matrix.target}}" = *"android"* ]]; then
+        if [[ "${{ matrix.target }}" = *"android"* ]]; then
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125
           export API_LEVEL=26
           export HOST_PREFIX=linux-x86_64
@@ -124,13 +124,16 @@ jobs:
           export CC_${{ matrix.android-env }}=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$HOST_PREFIX/bin/${{ matrix.android-prefix }}${API_LEVEL}-clang
           declare -u ANDROID_ENV_UPPER=${{ matrix.android-env }}
           export CARGO_TARGET_${ANDROID_ENV_UPPER}_LINKER=$CC_${{ matrix.android-env }}
+        fi
 
+        if [[ "${{ matrix.target }}" = *"ios"* -o "${{ matrix.target }}" = *"android"* ]]; then
           # TODO should these be enabled for all platforms? They're copied from the old android build
-          export CLFAGS="-DOPENSSL_SMALL -flto=full"
+          export CFLAGS="-DOPENSSL_SMALL -flto=full"
+          export CXXFLAGS="-DOPENSSL_SMALL -flto=full"
           export CARGO_PROFILE_RELEASE_LTO=fat
           export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
           export CARGO_PROFILE_RELEASE_DEBUG=1
-          export CARGO_PROFILE_RELEASE_OPT_LEVEL=1
+          export CARGO_PROFILE_RELEASE_OPT_LEVEL="z"
         fi
 
         if [ "${{ matrix.target }}" = "aarch64-pc-windows-gnullvm" ]; then
