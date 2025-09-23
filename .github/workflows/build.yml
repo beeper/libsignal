@@ -127,7 +127,7 @@ jobs:
         fi
 
         if [[ "${{ matrix.target }}" = *"ios"* -o "${{ matrix.target }}" = *"android"* ]]; then
-          # TODO should these be enabled for all platforms? They're copied from the old android build
+          # These might not work with GCC, so they're only enabled on Android/iOS which use clang/llvm
           export CFLAGS="-DOPENSSL_SMALL -flto=full"
           export CXXFLAGS="-DOPENSSL_SMALL -flto=full"
           export CARGO_PROFILE_RELEASE_LTO=fat
