@@ -3,16 +3,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-/* eslint-disable @typescript-eslint/require-await */
-
-import * as Minidump from '../Minidump';
+import * as Minidump from '../Minidump.js';
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { assert } from 'chai';
 
 const GOOD_DUMP = fs.readFileSync(
-  path.join(__dirname, '../../ts/test/minidump.dmp')
+  path.join(import.meta.dirname, '../../ts/test/minidump.dmp')
 );
 
 describe('Minidump', () => {

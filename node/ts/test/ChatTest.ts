@@ -8,21 +8,21 @@ import {
   Server,
   loadCertificates,
 } from '@signalapp/mock-server';
-import * as os from 'os';
+import * as os from 'node:os';
 import { config, expect, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
-import * as sinon from 'sinon';
-import * as sinonChai from 'sinon-chai';
-import * as util from './util';
+import chaiAsPromised from 'chai-as-promised';
+import sinon from 'sinon';
+import sinonChai from 'sinon-chai';
+import * as util from './util.js';
 import {
   ChatConnection,
   ChatServerMessageAck,
   ChatServiceListener,
   ConnectionEventsListener,
   Net,
-} from '../net';
-import { randomBytes } from 'crypto';
-import * as path from 'path';
+} from '../net.js';
+import { randomBytes } from 'node:crypto';
+import * as path from 'node:path';
 
 use(chaiAsPromised);
 use(sinonChai);
@@ -164,7 +164,7 @@ describe('chat connection to mock server', () => {
 
       await chat.disconnect();
       await onDisconnected;
-      expect(onDisconnected.resolvedValue).to.be.null;
+      expect(onDisconnected.resolvedValue).to.be.a('null');
     });
   });
 

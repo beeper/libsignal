@@ -22,7 +22,7 @@ repositories {
 }
 
 allprojects {
-    version = "0.80.3"
+    version = "0.82.0"
     group   = "org.signal"
 
     tasks.withType(JavaCompile) {
@@ -132,7 +132,7 @@ spotless {
         }.inject(files()) { collected, next ->
             collected + next.sources
         }
-        targetExclude('**/Native.kt', '**/NativeTesting.kt')
+        targetExclude('**/Native.kt', '**/NativeTesting.kt', '**/org/rustls/**')
         ktlint()
     }
     java {

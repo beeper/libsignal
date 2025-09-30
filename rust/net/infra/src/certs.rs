@@ -34,7 +34,7 @@ impl From<ErrorStack> for Error {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum RootCertificates {
     Native,
     FromStaticDers(&'static [&'static [u8]]),
@@ -46,9 +46,9 @@ impl RootCertificates {
     ///
     /// **Warning:** If `self` is [`RootCertificates::Native`], the resulting connector will
     /// **depend on tokio** to verify certificates (using rustls-platform-verifier, isolated to a
-    /// blocking task thread). Moreover, when using the resulting [`boring::ssl::Ssl`] object, you
-    /// must call `set_task_waker`. This will be taken care of for you if you use tokio-boring (and
-    /// always poll within a tokio context).
+    /// blocking task thread). Moreover, when using the resulting [`Ssl`](boring_signal::ssl::Ssl)
+    /// object, you must call `set_task_waker`. This will be taken care of for you if you use
+    /// tokio-boring (and always poll within a tokio context).
     pub fn apply_to_connector(
         &self,
         connector: &mut SslConnectorBuilder,
@@ -94,6 +94,19 @@ impl RootCertificates {
         }
         connector.set_verify_cert_store(store_builder.build())?;
         Ok(())
+    }
+}
+
+impl std::fmt::Debug for RootCertificates {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Native => write!(f, "Native"),
+            Self::FromStaticDers(ders) => f
+                .debug_tuple("FromStaticDers")
+                .field(&format_args!("<{} cert(s)>", ders.len()))
+                .finish(),
+            Self::FromDer(_) => f.debug_tuple("FromDer").field(&"_").finish(),
+        }
     }
 }
 

@@ -7,6 +7,7 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 
 use either::Either;
+use itertools::Itertools as _;
 use nonzero_ext::nonzero;
 
 use crate::Alpn;
@@ -89,13 +90,20 @@ pub enum DirectOrProxyRoute<D, P> {
     Proxy(P),
 }
 
+#[derive(Clone, Debug, strum::EnumDiscriminants)]
+pub enum DirectOrProxyMode {
+    DirectOnly,
+    ProxyOnly(ConnectionProxyConfig),
+    ProxyThenDirect(ConnectionProxyConfig),
+}
+
 /// [`RouteProvider`] implementation that returns [`DirectOrProxyRoute`]s.
 ///
 /// Constructs routes that either connect directly or through a proxy.
-#[derive(Clone, Debug, PartialEq)]
-pub enum DirectOrProxyProvider<D, P> {
-    Direct(D),
-    Proxy(P),
+#[derive(Clone, Debug)]
+pub struct DirectOrProxyProvider<D> {
+    pub inner: D,
+    pub mode: DirectOrProxyMode,
 }
 
 #[derive(Debug, Clone)]
@@ -207,7 +215,7 @@ impl ConnectionProxyConfig {
                 proxy_port: port.unwrap_or(nonzero!(80u16)),
                 proxy_tls: None,
                 proxy_authorization: auth,
-                resolve_hostname_locally: true,
+                resolve_hostname_locally: false,
             }
             .into(),
             "https" => HttpProxy {
@@ -215,7 +223,7 @@ impl ConnectionProxyConfig {
                 proxy_port: port.unwrap_or(nonzero!(443u16)),
                 proxy_tls: Some(CERTS_FOR_ARBITRARY_PROXY),
                 proxy_authorization: auth,
-                resolve_hostname_locally: true,
+                resolve_hostname_locally: false,
             }
             .into(),
             "socks4" | "socks4a" => {
@@ -248,48 +256,44 @@ impl ConnectionProxyConfig {
 
         Ok(proxy)
     }
-}
 
-pub struct ConnectionProxyRouteProvider<P> {
-    pub(crate) proxy: ConnectionProxyConfig,
-    pub(crate) inner: P,
-}
-
-impl<D> DirectOrProxyProvider<D, ConnectionProxyRouteProvider<D>> {
-    /// Convenience constructor for a provider that creates proxied routes if a
-    /// config is provided.
-    ///
-    /// Returns `Self::Direct(direct)` if no proxy config is given, otherwise
-    /// `Self::Proxy` with a `ConnectionProxyRouteProvider` wrapped around
-    /// `direct`.
-    pub fn maybe_proxied(direct: D, proxy_config: Option<ConnectionProxyConfig>) -> Self {
-        match proxy_config {
-            Some(proxy) => Self::Proxy(ConnectionProxyRouteProvider::new(proxy, direct)),
-            None => Self::Direct(direct),
+    pub fn is_signal_transparent_proxy(&self) -> bool {
+        match self {
+            Self::Tls(_) => true,
+            #[cfg(feature = "dev-util")]
+            Self::Tcp(_) => true,
+            Self::Socks(_) | Self::Http(_) => false,
         }
     }
 }
 
-impl<P> ConnectionProxyRouteProvider<P> {
-    pub fn new(proxy: ConnectionProxyConfig, inner: P) -> Self {
-        Self { proxy, inner }
+impl<D> DirectOrProxyProvider<D> {
+    /// Convenience constructor for direct connections.
+    pub fn direct(inner: D) -> Self {
+        Self {
+            inner,
+            mode: DirectOrProxyMode::DirectOnly,
+        }
     }
 }
 
 type DirectOrProxyReplacement =
     DirectOrProxyRoute<TcpRoute<UnresolvedHost>, ConnectionProxyRoute<Host<UnresolvedHost>>>;
 
-impl<D, P, R> RouteProvider for DirectOrProxyProvider<D, P>
+impl<D, R: 'static> RouteProvider for DirectOrProxyProvider<D>
 where
     D: RouteProvider<
-        Route: ReplaceFragment<TcpRoute<UnresolvedHost>, Replacement<DirectOrProxyReplacement> = R>,
-    >,
-    P: RouteProvider<
         Route: ReplaceFragment<
+            TcpRoute<UnresolvedHost>,
+            Replacement<DirectOrProxyReplacement> = R,
+        > + Clone,
+    >,
+    <D::Route as ReplaceFragment<TcpRoute<UnresolvedHost>>>::Replacement<
+        ConnectionProxyRoute<Host<UnresolvedHost>>,
+    >: ReplaceFragment<
             ConnectionProxyRoute<Host<UnresolvedHost>>,
             Replacement<DirectOrProxyReplacement> = R,
         >,
-    >,
 {
     type Route = R;
 
@@ -297,36 +301,34 @@ where
         &'s self,
         context: &impl RouteProviderContext,
     ) -> impl Iterator<Item = Self::Route> + 's {
-        match self {
-            Self::Direct(direct) => Either::Left(
-                direct
-                    .routes(context)
-                    .map(|route: D::Route| route.replace(DirectOrProxyRoute::Direct)),
-            ),
-            Self::Proxy(proxy) => Either::Right(proxy.routes(context).map(|route: P::Route| {
-                route.replace(|cpr: ConnectionProxyRoute<Host<UnresolvedHost>>| {
-                    DirectOrProxyRoute::Proxy(cpr)
-                })
-            })),
+        let Self { inner, mode } = self;
+        let original_routes = inner.routes(context);
+        match mode {
+            DirectOrProxyMode::DirectOnly => {
+                Either::Left(original_routes.map(|r| r.replace(DirectOrProxyRoute::Direct)))
+            }
+            DirectOrProxyMode::ProxyOnly(proxy) => {
+                let replacer = proxy.as_replacer();
+                let replacer = move |r: D::Route| replacer(r).replace(DirectOrProxyRoute::Proxy);
+                Either::Right(Either::Left(original_routes.map(replacer)))
+            }
+            DirectOrProxyMode::ProxyThenDirect(proxy) => {
+                let original_routes = original_routes.collect_vec();
+                let direct_routes = original_routes
+                    .iter()
+                    .cloned()
+                    .map(|r| r.replace(DirectOrProxyRoute::Direct))
+                    .collect_vec();
+                let replacer = proxy.as_replacer();
+                let replacer = move |r: D::Route| replacer(r).replace(DirectOrProxyRoute::Proxy);
+                Either::Right(Either::Right(
+                    original_routes
+                        .into_iter()
+                        .map(replacer)
+                        .chain(direct_routes),
+                ))
+            }
         }
-    }
-}
-
-impl<P> RouteProvider for ConnectionProxyRouteProvider<P>
-where
-    P: RouteProvider<Route: ReplaceFragment<TcpRoute<UnresolvedHost>>>,
-{
-    type Route = <P::Route as ReplaceFragment<TcpRoute<UnresolvedHost>>>::Replacement<
-        ConnectionProxyRoute<Host<UnresolvedHost>>,
-    >;
-
-    fn routes<'s>(
-        &'s self,
-        context: &impl RouteProviderContext,
-    ) -> impl Iterator<Item = Self::Route> + 's {
-        let Self { proxy, inner } = self;
-        let replacer = proxy.as_replacer();
-        inner.routes(context).map(replacer)
     }
 }
 
@@ -638,9 +640,13 @@ mod test {
                 .as_ref()
                 .map(|auth| (auth.username.as_str(), auth.password.as_str())),
         );
+
+        // Deferring hostname resolution to the proxy is in line with the published recommendations for
+        //   proxy configuration at:
+        // https://support.signal.org/hc/en-us/articles/360007320291-Firewall-and-Internet-settings
         assert!(
-            resolve_hostname_locally,
-            "this endpoint never produces a config that defers to the proxy"
+            !resolve_hostname_locally,
+            "we should always defer to the proxy for DNS resolution"
         );
     }
 

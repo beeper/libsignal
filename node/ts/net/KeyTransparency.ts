@@ -3,19 +3,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import * as Native from '../../Native';
-import { Aci } from '../Address';
-import { PublicKey } from '../EcKeys';
-import { Environment, type TokioAsyncContext } from '../net';
+import Native from '../../Native.js';
+import { Aci } from '../Address.js';
+import { PublicKey } from '../EcKeys.js';
+import { Environment, type TokioAsyncContext } from '../net.js';
 
 // For JSDoc references
-import { type UnauthenticatedChatConnection } from './Chat';
+import { type UnauthenticatedChatConnection } from './Chat.js';
 import {
   type KeyTransparencyError,
   type KeyTransparencyVerificationFailed,
   type ChatServiceInactive,
   type IoError,
-} from '../Errors';
+} from '../Errors.js';
 
 /**
  * Interface of a local persistent key transparency data store.
@@ -24,13 +24,13 @@ import {
  * used by the {@link Client}.
  */
 export interface Store {
-  getLastDistinguishedTreeHead(): Promise<Uint8Array | null>;
-  setLastDistinguishedTreeHead(
+  getLastDistinguishedTreeHead: () => Promise<Uint8Array | null>;
+  setLastDistinguishedTreeHead: (
     bytes: Readonly<Uint8Array> | null
-  ): Promise<void>;
+  ) => Promise<void>;
 
-  getAccountData(aci: Aci): Promise<Uint8Array | null>;
-  setAccountData(aci: Aci, bytes: Readonly<Uint8Array>): Promise<void>;
+  getAccountData: (aci: Aci) => Promise<Uint8Array | null>;
+  setAccountData: (aci: Aci, bytes: Readonly<Uint8Array>) => Promise<void>;
 }
 
 /**
@@ -146,11 +146,11 @@ export interface Client {
    * @throws {IoError} if an error occurred while communicating with the
    * server.
    * */
-  search(
+  search: (
     request: Request,
     store: Store,
     options?: Readonly<Options>
-  ): Promise<void>;
+  ) => Promise<void>;
 
   /**
    * Perform a monitor operation for an account previously searched for.
@@ -182,11 +182,11 @@ export interface Client {
    * @throws {IoError} if an error occurred while communicating with the
    * server.
    */
-  monitor(
+  monitor: (
     request: MonitorRequest,
     store: Store,
     options?: Readonly<Options>
-  ): Promise<void>;
+  ) => Promise<void>;
 }
 
 export class ClientImpl implements Client {

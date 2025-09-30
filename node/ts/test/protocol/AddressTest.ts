@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-/* eslint-disable @typescript-eslint/require-await */
-
-import * as SignalClient from '../../index';
-import * as util from '../util';
+import * as SignalClient from '../../index.js';
+import * as util from '../util.js';
 
 import { assert, use } from 'chai';
-import * as chaiAsPromised from 'chai-as-promised';
+import chaiAsPromised from 'chai-as-promised';
 import * as uuid from 'uuid';
 
 use(chaiAsPromised);

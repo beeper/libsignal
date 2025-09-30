@@ -4,10 +4,10 @@
 //
 
 import { assert } from 'chai';
-import { Environment, Net, SvrB } from '../net';
-import { BackupKey, BackupForwardSecrecyToken } from '../AccountKeys';
-import { Aci } from '../Address';
-import * as Native from '../../Native';
+import { Environment, Net, SvrB } from '../net.js';
+import { BackupKey, BackupForwardSecrecyToken } from '../AccountKeys.js';
+import { Aci } from '../Address.js';
+import Native from '../../Native.js';
 
 describe('SecureValueRecoveryBackup', () => {
   const testAci = Aci.parseFromServiceIdString(
@@ -66,6 +66,7 @@ describe('SecureValueRecoveryBackup', () => {
     it('returns a promise', () => {
       const result = svrB.restore(testBackupKey, new Uint8Array());
       assert.instanceOf(result, Promise);
+      // eslint-disable-next-line promise/prefer-await-to-then
       result.catch(() => {});
     });
 
@@ -75,6 +76,7 @@ describe('SecureValueRecoveryBackup', () => {
         abortSignal: abortController.signal,
       });
       assert.instanceOf(result, Promise);
+      // eslint-disable-next-line promise/prefer-await-to-then
       result.catch(() => {});
     });
   });

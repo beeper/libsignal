@@ -5,8 +5,8 @@
 
 /* eslint-disable @typescript-eslint/require-await */
 
-import * as SignalClient from '../../index';
-import * as util from '../util';
+import * as SignalClient from '../../index.js';
+import * as util from '../util.js';
 
 util.initLogger();
 
@@ -37,7 +37,7 @@ export class InMemorySessionStore extends SignalClient.SessionStore {
       const idx = `${address.name()}::${address.deviceId()}`;
       const serialized = this.state.get(idx);
       if (!serialized) {
-        throw `no session for ${idx}`;
+        throw new Error(`no session for ${idx}`);
       }
       return SignalClient.SessionRecord.deserialize(serialized);
     });
@@ -137,6 +137,7 @@ export class InMemorySignedPreKeyStore extends SignalClient.SignedPreKeyStore {
 export class InMemoryKyberPreKeyStore extends SignalClient.KyberPreKeyStore {
   private state = new Map<number, Uint8Array>();
   private used = new Set<number>();
+  private baseKeysSeen = new Map<bigint, SignalClient.PublicKey[]>();
   async saveKyberPreKey(
     id: number,
     record: SignalClient.KyberPreKeyRecord
@@ -150,8 +151,21 @@ export class InMemoryKyberPreKeyStore extends SignalClient.KyberPreKeyStore {
     }
     return SignalClient.KyberPreKeyRecord.deserialize(record);
   }
-  async markKyberPreKeyUsed(id: number): Promise<void> {
+  async markKyberPreKeyUsed(
+    id: number,
+    signedPreKeyId: number,
+    baseKey: SignalClient.PublicKey
+  ): Promise<void> {
     this.used.add(id);
+    const bothKeyIds = (BigInt(id) << 32n) | BigInt(signedPreKeyId);
+    const baseKeysSeen = this.baseKeysSeen.get(bothKeyIds);
+    if (!baseKeysSeen) {
+      this.baseKeysSeen.set(bothKeyIds, [baseKey]);
+    } else if (baseKeysSeen.every((key) => key.compare(baseKey) != 0)) {
+      baseKeysSeen.push(baseKey);
+    } else {
+      throw new Error('reused base key');
+    }
   }
   async hasKyberPreKeyBeenUsed(id: number): Promise<boolean> {
     return this.used.has(id);

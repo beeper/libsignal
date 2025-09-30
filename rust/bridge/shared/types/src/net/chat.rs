@@ -18,20 +18,20 @@ use http::uri::{InvalidUri, PathAndQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use libsignal_net::auth::Auth;
 use libsignal_net::chat::fake::FakeChatRemote;
-use libsignal_net::chat::noise::NoiseDirectConnectShadow;
 use libsignal_net::chat::server_requests::DisconnectCause;
 use libsignal_net::chat::ws::ListenerEvent;
 use libsignal_net::chat::{
     self, ChatConnection, ConnectError, ConnectionInfo, DebugInfo as ChatServiceDebugInfo,
-    LanguageList, Request, Response as ChatResponse, SendError, UnauthenticatedChatHeaders,
+    EnablePermessageDeflate, LanguageList, Request, Response as ChatResponse, SendError,
+    UnauthenticatedChatHeaders,
 };
 use libsignal_net::connect_state::ConnectionResources;
 use libsignal_net::infra::route::{
-    ConnectionProxyConfig, DirectOrProxyProvider, RouteProvider, RouteProviderExt,
-    UnresolvedHttpsServiceRoute,
+    DirectOrProxyMode, DirectOrProxyModeDiscriminants, DirectOrProxyProvider, RouteProvider,
+    RouteProviderExt, TcpRoute, TlsRoute, UnresolvedHttpsServiceRoute,
 };
 use libsignal_net::infra::tcp_ssl::InvalidProxyConfig;
-use libsignal_net::infra::{Connection as _, EnableDomainFronting, EnforceMinimumTls};
+use libsignal_net::infra::{EnableDomainFronting, EnforceMinimumTls};
 use libsignal_net_chat::api::Unauth;
 use libsignal_protocol::Timestamp;
 use static_assertions::assert_impl_all;
@@ -143,7 +143,6 @@ impl AuthenticatedChatConnection {
             ),
         )
         .await?;
-
         Ok(Self {
             inner: MaybeChatConnection::WaitingForListener(
                 tokio::runtime::Handle::current(),
@@ -180,39 +179,6 @@ impl AuthenticatedChatConnection {
             .await?;
         Ok(())
     }
-}
-
-fn maybe_shadow<'a>(
-    connection_manager: &'a ConnectionManager,
-    remote_config_key: RemoteConfigKey,
-    languages: &LanguageList,
-) -> Option<NoiseDirectConnectShadow<'a>> {
-    let ConnectionManager {
-        user_agent,
-        env,
-        remote_config,
-        connect,
-        dns_resolver,
-        ..
-    } = connection_manager;
-
-    let noise_config = env.chat_noise_config.as_ref()?.connect;
-
-    if !remote_config
-        .lock()
-        .expect("not poisoned")
-        .is_enabled(remote_config_key)
-    {
-        return None;
-    }
-
-    Some(NoiseDirectConnectShadow {
-        route_resolver: connect.lock().expect("not poisoned").route_resolver.clone(),
-        dns_resolver: dns_resolver.clone(),
-        noise_config,
-        language_list: languages.clone(),
-        user_agent,
-    })
 }
 
 impl AsRef<tokio::sync::RwLock<MaybeChatConnection>> for AuthenticatedChatConnection {
@@ -356,21 +322,6 @@ async fn establish_chat_connection(
     connection_manager: &ConnectionManager,
     headers: Option<chat::ChatHeaders>,
 ) -> Result<chat::PendingChatConnection, ConnectError> {
-    let noise_shadow = headers.as_ref().and_then(|headers| {
-        let (languages, remote_config) = match headers {
-            chat::ChatHeaders::Auth(auth) => (
-                &auth.languages,
-                RemoteConfigKey::ShadowAuthChatWithNoiseDirect,
-            ),
-            chat::ChatHeaders::Unauth(unauth) => (
-                &unauth.languages,
-                RemoteConfigKey::ShadowUnauthChatWithNoiseDirect,
-            ),
-        };
-
-        maybe_shadow(connection_manager, remote_config, languages)
-    });
-
     let ConnectionManager {
         env,
         dns_resolver,
@@ -404,14 +355,19 @@ async fn establish_chat_connection(
         enable_domain_fronting,
         enforce_minimum_tls,
     )?;
+    let proxy_mode = DirectOrProxyModeDiscriminants::from(&route_provider.mode);
 
     log::info!("connecting {auth_type} chat");
 
     let mut chat_ws_config = env.chat_ws_config;
-    if let Some(timeout_millis) = remote_config
-        .lock()
-        .expect("unpoisoned")
-        .get(RemoteConfigKey::ChatRequestConnectionCheckTimeoutMilliseconds)
+    let (timeout_millis, enable_permessage_deflate) = {
+        let guard = remote_config.lock().expect("unpoisoned");
+        (
+            guard.get(RemoteConfigKey::ChatRequestConnectionCheckTimeoutMilliseconds),
+            guard.is_enabled(RemoteConfigKey::EnableChatPermessageDeflate),
+        )
+    };
+    if let Some(timeout_millis) = timeout_millis
         .as_option()
         .and_then(|v| match u64::from_str(v) {
             Ok(v) => Some(v),
@@ -427,66 +383,77 @@ async fn establish_chat_connection(
         chat_ws_config.post_request_interface_check_timeout = Duration::from_millis(timeout_millis);
     }
 
-    let connection = ChatConnection::start_connect_with(
+    let enable_permessage_deflate = match enable_permessage_deflate {
+        true => EnablePermessageDeflate::Yes,
+        false => EnablePermessageDeflate::No,
+    };
+    ChatConnection::start_connect_with(
         connection_resources,
         route_provider,
         user_agent,
         chat_ws_config,
+        enable_permessage_deflate,
         headers,
         auth_type,
     )
     .inspect(|r| match r {
-        Ok(_) => log::info!("successfully connected {auth_type} chat"),
+        Ok(connection) => {
+            match (
+                connection.connection_info().route_info.unresolved.proxy,
+                proxy_mode,
+            ) {
+                (None, DirectOrProxyModeDiscriminants::DirectOnly)
+                | (Some(_), DirectOrProxyModeDiscriminants::ProxyOnly)
+                | (Some(_), DirectOrProxyModeDiscriminants::ProxyThenDirect) => {
+                    log::info!("successfully connected {auth_type} chat")
+                }
+                (None, DirectOrProxyModeDiscriminants::ProxyThenDirect) => log::warn!(
+                    "connected {auth_type} chat using a direct connection rather than the specified proxy"
+                ),
+                (None, DirectOrProxyModeDiscriminants::ProxyOnly) => unreachable!(
+                    "made a direct connection despite using only proxy routes; this is a bug in libsignal"
+                ),
+                (Some(_), DirectOrProxyModeDiscriminants::DirectOnly) => unreachable!(
+                    "made a proxy connection despite not having proxy config; this is a bug in libsignal"
+                ),
+            }
+        }
         Err(e) => log::warn!("failed to connect {auth_type} chat: {e}"),
     })
-    .await?;
-
-    let real_connection_info = connection.connection_info().route_info;
-    let real_connection_was_direct =
-        real_connection_info.proxy().is_none() && real_connection_info.domain_front().is_none();
-
-    if let Some(noise_shadow) = real_connection_was_direct.then_some(noise_shadow).flatten() {
-        log::info!("shadowing {auth_type} chat with Noise Direct");
-        let connect = noise_shadow.connect();
-        tokio::spawn(async move {
-            match connect.await {
-                Ok(stream) => {
-                    let ip_type = stream.transport_info().ip_version();
-                    log::info!(
-                        "{auth_type} shadow: Noise Direct connection succeeded over IP{ip_type}"
-                    );
-                    drop(stream);
-                }
-                Err(e) => log::info!("{auth_type} shadow: Noise Direct connection failed: {e}"),
-            }
-        });
-    }
-
-    Ok(connection)
+    .await
 }
 
 fn make_route_provider(
     connection_manager: &ConnectionManager,
     enable_domain_fronting: EnableDomainFronting,
     enforce_minimum_tls: EnforceMinimumTls,
-) -> Result<impl RouteProvider<Route = UnresolvedHttpsServiceRoute>, ConnectError> {
+) -> Result<
+    DirectOrProxyProvider<
+        impl RouteProvider<
+            Route = UnresolvedHttpsServiceRoute<
+                TlsRoute<TcpRoute<libsignal_net::infra::route::UnresolvedHost>>,
+            >,
+        >,
+    >,
+    ConnectError,
+> {
     let ConnectionManager {
         env,
         transport_connector,
         ..
     } = connection_manager;
 
-    let proxy_config: Option<ConnectionProxyConfig> =
-        (&*transport_connector.lock().expect("not poisoned"))
-            .try_into()
-            .map_err(|InvalidProxyConfig| ConnectError::InvalidConnectionConfiguration)?;
+    let proxy_mode: DirectOrProxyMode = (&*transport_connector.lock().expect("not poisoned"))
+        .try_into()
+        .map_err(|InvalidProxyConfig| ConnectError::InvalidConnectionConfiguration)?;
 
     let chat_connect = &env.chat_domain_config.connect;
 
-    Ok(DirectOrProxyProvider::maybe_proxied(
-        chat_connect.route_provider_with_options(enable_domain_fronting, enforce_minimum_tls),
-        proxy_config,
-    ))
+    Ok(DirectOrProxyProvider {
+        inner: chat_connect
+            .route_provider_with_options(enable_domain_fronting, enforce_minimum_tls),
+        mode: proxy_mode,
+    })
 }
 
 pub struct HttpRequest {

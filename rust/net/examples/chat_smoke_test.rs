@@ -10,9 +10,12 @@ use std::process::ExitCode;
 use clap::{Parser, ValueEnum};
 use futures_util::{FutureExt, StreamExt};
 use libsignal_net::chat::ConnectError;
+use libsignal_net::connect_state::infer_proxy_mode_for_config;
 use libsignal_net_infra::EnableDomainFronting;
 use libsignal_net_infra::host::Host;
-use libsignal_net_infra::route::{ConnectionProxyConfig, SIGNAL_TLS_PROXY_SCHEME};
+use libsignal_net_infra::route::{
+    ConnectionProxyConfig, DirectOrProxyMode, SIGNAL_TLS_PROXY_SCHEME,
+};
 use strum::IntoEnumIterator as _;
 use url::Url;
 
@@ -25,6 +28,8 @@ struct Config {
     try_all_routes: bool,
     #[arg(long)]
     proxy_url: Option<String>,
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, strum::EnumString, strum::EnumIter)]
@@ -54,6 +59,7 @@ async fn main() -> ExitCode {
         limit_to_routes,
         try_all_routes,
         proxy_url,
+        dry_run,
     } = Config::parse();
     let env = match env {
         Environment::Staging => libsignal_net::env::STAGING,
@@ -122,6 +128,7 @@ async fn main() -> ExitCode {
                     HashSet::from([sni]),
                     EnableDomainFronting::AllDomains,
                     proxy.clone(),
+                    dry_run,
                 )
                 .map(|result| match result {
                     Ok(()) => true,
@@ -139,7 +146,15 @@ async fn main() -> ExitCode {
         } else {
             EnableDomainFronting::OneDomainPerProxy
         };
-        match test_connection(&env, snis.copied().collect(), domain_fronting, proxy).await {
+        match test_connection(
+            &env,
+            snis.copied().collect(),
+            domain_fronting,
+            proxy,
+            dry_run,
+        )
+        .await
+        {
             Ok(()) => true,
             Err(e) => {
                 log::error!("failed to connect: {e}");
@@ -160,20 +175,32 @@ async fn test_connection(
     snis: HashSet<&str>,
     domain_fronting: EnableDomainFronting,
     proxy: Option<ConnectionProxyConfig>,
+    dry_run: bool,
 ) -> Result<(), ConnectError> {
     use libsignal_net::chat::test_support::simple_chat_connection;
-    let chat_connection =
-        simple_chat_connection(env, domain_fronting, proxy, |route| {
-            match &route.inner.fragment.sni {
-                Host::Domain(domain) => snis.contains(&domain[..]),
-                Host::Ip(_) => panic!("unexpected IP address as a chat SNI"),
+    let proxy_mode = proxy.map_or(DirectOrProxyMode::DirectOnly, infer_proxy_mode_for_config);
+    let chat_connection = simple_chat_connection(env, domain_fronting, proxy_mode, |route| {
+        match &route.inner.fragment.sni {
+            Host::Domain(domain) => {
+                if !snis.contains(&domain[..]) {
+                    return false;
+                }
             }
-        })
-        .await?;
+            Host::Ip(_) => panic!("unexpected IP address as a chat SNI"),
+        }
+        log::debug!("{route:#?}");
+        !dry_run
+    })
+    .await;
 
-    // Disconnect immediately to confirm connection and disconnection works.
-    chat_connection.disconnect().await;
-
-    log::info!("completed successfully");
-    Ok(())
+    match chat_connection {
+        Ok(connection) => {
+            // Disconnect immediately to confirm connection and disconnection works.
+            connection.disconnect().await;
+            log::info!("completed successfully");
+            Ok(())
+        }
+        Err(ConnectError::AllAttemptsFailed) if dry_run => Ok(()),
+        Err(e) => Err(e),
+    }
 }

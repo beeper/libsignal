@@ -23,6 +23,7 @@ use libsignal_net_infra::{
     AsHttpHeader, AsStaticHttpHeader, Connection, IpType, RECOMMENDED_WS_CONFIG, TransportInfo,
 };
 use tokio_tungstenite::WebSocketStream;
+use tungstenite::protocol::WebSocketConfig;
 
 use crate::auth::Auth;
 use crate::connect_state::{
@@ -222,6 +223,11 @@ impl ChatHeaders {
     }
 }
 
+pub enum EnablePermessageDeflate {
+    No,
+    Yes,
+}
+
 pub type ChatServiceRoute = UnresolvedWebsocketServiceRoute;
 
 impl ChatConnection {
@@ -230,6 +236,7 @@ impl ChatConnection {
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
         user_agent: &UserAgent,
         ws_config: self::ws::Config,
+        enable_permessage_deflate: EnablePermessageDeflate,
         headers: Option<ChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection, ConnectError>
@@ -244,6 +251,7 @@ impl ChatConnection {
             http_route_provider,
             user_agent,
             ws_config,
+            enable_permessage_deflate,
             headers,
             log_tag,
         )
@@ -256,6 +264,7 @@ impl ChatConnection {
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
         user_agent: &UserAgent,
         ws_config: self::ws::Config,
+        enable_permessage_deflate: EnablePermessageDeflate,
         headers: Option<ChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection<TC::Connection>, ConnectError>
@@ -269,8 +278,13 @@ impl ChatConnection {
             .into_iter()
             .flat_map(ChatHeaders::iter_headers)
             .chain([user_agent.as_header()]);
+        let mut ws_stream_config = WebSocketConfig::default();
+        ws_stream_config.extensions.permessage_deflate = match enable_permessage_deflate {
+            EnablePermessageDeflate::Yes => Some(Default::default()),
+            EnablePermessageDeflate::No => None,
+        };
         let ws_fragment = WebSocketRouteFragment {
-            ws_config: Default::default(),
+            ws_config: ws_stream_config,
             endpoint: PathAndQuery::from_static(crate::env::constants::WEB_SOCKET_PATH),
             headers: HeaderMap::from_iter(headers),
         };
@@ -307,6 +321,10 @@ impl ChatConnection {
             stream,
             response_headers,
         } = connection.into_inner();
+
+        if stream.get_config().extensions.permessage_deflate.is_some() {
+            log::info!("[{log_tag}] had permessage-deflate negotiation enabled")
+        }
 
         Ok(PendingChatConnection {
             connection: stream,
@@ -410,7 +428,7 @@ pub mod test_support {
 
     use libsignal_net_infra::EnableDomainFronting;
     use libsignal_net_infra::dns::DnsResolver;
-    use libsignal_net_infra::route::ConnectionProxyConfig;
+    use libsignal_net_infra::route::DirectOrProxyMode;
     use libsignal_net_infra::utils::no_network_change_events;
 
     use super::*;
@@ -424,7 +442,7 @@ pub mod test_support {
     pub async fn simple_chat_connection(
         env: &Env<'static>,
         enable_domain_fronting: EnableDomainFronting,
-        proxy: Option<ConnectionProxyConfig>,
+        proxy_mode: DirectOrProxyMode,
         filter_routes: impl Fn(&UnresolvedHttpsServiceRoute) -> bool,
     ) -> Result<ChatConnection, ConnectError> {
         let dns_resolver = DnsResolver::new_with_static_fallback(
@@ -432,12 +450,13 @@ pub mod test_support {
             &no_network_change_events(),
         );
 
-        let route_provider = DirectOrProxyProvider::maybe_proxied(
-            env.chat_domain_config
+        let route_provider = DirectOrProxyProvider {
+            inner: env
+                .chat_domain_config
                 .connect
                 .route_provider(enable_domain_fronting),
-            proxy,
-        )
+            mode: proxy_mode,
+        }
         .filter_routes(filter_routes);
 
         let connect = ConnectState::new_with_transport_connector(
@@ -469,6 +488,7 @@ pub mod test_support {
             route_provider,
             &user_agent,
             ws_config,
+            EnablePermessageDeflate::No,
             None,
             "test",
         )
@@ -739,6 +759,7 @@ pub(crate) mod test {
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
+            EnablePermessageDeflate::No,
             None,
             "fake chat",
         )
@@ -838,6 +859,7 @@ pub(crate) mod test {
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
+            EnablePermessageDeflate::No,
             Some(auth_headers.clone().into()),
             "fake chat",
         )
@@ -859,6 +881,7 @@ pub(crate) mod test {
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
+            EnablePermessageDeflate::No,
             Some(auth_headers.into()),
             "fake chat",
         )

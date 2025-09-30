@@ -5,24 +5,24 @@
 
 import * as uuid from 'uuid';
 
-import * as Errors from './Errors';
-export * from './Errors';
+import * as Errors from './Errors.js';
+export * from './Errors.js';
 
-import { Aci, ProtocolAddress, ServiceId } from './Address';
-export * from './Address';
-import { PrivateKey, PublicKey } from './EcKeys';
-export * from './EcKeys';
+import { Aci, ProtocolAddress, ServiceId } from './Address.js';
+export * from './Address.js';
+import { PrivateKey, PublicKey } from './EcKeys.js';
+export * from './EcKeys.js';
 
-export * as usernames from './usernames';
+export * as usernames from './usernames.js';
 
-export * as io from './io';
+export * as io from './io.js';
 
-export * as Net from './net';
+export * as Net from './net.js';
 
-export * as Mp4Sanitizer from './Mp4Sanitizer';
-export * as WebpSanitizer from './WebpSanitizer';
+export * as Mp4Sanitizer from './Mp4Sanitizer.js';
+export * as WebpSanitizer from './WebpSanitizer.js';
 
-import * as Native from '../Native';
+import Native from '../Native.js';
 
 Native.registerErrors(Errors);
 
@@ -237,16 +237,16 @@ export class KEMKeyPair {
 
 /** The public information contained in a {@link SignedPreKeyRecord} */
 export type SignedPublicPreKey = {
-  id(): number;
-  publicKey(): PublicKey;
-  signature(): Uint8Array;
+  id: () => number;
+  publicKey: () => PublicKey;
+  signature: () => Uint8Array;
 };
 
 /** The public information contained in a {@link KyberPreKeyRecord} */
 export type SignedKyberPublicPreKey = {
-  id(): number;
-  publicKey(): KEMPublicKey;
-  signature(): Uint8Array;
+  id: () => number;
+  publicKey: () => KEMPublicKey;
+  signature: () => Uint8Array;
 };
 
 export class PreKeyBundle {
@@ -1190,8 +1190,16 @@ export abstract class KyberPreKeyStore implements Native.KyberPreKeyStore {
     return prekey._nativeHandle;
   }
 
-  async _markKyberPreKeyUsed(kyberPreKeyId: number): Promise<void> {
-    return this.markKyberPreKeyUsed(kyberPreKeyId);
+  async _markKyberPreKeyUsed(
+    kyberPreKeyId: number,
+    signedPreKeyId: number,
+    baseKey: Native.PublicKey
+  ): Promise<void> {
+    return this.markKyberPreKeyUsed(
+      kyberPreKeyId,
+      signedPreKeyId,
+      PublicKey._fromNativeHandle(baseKey)
+    );
   }
 
   abstract saveKyberPreKey(
@@ -1199,7 +1207,11 @@ export abstract class KyberPreKeyStore implements Native.KyberPreKeyStore {
     record: KyberPreKeyRecord
   ): Promise<void>;
   abstract getKyberPreKey(kyberPreKeyId: number): Promise<KyberPreKeyRecord>;
-  abstract markKyberPreKeyUsed(kyberPreKeyId: number): Promise<void>;
+  abstract markKyberPreKeyUsed(
+    kyberPreKeyId: number,
+    signedPreKeyId: number,
+    baseKey: PublicKey
+  ): Promise<void>;
 }
 
 export abstract class SenderKeyStore implements Native.SenderKeyStore {
@@ -1308,7 +1320,7 @@ export class SealedSenderDecryptionResult {
 }
 
 export interface CiphertextMessageConvertible {
-  asCiphertextMessage(): CiphertextMessage;
+  asCiphertextMessage: () => CiphertextMessage;
 }
 
 export class CiphertextMessage {
