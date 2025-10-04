@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+import { Buffer } from 'node:buffer';
+
 import * as uuid from 'uuid';
 
 import * as Errors from './Errors.js';
@@ -45,11 +47,6 @@ export enum ContentHint {
   Default = 0,
   Resendable = 1,
   Implicit = 2,
-}
-
-export enum UsePQRatchet {
-  Yes,
-  No,
 }
 
 export type Uuid = string;
@@ -1449,7 +1446,6 @@ export function processPreKeyBundle(
   address: ProtocolAddress,
   sessionStore: SessionStore,
   identityStore: IdentityKeyStore,
-  usePqRatchet: UsePQRatchet,
   now: Date = new Date()
 ): Promise<void> {
   return Native.SessionBuilder_ProcessPreKeyBundle(
@@ -1457,8 +1453,7 @@ export function processPreKeyBundle(
     address,
     sessionStore,
     identityStore,
-    now.getTime(),
-    usePqRatchet == UsePQRatchet.Yes
+    now.getTime()
   );
 }
 
@@ -1501,8 +1496,7 @@ export function signalDecryptPreKey(
   identityStore: IdentityKeyStore,
   prekeyStore: PreKeyStore,
   signedPrekeyStore: SignedPreKeyStore,
-  kyberPrekeyStore: KyberPreKeyStore,
-  usePqRatchet: UsePQRatchet
+  kyberPrekeyStore: KyberPreKeyStore
 ): Promise<Uint8Array> {
   return Native.SessionCipher_DecryptPreKeySignalMessage(
     message,
@@ -1511,8 +1505,7 @@ export function signalDecryptPreKey(
     identityStore,
     prekeyStore,
     signedPrekeyStore,
-    kyberPrekeyStore,
-    usePqRatchet == UsePQRatchet.Yes
+    kyberPrekeyStore
   );
 }
 
@@ -1615,8 +1608,7 @@ export async function sealedSenderDecryptMessage(
   identityStore: IdentityKeyStore,
   prekeyStore: PreKeyStore,
   signedPrekeyStore: SignedPreKeyStore,
-  kyberPrekeyStore: KyberPreKeyStore,
-  usePqRatchet: UsePQRatchet
+  kyberPrekeyStore: KyberPreKeyStore
 ): Promise<SealedSenderDecryptionResult> {
   const ssdr = await Native.SealedSender_DecryptMessage(
     message,
@@ -1629,8 +1621,7 @@ export async function sealedSenderDecryptMessage(
     identityStore,
     prekeyStore,
     signedPrekeyStore,
-    kyberPrekeyStore,
-    usePqRatchet == UsePQRatchet.Yes
+    kyberPrekeyStore
   );
   return SealedSenderDecryptionResult._fromNativeHandle(ssdr);
 }

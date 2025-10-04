@@ -124,19 +124,23 @@ where
         &self,
         make_future: impl FnOnce(TokioContextCancellation) -> F,
         completer: <F::Output as ResultReporter>::Receiver,
+        label: &'static str,
     ) -> CancellationId {
         // Delegate to a non-templated function with dynamic dispatch to save on
         // compiled code size.
-        self.run_future_boxed(Box::new(move |cancellation| {
-            let future = make_future(cancellation);
-            async {
-                let reporter = future.await;
-                let report_cb: Box<dyn FnOnce() + Send> =
-                    Box::new(move || reporter.report_to(completer));
-                report_cb
-            }
-            .boxed()
-        }))
+        self.run_future_boxed(
+            label,
+            Box::new(move |cancellation| {
+                let future = make_future(cancellation);
+                async {
+                    let reporter = future.await;
+                    let report_cb: Box<dyn FnOnce() + Send> =
+                        Box::new(move || reporter.report_to(completer));
+                    report_cb
+                }
+                .boxed()
+            }),
+        )
     }
 }
 
@@ -152,6 +156,7 @@ impl TokioAsyncContext {
     /// appropriate type.
     fn run_future_boxed<'s>(
         &'s self,
+        label: &'static str,
         make_future: Box<
             dyn 's + FnOnce(TokioContextCancellation) -> BoxFuture<'static, ReportResultBoxed>,
         >,
@@ -194,13 +199,17 @@ impl TokioAsyncContext {
                 report_fn = &mut future => report_fn,
                 _ = tokio::time::sleep_until(deadline) => {
                     log::warn!(
-                        "Future with cancellation_id {:?} seems stalled (elapsed: {:?})",
+                        "Future for {} with cancellation_id {:?} seems stalled (elapsed: {:?})",
+                        label,
                         cancellation_id,
                         start_time.elapsed()
                     );
                     future.await
                 }
             };
+
+            Self::check_metrics(&handle, label);
+
             let _: tokio::task::JoinHandle<()> = handle.spawn_blocking(report_fn);
             // What happens if we don't get here? We leak an entry in the task map. Also, we
             // probably have bigger problems, because in practice all the `bridge_io` futures are
@@ -211,11 +220,33 @@ impl TokioAsyncContext {
                     .expect("task map isn't poisoned")
                     .remove(&cancellation_id);
             }
-            log::trace!("completed task with {cancellation_id:?}");
+            log::trace!("completed task for {label} with {cancellation_id:?}");
         });
 
-        log::trace!("started task with {cancellation_id:?}");
+        log::trace!("started task for {label} with {cancellation_id:?}");
         cancellation_id
+    }
+
+    fn check_metrics(handle: &tokio::runtime::Handle, current_task_label: &'static str) {
+        let metrics = handle.metrics();
+        #[cfg(tokio_unstable)]
+        {
+            let active_blocking_threads =
+                metrics.num_blocking_threads() - metrics.num_idle_blocking_threads();
+            // By default there are as many *regular* worker threads as CPUs, so we're treating
+            // "twice the CPU count" as "an abnormal number of blocking threads".
+            if active_blocking_threads > 2 * metrics.num_workers() {
+                log::info!(
+                    "observed {active_blocking_threads} active blocking worker threads while completing {current_task_label}"
+                );
+            } else {
+                log::trace!(
+                    "observed {active_blocking_threads} active blocking worker threads while completing {current_task_label}"
+                );
+            }
+        }
+        _ = metrics;
+        _ = current_task_label;
     }
 }
 
@@ -314,6 +345,7 @@ mod test {
                     }
                 },
                 (),
+                "test",
             );
             (sender, output, when_reporting)
         };
@@ -374,6 +406,7 @@ mod test {
                 }
             },
             (),
+            "test",
         );
 
         let (on_start_reporting2, mut when_reporting2) = oneshot::channel();
@@ -386,6 +419,7 @@ mod test {
                 }
             },
             (),
+            "test",
         );
 
         assert_matches!(

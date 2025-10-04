@@ -53,6 +53,14 @@ const config = defineConfig(
         },
       ],
 
+      'no-restricted-globals': [
+        'error',
+        {
+          name: 'Buffer',
+          message: 'Import from node:buffer instead.',
+        },
+      ],
+
       'mocha/no-exclusive-tests': 'error',
       'promise/prefer-await-to-then': 'error',
       'no-use-before-define': 'off',
@@ -93,6 +101,7 @@ const config = defineConfig(
       ],
 
       'import/prefer-default-export': 'off',
+      'import/enforce-node-protocol-usage': ['error', 'always'],
       'prefer-template': 'error',
       '@typescript-eslint/no-require-imports': 'error',
       '@typescript-eslint/consistent-type-assertions': 'error',

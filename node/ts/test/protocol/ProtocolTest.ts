@@ -9,6 +9,7 @@ import * as util from '../util.js';
 import { assert, use } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import Chance from 'chance';
+import { Buffer } from 'node:buffer';
 
 import TestStores, {
   InMemoryIdentityKeyStore,
@@ -192,13 +193,7 @@ it('DecryptionErrorMessage', async () => {
   // Set up the session with a message from A to B.
 
   const bAddress = SignalClient.ProtocolAddress.new(bUuid, bDeviceId);
-  await SignalClient.processPreKeyBundle(
-    bPreKeyBundle,
-    bAddress,
-    aSess,
-    aKeys,
-    SignalClient.UsePQRatchet.Yes
-  );
+  await SignalClient.processPreKeyBundle(bPreKeyBundle, bAddress, aSess, aKeys);
 
   const aPlaintext = Buffer.from('hi there', 'utf8');
 
@@ -221,8 +216,7 @@ it('DecryptionErrorMessage', async () => {
     bKeys,
     bPreK,
     bSPreK,
-    bKyberStore,
-    SignalClient.UsePQRatchet.Yes
+    bKyberStore
   );
 
   // Pretend to send a message from B back to A that "fails".
@@ -736,8 +730,7 @@ for (const testCase of sessionVersionTestCases) {
         bPreKeyBundle,
         bAddress,
         aliceStores.session,
-        aliceStores.identity,
-        SignalClient.UsePQRatchet.Yes
+        aliceStores.identity
       );
       const aMessage = Buffer.from('Greetings hoo-man', 'utf8');
 
@@ -764,8 +757,7 @@ for (const testCase of sessionVersionTestCases) {
         bobStores.identity,
         bobStores.prekey,
         bobStores.signed,
-        bobStores.kyber,
-        SignalClient.UsePQRatchet.Yes
+        bobStores.kyber
       );
       assert.deepEqual(bDPlaintext, aMessage);
 
@@ -834,8 +826,7 @@ for (const testCase of sessionVersionTestCases) {
         bPreKeyBundle,
         bAddress,
         aliceStores.session,
-        aliceStores.identity,
-        SignalClient.UsePQRatchet.Yes
+        aliceStores.identity
       );
       const aMessage = Buffer.from('Greetings hoo-man', 'utf8');
 
@@ -862,8 +853,7 @@ for (const testCase of sessionVersionTestCases) {
         bobStores.identity,
         bobStores.prekey,
         bobStores.signed,
-        bobStores.kyber,
-        SignalClient.UsePQRatchet.Yes
+        bobStores.kyber
       );
       assert.deepEqual(bDPlaintext, aMessage);
 
@@ -875,8 +865,7 @@ for (const testCase of sessionVersionTestCases) {
           bobStores.identity,
           bobStores.prekey,
           bobStores.signed,
-          bobStores.kyber,
-          SignalClient.UsePQRatchet.Yes
+          bobStores.kyber
         );
         assert.fail();
       } catch (e) {
@@ -951,7 +940,6 @@ for (const testCase of sessionVersionTestCases) {
         bAddress,
         aliceStores.session,
         aliceStores.identity,
-        SignalClient.UsePQRatchet.Yes,
         new Date('2020-01-01')
       );
 
@@ -1006,8 +994,7 @@ for (const testCase of sessionVersionTestCases) {
         bPreKeyBundle,
         bAddress,
         aliceStores.session,
-        aliceStores.identity,
-        SignalClient.UsePQRatchet.Yes
+        aliceStores.identity
       );
       const aMessage = Buffer.from('Greetings hoo-man', 'utf8');
 
@@ -1034,8 +1021,7 @@ for (const testCase of sessionVersionTestCases) {
         bobStores.identity,
         bobStores.prekey,
         bobStores.signed,
-        bobStores.kyber,
-        SignalClient.UsePQRatchet.Yes
+        bobStores.kyber
       ));
 
       await assert.isRejected(
@@ -1046,8 +1032,7 @@ for (const testCase of sessionVersionTestCases) {
           bobStores.identity,
           bobStores.prekey,
           bobStores.signed,
-          bobStores.kyber,
-          SignalClient.UsePQRatchet.Yes
+          bobStores.kyber
         )
       );
     });
