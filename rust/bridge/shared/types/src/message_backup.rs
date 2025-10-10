@@ -102,12 +102,34 @@ pub struct MessageBackupValidationOutcome {
 }
 bridge_as_handle!(MessageBackupValidationOutcome, jni = false, node = false);
 
-pub struct ComparableBackup {
-    pub backup: backup::serialize::Backup,
-    pub found_unknown_fields: Vec<FoundUnknownField>,
+pub struct BackupJsonExporter {
+    inner: libsignal_message_backup::json::exporter::JsonExporter,
+    initial_chunk: String,
 }
 
-bridge_as_handle!(ComparableBackup);
+impl BackupJsonExporter {
+    pub fn new(
+        inner: libsignal_message_backup::json::exporter::JsonExporter,
+        initial_chunk: String,
+    ) -> Self {
+        Self {
+            inner,
+            initial_chunk,
+        }
+    }
+
+    pub fn inner_mut(&mut self) -> &mut libsignal_message_backup::json::exporter::JsonExporter {
+        &mut self.inner
+    }
+
+    pub fn initial_chunk(&self) -> String {
+        self.initial_chunk.clone()
+    }
+}
+
+bridge_as_handle!(BackupJsonExporter, mut = true, ffi = false, jni = false);
+impl std::panic::RefUnwindSafe for BackupJsonExporter {}
+static_assertions::assert_impl_all!(BackupJsonExporter: std::panic::UnwindSafe);
 
 pub struct OnlineBackupValidator {
     backup: Option<backup::PartialBackup<backup::ValidateOnly>>,

@@ -17,7 +17,7 @@ use libsignal_net::chat;
 use libsignal_protocol::PublicKey;
 use serde::{Deserialize, Serialize};
 
-use super::{CONTENT_TYPE_JSON, TryIntoResponse as _, WsConnection};
+use super::{CONTENT_TYPE_JSON, CustomError, TryIntoResponse as _, WsConnection};
 use crate::api::keytrans::*;
 use crate::api::{RequestError, Unauth};
 
@@ -265,7 +265,7 @@ impl<T: WsConnection> Unauth<T> {
         );
         let response: RawChatSerializedResponse = response
             .try_into_response()
-            .map_err(|e| e.into_request_error(|_| None))?;
+            .map_err(|e| e.into_request_error(CustomError::no_custom_handling))?;
         BASE64_STANDARD_NO_PAD
             .decode(&response.serialized_response)
             .map_err(|_| RequestError::Other(Error::InvalidResponse("invalid base64".to_string())))
@@ -494,13 +494,19 @@ mod test {
     };
     use super::*;
 
+    fn kt_integration_enabled() -> bool {
+        let run_nonhermetic = std::env::var_os("LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS").is_some();
+        let ignore_tests = std::env::var_os("LIBSIGNAL_TESTING_IGNORE_KT_TESTS").is_some();
+        run_nonhermetic && !ignore_tests
+    }
+
     #[tokio::test]
     #[test_case(false, false; "ACI")]
     #[test_case(true, false; "ACI + E164")]
     #[test_case(false, true; "ACI + Username Hash")]
     #[test_case(true, true; "ACI + E164 + Username Hash")]
     async fn search_permutations_integration_test(use_e164: bool, use_username_hash: bool) {
-        if std::env::var("LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS").is_err() {
+        if !kt_integration_enabled() {
             println!("SKIPPED: running integration tests is not enabled");
             return;
         }
@@ -540,7 +546,7 @@ mod test {
     #[test_case(false; "unknown_distinguished")]
     #[test_case(true; "known_distinguished")]
     async fn distinguished_integration_test(have_last_distinguished: bool) {
-        if std::env::var("LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS").is_err() {
+        if !kt_integration_enabled() {
             println!("SKIPPED: running integration tests is not enabled");
             return;
         }
@@ -567,7 +573,7 @@ mod test {
     #[test_case(false, true; "ACI + Username Hash")]
     #[test_case(true, true; "ACI + E164 + Username Hash")]
     async fn monitor_permutations_integration_test(use_e164: bool, use_username_hash: bool) {
-        if std::env::var("LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS").is_err() {
+        if !kt_integration_enabled() {
             println!("SKIPPED: running integration tests is not enabled");
             return;
         }
@@ -621,7 +627,7 @@ mod test {
 
     #[tokio::test]
     async fn search_for_deleted_account() {
-        if std::env::var("LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS").is_err() {
+        if !kt_integration_enabled() {
             println!("SKIPPED: running integration tests is not enabled");
             return;
         }
@@ -653,7 +659,7 @@ mod test {
 
     #[tokio::test]
     async fn search_for_account_that_isnt() {
-        if std::env::var("LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS").is_err() {
+        if !kt_integration_enabled() {
             println!("SKIPPED: running integration tests is not enabled");
             return;
         }

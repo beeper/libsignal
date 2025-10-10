@@ -1,5 +1,7 @@
-v0.83.0
+v0.84.0
 
-- backups: Support polls in backup validator
+- keytrans: Verify signatures from all auditors
 
-- spqr: Remove client-provided options to turn on/off SPQR, defaulting to on everywhere.
+- Java: Fixed `IdentityKeyPair(byte[])` to correctly declare that it throws InvalidKeyException.
+
+- Node: Add BackupsJsonExporter, to convert Backup proto objects to human-readable JSON for export.

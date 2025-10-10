@@ -19,6 +19,7 @@ import org.signal.libsignal.protocol.state.KyberPreKeyStore
 import org.signal.libsignal.protocol.state.PreKeyStore
 import org.signal.libsignal.protocol.state.SessionStore
 import org.signal.libsignal.protocol.state.SignedPreKeyStore
+import org.signal.libsignal.protocol.util.Pair
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -582,8 +583,8 @@ internal object Native {
   @JvmStatic @Throws(Exception::class)
   public external fun HttpRequest_new(method: String, path: String, bodyAsSlice: ByteArray?): ObjectHandle
 
-  @JvmStatic
-  public external fun IdentityKeyPair_Deserialize(data: ByteArray): LongArray
+  @JvmStatic @Throws(Exception::class)
+  public external fun IdentityKeyPair_Deserialize(input: ByteArray): Pair<*, *>
   @JvmStatic
   public external fun IdentityKeyPair_Serialize(publicKey: ObjectHandle, privateKey: ObjectHandle): ByteArray
   @JvmStatic @Throws(Exception::class)

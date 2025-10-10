@@ -124,18 +124,31 @@ def translate_to_ts(typ: str) -> str:
     if typ.startswith('&'):
         return 'Wrapper<' + typ[1:] + '>'
 
+    if typ.startswith('('):
+        assert typ.endswith(')'), typ
+        inner = typ[1:-1].split(',')
+        if len(inner) == 1:
+            return translate_to_ts(inner[0])
+        return '[' + ', '.join(translate_to_ts(x) for x in inner) + ']'
+
     if typ.startswith('Option<'):
         assert typ.endswith('>')
         return translate_to_ts(typ[7:-1]) + ' | null'
 
     if typ.startswith('Result<'):
         assert typ.endswith('>')
-        success_type = typ[7:-1].split(',')[0]
+        type_args = typ[7:-1]
+        (success_type, *failure_type) = type_args.rsplit(',', 1)
+        if failure_type and ')' in failure_type[0]:
+            success_type = type_args
         return translate_to_ts(success_type)
 
     if typ.startswith('std::result::Result<'):
         assert typ.endswith('>')
-        success_type = typ[20:-1].split(',')[0]
+        type_args = typ[20:-1]
+        (success_type, *failure_type) = type_args.rsplit(',', 1)
+        if failure_type and ')' in failure_type[0]:
+            success_type = type_args
         return translate_to_ts(success_type)
 
     if typ.startswith('Promise<'):

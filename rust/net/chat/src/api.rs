@@ -11,6 +11,7 @@ use std::convert::Infallible;
 use libsignal_net::infra::errors::LogSafeDisplay;
 
 pub mod keytrans;
+pub mod messages;
 pub mod profiles;
 pub mod registration;
 pub mod usernames;
@@ -42,9 +43,7 @@ pub struct Registration<T>(pub T);
 
 /// Authorization for requests on unauthenticated connections involving other users.
 ///
-/// TODO: for multi-recipient message sends *specifically* there's one more kind of authorization,
-/// "this is a story". That should be handled as a separate type since other requests don't have
-/// that.
+/// For multi-recipient messages, see [messages::MultiRecipientSendAuthorization].
 pub enum UserBasedAuthorization {
     AccessKey([u8; 16]),
     Group(zkgroup::groups::GroupSendFullToken),
@@ -129,12 +128,14 @@ pub enum ChallengeOption {
 /// This should be extended to include any new submodules' traits.
 pub trait UnauthenticatedChatApi:
     keytrans::UnauthenticatedChatApi
+    + messages::UnauthenticatedChatApi
     + profiles::UnauthenticatedChatApi
     + usernames::UnauthenticatedChatApi
 {
 }
 impl<T> UnauthenticatedChatApi for T where
     T: keytrans::UnauthenticatedChatApi
+        + messages::UnauthenticatedChatApi
         + profiles::UnauthenticatedChatApi
         + usernames::UnauthenticatedChatApi
 {

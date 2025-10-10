@@ -229,6 +229,10 @@ export function BackupAuthCredential_GetBackupId(credentialBytes: Uint8Array): U
 export function BackupAuthCredential_GetBackupLevel(credentialBytes: Uint8Array): number;
 export function BackupAuthCredential_GetType(credentialBytes: Uint8Array): number;
 export function BackupAuthCredential_PresentDeterministic(credentialBytes: Uint8Array, serverParamsBytes: Uint8Array, randomness: Uint8Array): Uint8Array;
+export function BackupJsonExporter_ExportFrames(exporter: Wrapper<BackupJsonExporter>, frames: Uint8Array): string;
+export function BackupJsonExporter_Finish(exporter: Wrapper<BackupJsonExporter>): string;
+export function BackupJsonExporter_GetInitialChunk(exporter: Wrapper<BackupJsonExporter>): string;
+export function BackupJsonExporter_New(backupInfo: Uint8Array, shouldValidate: boolean): BackupJsonExporter;
 export function BackupKey_DeriveBackupId(backupKey: Uint8Array, aci: Uint8Array): Uint8Array;
 export function BackupKey_DeriveEcKey(backupKey: Uint8Array, aci: Uint8Array): PrivateKey;
 export function BackupKey_DeriveLocalBackupMetadataKey(backupKey: Uint8Array): Uint8Array;
@@ -347,7 +351,7 @@ export function HsmEnclaveClient_InitialRequest(obj: Wrapper<HsmEnclaveClient>):
 export function HsmEnclaveClient_New(trustedPublicKey: Uint8Array, trustedCodeHashes: Uint8Array): HsmEnclaveClient;
 export function HttpRequest_add_header(request: Wrapper<HttpRequest>, name: string, value: string): void;
 export function HttpRequest_new(method: string, path: string, bodyAsSlice: Uint8Array | null): HttpRequest;
-export function IdentityKeyPair_Deserialize(buffer: Uint8Array): {publicKey:PublicKey,privateKey:PrivateKey};
+export function IdentityKeyPair_Deserialize(input: Uint8Array): [PublicKey, PrivateKey];
 export function IdentityKeyPair_Serialize(publicKey: Wrapper<PublicKey>, privateKey: Wrapper<PrivateKey>): Uint8Array;
 export function IdentityKeyPair_SignAlternateIdentity(publicKey: Wrapper<PublicKey>, privateKey: Wrapper<PrivateKey>, otherIdentity: Wrapper<PublicKey>): Uint8Array;
 export function IdentityKey_VerifyAlternateIdentity(publicKey: Wrapper<PublicKey>, otherIdentity: Wrapper<PublicKey>, signature: Uint8Array): boolean;
@@ -685,6 +689,7 @@ export function TESTING_RegistrationService_ResumeSessionErrorConvert(errorDescr
 export function TESTING_RegistrationService_SubmitVerificationErrorConvert(errorDescription: string): void;
 export function TESTING_RegistrationService_UpdateSessionErrorConvert(errorDescription: string): void;
 export function TESTING_RegistrationSessionInfoConvert(): RegistrationSession;
+export function TESTING_ReturnPair(): [number, string];
 export function TESTING_ReturnStringArray(): string[];
 export function TESTING_RoundTripI32(input: number): number;
 export function TESTING_RoundTripU16(input: number): number;
@@ -733,13 +738,13 @@ export function initLogger(maxLevel: LogLevel, callback: (level: LogLevel, targe
 export function test_only_fn_returns_123(): number;
 interface Aes256GcmSiv { readonly __type: unique symbol; }
 interface AuthenticatedChatConnection { readonly __type: unique symbol; }
+interface BackupJsonExporter { readonly __type: unique symbol; }
 interface BackupRestoreResponse { readonly __type: unique symbol; }
 interface BackupStoreResponse { readonly __type: unique symbol; }
 interface BridgedStringMap { readonly __type: unique symbol; }
 interface CdsiLookup { readonly __type: unique symbol; }
 interface ChatConnectionInfo { readonly __type: unique symbol; }
 interface CiphertextMessage { readonly __type: unique symbol; }
-interface ComparableBackup { readonly __type: unique symbol; }
 interface ComparableBackup { readonly __type: unique symbol; }
 interface ConnectionManager { readonly __type: unique symbol; }
 interface ConnectionProxyConfig { readonly __type: unique symbol; }

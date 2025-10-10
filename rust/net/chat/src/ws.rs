@@ -7,6 +7,7 @@
 //! websocket, as implemented in [`libsignal_net::chat`].
 
 mod keytrans;
+mod messages;
 mod profiles;
 // TODO make this not pub(crate)
 pub(crate) mod registration;
@@ -141,6 +142,26 @@ pub(super) enum ResponseError {
 }
 impl LogSafeDisplay for ResponseError {}
 
+pub(crate) enum CustomError<E> {
+    NoCustomHandling,
+    Err(E),
+    Unexpected { log_safe: String },
+}
+
+impl<E> CustomError<E> {
+    /// A convenience method to be used with [`ResponseError::into_request_error`] that always
+    /// produces `NoCustomHandling`.
+    fn no_custom_handling(_: &chat::Response) -> Self {
+        Self::NoCustomHandling
+    }
+}
+
+impl<E> From<E> for CustomError<E> {
+    fn from(value: E) -> Self {
+        Self::Err(value)
+    }
+}
+
 impl ResponseError {
     /// Converts a `ResponseError` into a [`RequestError`] by calling `map_unrecognized` for any
     /// non-success status codes.
@@ -149,7 +170,7 @@ impl ResponseError {
     /// response codes (like 429 Too Many Requests).
     pub(crate) fn into_request_error<E, D>(
         self,
-        map_unrecognized: impl FnOnce(&chat::Response) -> Option<E>,
+        map_unrecognized: impl FnOnce(&chat::Response) -> CustomError<E>,
     ) -> RequestError<E, D> {
         match self {
             e @ (ResponseError::UnexpectedContentType(_)
@@ -162,8 +183,9 @@ impl ResponseError {
                 status: _,
                 response,
             } => match map_unrecognized(&response) {
-                Some(specific_error) => RequestError::Other(specific_error),
-                None => {
+                CustomError::Err(specific_error) => RequestError::Other(specific_error),
+                CustomError::Unexpected { log_safe } => RequestError::Unexpected { log_safe },
+                CustomError::NoCustomHandling => {
                     let chat::Response {
                         status,
                         message: _,
@@ -361,7 +383,7 @@ mod testutil {
             _log_safe_path: &str,
             request: chat::Request,
         ) -> impl Future<Output = Result<chat::Response, chat::SendError>> + Send {
-            assert_eq!(self.expected, request);
+            pretty_assertions::assert_eq!(self.expected, request);
             std::future::ready(Ok(self.response.clone()))
         }
     }
@@ -411,7 +433,7 @@ mod test {
     ) -> Result<Empty, RequestError<std::convert::Infallible>> {
         input
             .try_into_response()
-            .map_err(|e| e.into_request_error(|_| None))
+            .map_err(|e| e.into_request_error(CustomError::no_custom_handling))
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -436,6 +458,6 @@ mod test {
     ) -> Result<Example, RequestError<std::convert::Infallible>> {
         input
             .try_into_response()
-            .map_err(|e| e.into_request_error(|_| None))
+            .map_err(|e| e.into_request_error(CustomError::no_custom_handling))
     }
 }
