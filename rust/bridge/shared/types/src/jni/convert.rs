@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use itertools::Itertools as _;
 use jni::JNIEnv;
-use jni::objects::{AutoLocal, JByteBuffer, JMap, JObjectArray};
+use jni::objects::{AutoLocal, JByteBuffer, JIntArray, JMap, JObjectArray};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jbyte};
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
 use libsignal_core::try_scoped;
@@ -22,7 +22,6 @@ use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
 use crate::net::chat::ChatListener;
 use crate::net::registration::{ConnectChatBridge, RegistrationPushToken};
-use crate::protocol::KyberPublicKey;
 use crate::support::{Array, AsType, FixedLengthBincodeSerializable, Serialized, extend_lifetime};
 
 /// Converts arguments from their JNI form to their Rust form.
@@ -313,6 +312,30 @@ impl<'a> SimpleArgTypeInfo<'a> for AccountEntropyPool {
         pool.parse().map_err(|e: InvalidAccountEntropyPool| {
             BridgeLayerError::BadArgument(format!("bad account entropy pool: {e}"))
         })
+    }
+}
+
+impl<'a> SimpleArgTypeInfo<'a>
+    for libsignal_net_chat::api::messages::MultiRecipientSendAuthorization
+{
+    type ArgType = JByteArray<'a>;
+    fn convert_from(
+        env: &mut JNIEnv<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        // If we ever have more than two options, we won't be able to just use null for one of them,
+        // but for now this is convenient.
+        if foreign.is_null() {
+            Ok(Self::Story)
+        } else {
+            let mut elements_guard = <&[u8]>::borrow(env, foreign)?;
+            let bytes = <&[u8]>::load_from(&mut elements_guard);
+            let token =
+                zkgroup::deserialize(bytes).map_err(|_: ZkGroupDeserializationFailure| {
+                    BridgeLayerError::BadArgument("bad GroupSendFullToken".into())
+                })?;
+            Ok(Self::Group(token))
+        }
     }
 }
 
@@ -651,66 +674,42 @@ impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param,
 impl<'a> SimpleArgTypeInfo<'a> for CiphertextMessageRef<'a> {
     type ArgType = JavaCiphertextMessage<'a>;
     fn convert_from(env: &mut JNIEnv, foreign: &Self::ArgType) -> Result<Self, BridgeLayerError> {
-        fn native_handle_from_message<'a, T: BridgeHandle>(
-            env: &mut JNIEnv,
-            foreign: &JavaCiphertextMessage<'a>,
-            class_name: &'static str,
-            make_result: fn(&'a T) -> CiphertextMessageRef<'a>,
-        ) -> Result<Option<CiphertextMessageRef<'a>>, BridgeLayerError> {
-            if env
-                .is_instance_of(foreign, class_name)
-                .check_exceptions(env, "CiphertextMessageRef::convert_from")?
-            {
-                let handle: jlong = call_method_checked(
-                    env,
-                    foreign,
-                    "unsafeNativeHandleWithoutGuard",
-                    jni_args!(() -> long),
-                )?;
-                Ok(Some(make_result(unsafe {
-                    T::native_handle_cast(handle)?.as_ref()
-                })))
-            } else {
-                Ok(None)
-            }
-        }
-
         if foreign.is_null() {
             return Err(BridgeLayerError::NullPointer(Some("CipherTextMessageRef")));
         }
 
         None.or_else(|| {
-            native_handle_from_message(
+            map_native_handle_if_matching_jobject(
                 env,
                 foreign,
-                jni_class_name!(org.signal.libsignal.protocol.message.SignalMessage),
+                ClassName("org.signal.libsignal.protocol.message.SignalMessage"),
                 Self::SignalMessage,
             )
             .transpose()
         })
         .or_else(|| {
-            native_handle_from_message(
+            map_native_handle_if_matching_jobject(
                 env,
                 foreign,
-                jni_class_name!(org.signal.libsignal.protocol.message.PreKeySignalMessage),
+                ClassName("org.signal.libsignal.protocol.message.PreKeySignalMessage"),
                 Self::PreKeySignalMessage,
             )
             .transpose()
         })
         .or_else(|| {
-            native_handle_from_message(
+            map_native_handle_if_matching_jobject(
                 env,
                 foreign,
-                jni_class_name!(org.signal.libsignal.protocol.message.SenderKeyMessage),
+                ClassName("org.signal.libsignal.protocol.message.SenderKeyMessage"),
                 Self::SenderKeyMessage,
             )
             .transpose()
         })
         .or_else(|| {
-            native_handle_from_message(
+            map_native_handle_if_matching_jobject(
                 env,
                 foreign,
-                jni_class_name!(org.signal.libsignal.protocol.message.PlaintextContent),
+                ClassName("org.signal.libsignal.protocol.message.PlaintextContent"),
                 Self::PlaintextContent,
             )
             .transpose()
@@ -1165,17 +1164,28 @@ impl<T: BridgeHandle> ResultTypeInfo<'_> for Option<T> {
 }
 
 impl<'a, A: ResultTypeInfo<'a>, B: ResultTypeInfo<'a>> ResultTypeInfo<'a> for (A, B) {
-    type ResultType = JavaPair<'a>;
+    type ResultType = JavaPair<'a, A::ResultType, B::ResultType>;
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
         let a = self.0.convert_into(env)?;
         let a = box_primitive_if_needed(env, a.into())?;
         let b = self.1.convert_into(env)?;
         let b = box_primitive_if_needed(env, b.into())?;
-        new_instance(
+        Ok(new_instance(
             env,
             ClassName("org.signal.libsignal.protocol.util.Pair"),
             jni_args!((a => java.lang.Object, b => java.lang.Object) -> void),
-        )
+        )?
+        .into())
+    }
+}
+
+impl<'a, A: ResultTypeInfo<'a>, B: ResultTypeInfo<'a>> ResultTypeInfo<'a> for Option<(A, B)> {
+    type ResultType = JavaPair<'a, A::ResultType, B::ResultType>;
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        let Some(value) = self else {
+            return Ok(JObject::null().into());
+        };
+        value.convert_into(env)
     }
 }
 
@@ -1445,34 +1455,29 @@ impl<'a> SimpleArgTypeInfo<'a> for crate::net::registration::SignedPublicPreKey 
         })?;
 
         let public_key = {
-            let native_handle = call_method_checked(
-                env,
-                &public_key,
-                "unsafeNativeHandleWithoutGuard",
-                jni_args!(() -> long),
-            )?;
-
-            if env
-                .is_instance_of(
+            None.or_else(|| {
+                map_native_handle_if_matching_jobject(
+                    env,
                     &public_key,
-                    jni_class_name!(org.signal.libsignal.protocol.ecc.ECPublicKey),
+                    ClassName("org.signal.libsignal.protocol.ecc.ECPublicKey"),
+                    PublicKey::serialize,
                 )
-                .expect_no_exceptions()?
-            {
-                unsafe { PublicKey::native_handle_cast(native_handle)?.as_ref() }.serialize()
-            } else if env
-                .is_instance_of(
+                .transpose()
+            })
+            .or_else(|| {
+                map_native_handle_if_matching_jobject(
+                    env,
                     &public_key,
-                    jni_class_name!(org.signal.libsignal.protocol.kem.KEMPublicKey),
+                    ClassName("org.signal.libsignal.protocol.kem.KEMPublicKey"),
+                    kem::PublicKey::serialize,
                 )
-                .expect_no_exceptions()?
-            {
-                unsafe { KyberPublicKey::native_handle_cast(native_handle)?.as_ref() }.serialize()
-            } else {
-                return Err(BridgeLayerError::BadArgument(
+                .transpose()
+            })
+            .unwrap_or_else(|| {
+                Err(BridgeLayerError::BadArgument(
                     "publicKey type is not supported".to_owned(),
-                ));
-            }
+                ))
+            })?
         };
         let signature = <Box<[u8]>>::convert_from(env, &signature)?;
 
@@ -1650,11 +1655,9 @@ impl<'a> ResultTypeInfo<'a> for &'_ [libsignal_net_chat::api::ChallengeOption] {
     type ResultType = JObjectArray<'a>;
 
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
-        make_object_array(
-            env,
-            jni_class_name!(org.signal.libsignal.net.ChallengeOption),
-            self.iter().copied(),
-        )
+        let element_class = find_class(env, ClassName("org.signal.libsignal.net.ChallengeOption"))
+            .check_exceptions(env, "ChallengeOption::convert_into")?;
+        make_object_array(env, element_class, self.iter().copied())
     }
 }
 
@@ -1663,6 +1666,83 @@ impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net_chat::api::ChallengeOption]> 
 
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
         (&*self).convert_into(env)
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for Vec<ServiceId> {
+    type ResultType = JObjectArray<'a>;
+
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        let element_class = find_primitive_array_class(env, jni_signature!([byte]))
+            .check_exceptions(env, "Vec<ServiceId>::convert_into")?;
+        make_object_array(env, element_class, self)
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for &'_ libsignal_net_chat::api::messages::MismatchedDeviceError {
+    type ResultType = JObject<'a>;
+
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        let libsignal_net_chat::api::messages::MismatchedDeviceError {
+            account,
+            missing_devices,
+            extra_devices,
+            stale_devices,
+        } = self;
+
+        fn convert_device_list<'a>(
+            env: &mut JNIEnv<'a>,
+            input: &[DeviceId],
+        ) -> Result<JIntArray<'a>, BridgeLayerError> {
+            let len = input.len().try_into().map_err(|_| {
+                // This is not *really* the correct error, it will produce an
+                // IllegalArgumentException even though we're making a result. But also we shouldn't
+                // in practice try to return arrays of 2 billion IDs.
+                BridgeLayerError::IntegerOverflow(format!("{}_usize to i32", input.len()))
+            })?;
+            let array = env
+                .new_int_array(len)
+                .check_exceptions(env, "MismatchedDeviceError::convert_into")?;
+            let mut elems = unsafe { env.get_array_elements(&array, ReleaseMode::CopyBack) }
+                .check_exceptions(env, "MismatchedDeviceError::convert_into")?;
+
+            for (elem, id) in elems.iter_mut().zip(input) {
+                *elem = u8::from(*id).into();
+            }
+
+            // `elems` borrows from `array`, so we have to drop it before we return.
+            drop(elems);
+            Ok(array)
+        }
+
+        let account_bytes = account.convert_into(env)?;
+        let missing_devices = convert_device_list(env, missing_devices)?;
+        let extra_devices = convert_device_list(env, extra_devices)?;
+        let stale_devices = convert_device_list(env, stale_devices)?;
+
+        new_instance(
+            env,
+            ClassName("org.signal.libsignal.net.MismatchedDeviceException$Entry"),
+            jni_args!((
+                account_bytes => [byte],
+                missing_devices => [int],
+                extra_devices => [int],
+                stale_devices => [int]
+            ) -> void),
+        )
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for &'_ [libsignal_net_chat::api::messages::MismatchedDeviceError] {
+    type ResultType = JObjectArray<'a>;
+
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        let element_class = find_class(
+            env,
+            ClassName("org.signal.libsignal.net.MismatchedDeviceException$Entry"),
+        )
+        .check_exceptions(env, "MismatchedDeviceError::convert_into")?;
+        make_object_array(env, element_class, self)
     }
 }
 
@@ -1705,11 +1785,12 @@ impl<'a> ResultTypeInfo<'a>
     type ResultType = JObjectArray<'a>;
 
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
-        make_object_array(
+        let element_class = find_class(
             env,
-            jni_class_name!(org.signal.libsignal.net.RegisterAccountResponse::BadgeEntitlement),
-            self,
+            ClassName("org.signal.libsignal.net.RegisterAccountResponse$BadgeEntitlement"),
         )
+        .check_exceptions(env, "RegisterResponseBadge::convert_into")?;
+        make_object_array(env, element_class, self)
     }
 }
 
@@ -1747,15 +1828,9 @@ impl<'a> ResultTypeInfo<'a>
 }
 
 /// Converts each element of `it` to a Java object, storing the result in an array.
-///
-/// `element_type_signature` should use [`jni_class_name`] if it's a plain class and
-/// [`jni_signature`] if it's an array (according to the official docs for the JNI [FindClass][]
-/// operation).
-///
-/// [FindClass]: https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/functions.html#FindClass
 fn make_object_array<'a, It>(
     env: &mut JNIEnv<'a>,
-    element_type_signature: &str,
+    element_type: JClass<'a>,
     it: It,
 ) -> Result<JObjectArray<'a>, BridgeLayerError>
 where
@@ -1774,7 +1849,7 @@ where
                 // in practice try to return arrays of 2 billion objects.
                 BridgeLayerError::IntegerOverflow(format!("{len}_usize to i32"))
             })?,
-            element_type_signature,
+            element_type,
             JavaObject::null(),
         )
         .check_exceptions(env, "make_object_array")?;
@@ -1795,14 +1870,18 @@ where
 impl<'a> ResultTypeInfo<'a> for Box<[String]> {
     type ResultType = JObjectArray<'a>;
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
-        make_object_array(env, jni_class_name!(java.lang.String), self)
+        let element_class = find_class(env, ClassName("java.lang.String"))
+            .check_exceptions(env, "Box<[String]>::convert_into")?;
+        make_object_array(env, element_class, self)
     }
 }
 
 impl<'a> ResultTypeInfo<'a> for Box<[Vec<u8>]> {
     type ResultType = JObjectArray<'a>;
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
-        make_object_array(env, jni_signature!([byte]), self)
+        let element_class = find_primitive_array_class(env, jni_signature!([byte]))
+            .check_exceptions(env, "Box<[Vec<u8>]>::convert_into")?;
+        make_object_array(env, element_class, self)
     }
 }
 
@@ -1815,9 +1894,11 @@ impl<'a> ResultTypeInfo<'a> for MessageBackupValidationOutcome {
             found_unknown_fields,
         } = self;
 
+        let element_class = find_class(env, ClassName("java.lang.String"))
+            .check_exceptions(env, "MessageBackupValidationOutcome::convert_into")?;
         let unknown_fields = make_object_array(
             env,
-            jni_class_name!(java.lang.String),
+            element_class,
             found_unknown_fields.into_iter().map(|f| f.to_string()),
         )?;
         let error_message = error_message.convert_into(env)?;
@@ -2051,6 +2132,9 @@ macro_rules! jni_arg_type {
     (AccountEntropyPool) => {
         ::jni::objects::JString<'local>
     };
+    (MultiRecipientSendAuthorization) => {
+        $crate::jni::Nullable<::jni::objects::JByteArray<'local>>
+    };
     (ServiceIdSequence<'_>) => {
         ::jni::objects::JByteArray<'local>
     };
@@ -2156,8 +2240,8 @@ macro_rules! jni_result_type {
     (()) => {
         ()
     };
-    (($a:ty, $b:ty)) => {
-        $crate::jni::JavaPair<'local>
+    (($a:tt, $b:tt)) => {
+        $crate::jni::JavaPair<'local, $crate::jni_result_type!($a), $crate::jni_result_type!($b)>
     };
     (bool) => {
         ::jni::sys::jboolean
@@ -2235,6 +2319,9 @@ macro_rules! jni_result_type {
     };
     (CiphertextMessage) => {
         jni::JavaCiphertextMessage<'local>
+    };
+    (Vec<ServiceId>) => {
+        ::jni::objects::JObjectArray<'local>
     };
     (Box<[ChallengeOption] >) => {
         ::jni::objects::JObjectArray<'local>

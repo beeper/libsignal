@@ -85,7 +85,7 @@ impl<T> OwnedBufferOf<T> {
     /// Converts back into a `Box`ed slice.
     ///
     /// Callers of this function must ensure that
-    /// - the `OwnedBufferOf` was originally created from `Box`
+    /// - the `OwnedBufferOf` was originally created from `Box` (or `default()`)
     /// - any C code operating on the buffer left all its elements in a valid
     ///   state.
     pub unsafe fn into_box(self) -> Box<[T]> {
@@ -95,6 +95,15 @@ impl<T> OwnedBufferOf<T> {
         }
 
         unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(base, length)) }
+    }
+}
+
+impl<T> Default for OwnedBufferOf<T> {
+    fn default() -> Self {
+        Self {
+            base: std::ptr::null_mut(),
+            length: 0,
+        }
     }
 }
 
@@ -186,6 +195,14 @@ pub struct PairOf<A, B> {
 }
 
 #[repr(C)]
+#[derive(Default)]
+pub struct OptionalPairOf<A, B> {
+    pub present: bool,
+    pub first: A,
+    pub second: B,
+}
+
+#[repr(C)]
 #[derive(Debug)]
 /// cbindgen:field-names=[e164, rawAciUuid, rawPniUuid]
 pub struct FfiCdsiLookupResponseEntry {
@@ -269,6 +286,22 @@ pub enum FfiPublicKeyType {
     Kyber,
 }
 
+#[repr(C)]
+pub struct FfiMismatchedDevicesError {
+    pub account: ServiceIdFixedWidthBinaryBytes,
+    pub missing_devices: OwnedBufferOf<u32>,
+    pub extra_devices: OwnedBufferOf<u32>,
+    pub stale_devices: OwnedBufferOf<u32>,
+}
+
+impl FfiMismatchedDevicesError {
+    pub unsafe fn free_buffers(&mut self) {
+        _ = unsafe { std::mem::take(&mut self.missing_devices).into_box() };
+        _ = unsafe { std::mem::take(&mut self.extra_devices).into_box() };
+        _ = unsafe { std::mem::take(&mut self.stale_devices).into_box() };
+    }
+}
+
 #[cfg_attr(doc, visibility::make(pub))]
 struct UnexpectedPanic(Box<dyn std::any::Any + Send>);
 
@@ -285,7 +318,7 @@ impl std::fmt::Debug for UnexpectedPanic {
 // Swift code considers all opaque pointers to be the same type, but
 // differentiates between the generated named struct types.
 #[repr(C)]
-#[derive(derive_more::From)]
+#[derive(derive_more::From, zerocopy::FromZeros)]
 #[derive_where(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MutPointer<T> {
     raw: *mut T,
@@ -300,6 +333,12 @@ impl<T> MutPointer<T> {
         Self {
             raw: std::ptr::null_mut(),
         }
+    }
+}
+
+impl<T> Default for MutPointer<T> {
+    fn default() -> Self {
+        Self::null()
     }
 }
 

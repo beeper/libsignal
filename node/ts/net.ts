@@ -4,7 +4,7 @@
 //
 
 import type { ReadonlyDeep } from 'type-fest';
-import Native from '../Native.js';
+import * as Native from './Native.js';
 import {
   cdsiLookup,
   CDSRequestOptionsType,
@@ -22,6 +22,7 @@ import { SvrB } from './net/SvrB.js';
 import { BridgedStringMap, newNativeHandle } from './internal.js';
 export * from './net/CDSI.js';
 export * from './net/Chat.js';
+export * from './net/chat/UnauthMessagesService.js';
 export * from './net/chat/UnauthUsernamesService.js';
 export * from './net/Registration.js';
 export * from './net/SvrB.js';

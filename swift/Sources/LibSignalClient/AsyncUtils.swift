@@ -84,6 +84,14 @@ extension SignalCPromiseOwnedBufferOfc_uchar: PromiseStruct {
     typealias Result = SignalOwnedBuffer
 }
 
+extension SignalCPromiseOwnedBufferOfServiceIdFixedWidthBinaryBytes: PromiseStruct {
+    typealias Result = SignalOwnedBufferOfServiceIdFixedWidthBinaryBytes
+}
+
+extension SignalCPromiseOptionalPairOfc_charu832: PromiseStruct {
+    typealias Result = SignalOptionalPairOfc_charu832
+}
+
 /// A type-erased version of ``Completer``.
 ///
 /// Not for direct use, see Completer instead.

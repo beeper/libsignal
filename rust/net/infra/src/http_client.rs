@@ -15,7 +15,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use static_assertions::assert_impl_all;
 
 use crate::errors::{LogSafeDisplay, TransportConnectError};
-use crate::route::{Connector, HttpRouteFragment, HttpsTlsRoute};
+use crate::route::{Connector, HttpRouteFragment};
 use crate::{AsyncDuplexStream, Connection};
 
 #[derive(displaydoc::Display, Debug)]
@@ -113,13 +113,12 @@ impl AggregatingHttp2Client {
         Ok((parts, content))
     }
 }
-pub(crate) struct Http2Connector<C> {
-    pub inner: C,
+pub struct Http2Connector {
     pub max_response_size: usize,
 }
 
-#[derive(derive_more::From, displaydoc::Display)]
-pub(crate) enum HttpConnectError {
+#[derive(Debug, derive_more::From, displaydoc::Display)]
+pub enum HttpConnectError {
     /// {0}
     Transport(#[from] TransportConnectError),
     /// HTTP handshake failed
@@ -129,41 +128,29 @@ pub(crate) enum HttpConnectError {
 assert_impl_all!(TransportConnectError: LogSafeDisplay);
 impl LogSafeDisplay for HttpConnectError {}
 
-impl<T, C, Inner> Connector<HttpsTlsRoute<T>, Inner> for Http2Connector<C>
+impl<Inner> Connector<HttpRouteFragment, Inner> for Http2Connector
 where
-    C: Connector<
-            T,
-            Inner,
-            Connection: Connection + Send + AsyncDuplexStream + 'static,
-            Error = TransportConnectError,
-        > + Sync,
-    Inner: Send,
-    T: Send,
+    Inner: Connection + AsyncDuplexStream + Send + 'static,
 {
     type Connection = AggregatingHttp2Client;
-
     type Error = HttpConnectError;
 
     async fn connect_over(
         &self,
         over: Inner,
-        route: HttpsTlsRoute<T>,
+        route: HttpRouteFragment,
         log_tag: &str,
     ) -> Result<Self::Connection, Self::Error> {
-        let HttpsTlsRoute {
-            fragment:
-                HttpRouteFragment {
-                    host_header,
-                    path_prefix,
-                    front_name: _,
-                },
-            inner: tls_target,
+        let HttpRouteFragment {
+            host_header,
+            path_prefix,
+            front_name: _,
         } = route;
 
-        let ssl_stream = self.inner.connect_over(over, tls_target, log_tag).await?;
-        let info = ssl_stream.transport_info();
-        let io = TokioIo::new(ssl_stream);
-        let (sender, connection) = http2::handshake::<_, _, Full<Bytes>>(TokioExecutor::new(), io)
+        let info = over.transport_info();
+        let io = TokioIo::new(over);
+        let (sender, connection) = http2::Builder::new(TokioExecutor::new())
+            .handshake::<_, Full<Bytes>>(io)
             .await
             .map_err(|_: hyper::Error| HttpConnectError::HttpHandshake)?;
 
@@ -206,10 +193,10 @@ mod test {
     use super::*;
     use crate::host::Host;
     use crate::route::{
-        ConnectError, ConnectionOutcomeParams, ConnectionOutcomes, TcpRoute, ThrottlingConnector,
-        TlsRoute, TlsRouteFragment,
+        ComposedConnector, ConnectError, ConnectionOutcomeParams, ConnectionOutcomes,
+        HttpsTlsRoute, TcpRoute, ThrottlingConnector, TlsRoute, TlsRouteFragment,
     };
-    use crate::tcp_ssl::testutil::{SERVER_CERTIFICATE, SERVER_HOSTNAME};
+    use crate::tcp_ssl::testutil::{SERVER_CERTIFICATE, SERVER_HOSTNAME, localhost_https_server};
 
     const FAKE_RESPONSE: &str = "RESPONSE";
     const FAKE_RESPONSE_HEADER: (HeaderName, HeaderValue) = (
@@ -228,28 +215,24 @@ mod test {
     fn localhost_https_server_with_fake_response(
         write_request_to: std::sync::mpsc::Sender<RequestInfo>,
     ) -> (SocketAddr, impl Future<Output = ()>) {
-        let filter = warp::any()
-            .map(|| {
-                warp::reply::with_header(
-                    FAKE_RESPONSE,
-                    FAKE_RESPONSE_HEADER.0.as_str(),
-                    FAKE_RESPONSE_HEADER.1.as_bytes(),
-                )
-            })
-            .with(warp::log::custom(move |info| {
-                let _ignore_error = write_request_to.send(RequestInfo {
-                    headers: info.request_headers().clone(),
-                    method: info.method().clone(),
-                    path: info.path().to_string(),
-                    version: info.version(),
-                });
-            }));
-        let server = warp::serve(filter)
-            .tls()
-            .cert(SERVER_CERTIFICATE.cert.pem())
-            .key(SERVER_CERTIFICATE.key_pair.serialize_pem());
-
-        server.bind_ephemeral((Ipv6Addr::LOCALHOST, 0))
+        localhost_https_server(
+            warp::any()
+                .map(|| {
+                    warp::reply::with_header(
+                        FAKE_RESPONSE,
+                        FAKE_RESPONSE_HEADER.0.as_str(),
+                        FAKE_RESPONSE_HEADER.1.as_bytes(),
+                    )
+                })
+                .with(warp::log::custom(move |info| {
+                    let _ignore_error = write_request_to.send(RequestInfo {
+                        headers: info.request_headers().clone(),
+                        method: info.method().clone(),
+                        path: info.path().to_string(),
+                        version: info.version(),
+                    });
+                })),
+        )
     }
 
     fn outcome_record_for_testing()
@@ -279,14 +262,11 @@ mod test {
         log_tag: &str,
     ) -> Result<AggregatingHttp2Client, HttpError> {
         let mut outcome_record_snapshot = outcome_record.read().await.clone();
-        let tls_connector = crate::route::ComposedConnector::new(
+        let tls_connector = ComposedConnector::new(
             ThrottlingConnector::new(crate::tcp_ssl::StatelessTls, 1),
             crate::tcp_ssl::StatelessTcp,
         );
-        let connector = Http2Connector {
-            inner: tls_connector,
-            max_response_size,
-        };
+        let connector = ComposedConnector::new(Http2Connector { max_response_size }, tls_connector);
         let (result, updates) = crate::route::connect_resolved(
             targets.into_iter().collect(),
             &mut outcome_record_snapshot,
@@ -346,7 +326,7 @@ mod test {
                         root_certs: crate::certs::RootCertificates::FromDer(Cow::Borrowed(
                             SERVER_CERTIFICATE.cert.der(),
                         )),
-                        alpn: None,
+                        alpn: Some(crate::Alpn::Http2),
                         min_protocol_version: None,
                     },
                     inner: TcpRoute {

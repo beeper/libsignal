@@ -36,7 +36,7 @@ const SECONDS_PER_HOUR: u64 = 60 * 60;
 /// These are intended to be cheaply cached -- it's not a problem to regenerate them, but they're
 /// expected to be reused frequently enough that they're *worth* caching, given that they're only
 /// rotated every 24 hours.
-#[derive(Serialize, Deserialize, PartialDefault)]
+#[derive(Clone, Serialize, Deserialize, PartialDefault)]
 pub struct GroupSendDerivedKeyPair {
     reserved: ReservedByte,
     key_pair: zkcredential::endorsements::ServerDerivedKeyPair,
@@ -69,7 +69,7 @@ impl GroupSendDerivedKeyPair {
 ///
 /// The group server may cache this for a particular group as long as the group membership does not
 /// change (being careful of expiration, of course). It is the same for every requesting member.
-#[derive(Serialize, Deserialize, PartialDefault, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialDefault, Debug)]
 pub struct GroupSendEndorsementsResponse {
     reserved: ReservedByte,
     endorsements: zkcredential::endorsements::EndorsementResponse,
@@ -197,10 +197,12 @@ impl GroupSendEndorsementsResponse {
         // We have to compute the ciphertexts (expensive), but we can skip the second point (which
         // would be much more expensive).
         // We zip the results together with a set of indexes so we can un-sort the results later.
+        let uid_sho_seed = crypto::uid_struct::UidStruct::seed_M1();
         let mut member_points: Vec<(usize, curve25519_dalek_signal::RistrettoPoint)> = user_ids
             .into_iter()
             .map(|user_id| {
-                group_params.uid_enc_key_pair.a1 * crypto::uid_struct::UidStruct::calc_M1(user_id)
+                group_params.uid_enc_key_pair.a1
+                    * crypto::uid_struct::UidStruct::calc_M1(uid_sho_seed.clone(), user_id)
             })
             .enumerate()
             .collect();
@@ -256,10 +258,12 @@ impl GroupSendEndorsementsResponse {
         // We have to compute the ciphertexts (expensive), but we can skip the second point (which
         // would be much more expensive).
         // We zip the results together with a set of indexes so we can un-sort the results later.
+        let uid_sho_seed = crypto::uid_struct::UidStruct::seed_M1();
         let mut member_points: Vec<(usize, curve25519_dalek_signal::RistrettoPoint)> = user_ids
             .into_par_iter()
             .map(|user_id| {
-                group_params.uid_enc_key_pair.a1 * crypto::uid_struct::UidStruct::calc_M1(user_id)
+                group_params.uid_enc_key_pair.a1
+                    * crypto::uid_struct::UidStruct::calc_M1(uid_sho_seed.clone(), user_id)
             })
             .enumerate()
             .collect();
@@ -505,7 +509,7 @@ impl GroupSendEndorsement {
 ///
 /// This can be cached by the client for repeatedly sending to the same recipient,
 /// but must be converted to a GroupSendFullToken before sending it to the server.
-#[derive(Serialize, Deserialize, PartialDefault)]
+#[derive(Clone, Serialize, Deserialize, PartialDefault)]
 pub struct GroupSendToken {
     reserved: ReservedByte,
     raw_token: Box<[u8]>,
@@ -536,7 +540,7 @@ impl GroupSendToken {
 /// A token representing an endorsement, along with its expiration.
 ///
 /// This will be serialized and sent to the chat server for verification.
-#[derive(Serialize, Deserialize, PartialDefault)]
+#[derive(Clone, Serialize, Deserialize, PartialDefault)]
 pub struct GroupSendFullToken {
     reserved: ReservedByte,
     raw_token: Box<[u8]>,
@@ -574,9 +578,10 @@ impl GroupSendFullToken {
             "wrong key pair used for this token"
         );
 
+        let uid_sho_seed = crypto::uid_struct::UidStruct::seed_M1();
         let user_id_sum: curve25519_dalek_signal::RistrettoPoint = user_ids
             .into_iter()
-            .map(crypto::uid_struct::UidStruct::calc_M1)
+            .map(|user_id| crypto::uid_struct::UidStruct::calc_M1(uid_sho_seed.clone(), user_id))
             .sum();
 
         key_pair

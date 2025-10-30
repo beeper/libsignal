@@ -1,7 +1,5 @@
-v0.84.0
+v0.85.2
 
-- keytrans: Verify signatures from all auditors
+- Rust: All serializable zkgroup types are now marked as Clone, since you could get the same effect from serializing and deserializing.
 
-- Java: Fixed `IdentityKeyPair(byte[])` to correctly declare that it throws InvalidKeyException.
-
-- Node: Add BackupsJsonExporter, to convert Backup proto objects to human-readable JSON for export.
+- Node: Remove a stray import from `chai` in a non-testing file.

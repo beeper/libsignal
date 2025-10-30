@@ -61,9 +61,6 @@ public object NativeTesting {
   public external fun FakeChatResponse_Destroy(handle: ObjectHandle): Unit
 
   @JvmStatic
-  public external fun FakeChatSentRequest_Destroy(handle: ObjectHandle): Unit
-
-  @JvmStatic
   public external fun FakeChatServer_Destroy(handle: ObjectHandle): Unit
 
   @JvmStatic
@@ -127,7 +124,7 @@ public object NativeTesting {
   @JvmStatic
   public external fun TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted(chat: ObjectHandle): Unit
   @JvmStatic
-  public external fun TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(asyncRuntime: ObjectHandle, chat: ObjectHandle): CompletableFuture<ObjectHandle>
+  public external fun TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(asyncRuntime: ObjectHandle, chat: ObjectHandle): CompletableFuture<Pair<ObjectHandle, Long>?>
   @JvmStatic
   public external fun TESTING_FakeChatRemoteEnd_SendRawServerRequest(chat: ObjectHandle, bytes: ByteArray): Unit
   @JvmStatic
@@ -136,10 +133,6 @@ public object NativeTesting {
   public external fun TESTING_FakeChatRemoteEnd_SendServerResponse(chat: ObjectHandle, response: ObjectHandle): Unit
   @JvmStatic
   public external fun TESTING_FakeChatResponse_Create(id: Long, status: Int, message: String, headers: Array<Object>, body: ByteArray?): ObjectHandle
-  @JvmStatic
-  public external fun TESTING_FakeChatSentRequest_RequestId(request: ObjectHandle): Long
-  @JvmStatic
-  public external fun TESTING_FakeChatSentRequest_TakeHttpRequest(request: ObjectHandle): ObjectHandle
   @JvmStatic
   public external fun TESTING_FakeChatServer_Create(): ObjectHandle
   @JvmStatic
@@ -162,6 +155,8 @@ public object NativeTesting {
   public external fun TESTING_FutureSuccess(asyncRuntime: ObjectHandle, input: Int): CompletableFuture<Int>
   @JvmStatic
   public external fun TESTING_FutureThrowsCustomErrorType(asyncRuntime: ObjectHandle): CompletableFuture<Void?>
+  @JvmStatic
+  public external fun TESTING_FutureThrowsPoisonErrorType(asyncRuntime: ObjectHandle): CompletableFuture<Void?>
   @JvmStatic
   public external fun TESTING_InputStreamReadIntoZeroLengthSlice(capsAlphabetInput: InputStream): ByteArray
   @JvmStatic
@@ -225,7 +220,7 @@ public object NativeTesting {
   @JvmStatic
   public external fun TESTING_RegistrationSessionInfoConvert(): ObjectHandle
   @JvmStatic
-  public external fun TESTING_ReturnPair(): Pair<*, *>
+  public external fun TESTING_ReturnPair(): Pair<Int, String>
   @JvmStatic
   public external fun TESTING_ReturnStringArray(): Array<Object>
   @JvmStatic

@@ -584,7 +584,7 @@ internal object Native {
   public external fun HttpRequest_new(method: String, path: String, bodyAsSlice: ByteArray?): ObjectHandle
 
   @JvmStatic @Throws(Exception::class)
-  public external fun IdentityKeyPair_Deserialize(input: ByteArray): Pair<*, *>
+  public external fun IdentityKeyPair_Deserialize(input: ByteArray): Pair<ObjectHandle, ObjectHandle>
   @JvmStatic
   public external fun IdentityKeyPair_Serialize(publicKey: ObjectHandle, privateKey: ObjectHandle): ByteArray
   @JvmStatic @Throws(Exception::class)
@@ -1269,7 +1269,11 @@ internal object Native {
   @JvmStatic
   public external fun UnauthenticatedChatConnection_look_up_username_hash(asyncRuntime: ObjectHandle, chat: ObjectHandle, hash: ByteArray): CompletableFuture<UUID?>
   @JvmStatic
+  public external fun UnauthenticatedChatConnection_look_up_username_link(asyncRuntime: ObjectHandle, chat: ObjectHandle, uuid: UUID, entropy: ByteArray): CompletableFuture<Pair<String, ByteArray>?>
+  @JvmStatic
   public external fun UnauthenticatedChatConnection_send(asyncRuntime: ObjectHandle, chat: ObjectHandle, httpRequest: ObjectHandle, timeoutMillis: Int): CompletableFuture<Object>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_send_multi_recipient_message(asyncRuntime: ObjectHandle, chat: ObjectHandle, payload: ByteArray, timestamp: Long, auth: ByteArray?, onlineOnly: Boolean, isUrgent: Boolean): CompletableFuture<Array<Object>>
 
   @JvmStatic @Throws(Exception::class)
   public external fun UnidentifiedSenderMessageContent_Deserialize(data: ByteArray): ObjectHandle

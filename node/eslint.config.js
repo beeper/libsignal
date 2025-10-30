@@ -102,6 +102,12 @@ const config = defineConfig(
 
       'import/prefer-default-export': 'off',
       'import/enforce-node-protocol-usage': ['error', 'always'],
+      'import/no-extraneous-dependencies': [
+        'error',
+        {
+          devDependencies: ['ts/test/**'],
+        },
+      ],
       'prefer-template': 'error',
       '@typescript-eslint/no-require-imports': 'error',
       '@typescript-eslint/consistent-type-assertions': 'error',
@@ -164,6 +170,7 @@ const config = defineConfig(
         '**/Native.js',
         '**/zkgroup.js',
         '**/zkgroup.d.ts',
+        'ts/node-gyp-build.d.ts',
       ],
     },
   ]);

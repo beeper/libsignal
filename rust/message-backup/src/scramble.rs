@@ -300,8 +300,7 @@ impl Visit<Scrambler> for proto::account_data::AccountSettings {
             special_fields: _,
             showSealedSenderIndicators: _,
             defaultSentMediaQuality: _,
-            mobileAutoDownloadSettings: _,
-            wifiAutoDownloadSettings: _,
+            autoDownloadSettings: _,
             screenLockTimeoutMinutes: _,
         } = self;
 
@@ -2099,10 +2098,12 @@ impl Visit<Scrambler> for proto::Poll {
             allowMultiple: _,
             options,
             hasEnded: _,
+            reactions,
             special_fields: _,
         } = self;
         question.randomize(&mut visitor.rng);
         options.accept(visitor);
+        reactions.accept(visitor);
     }
 }
 

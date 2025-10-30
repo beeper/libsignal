@@ -15,6 +15,7 @@ use libsignal_net_chat::api::registration::PushToken;
 use libsignal_protocol::*;
 use paste::paste;
 use uuid::Uuid;
+use zkgroup::ZkGroupDeserializationFailure;
 
 use super::*;
 use crate::io::{InputStream, SyncInputStream};
@@ -360,6 +361,25 @@ impl SimpleArgTypeInfo for AccountEntropyPool {
         string.parse().map_err(|e: InvalidAccountEntropyPool| {
             IllegalArgumentError::new(format!("bad account entropy pool: {e}")).into()
         })
+    }
+}
+
+impl SimpleArgTypeInfo for libsignal_net_chat::api::messages::MultiRecipientSendAuthorization {
+    type ArgType = BorrowedSliceOf<c_uchar>;
+
+    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+        let slice = unsafe { foreign.as_slice()? };
+        // If we ever have more than two options, we won't be able to just use "empty" for one of
+        // them, but for now this is convenient.
+        if slice.is_empty() {
+            Ok(Self::Story)
+        } else {
+            let token =
+                zkgroup::deserialize(slice).map_err(|_: ZkGroupDeserializationFailure| {
+                    IllegalArgumentError::new("bad GroupSendFullToken")
+                })?;
+            Ok(Self::Group(token))
+        }
     }
 }
 
@@ -748,6 +768,50 @@ impl ResultTypeInfo for &[ChallengeOption] {
     }
 }
 
+impl ResultTypeInfo for Vec<ServiceId> {
+    type ResultType = OwnedBufferOf<ServiceIdFixedWidthBinaryBytes>;
+
+    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
+        Ok(self
+            .into_iter()
+            .map(|id| id.service_id_fixed_width_binary())
+            .collect::<Box<[_]>>()
+            .into())
+    }
+}
+
+impl ResultTypeInfo for &'_ [libsignal_net_chat::api::messages::MismatchedDeviceError] {
+    type ResultType = OwnedBufferOf<FfiMismatchedDevicesError>;
+
+    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
+        Ok(self
+            .iter()
+            .map(|entry| FfiMismatchedDevicesError {
+                account: entry.account.service_id_fixed_width_binary(),
+                missing_devices: entry
+                    .missing_devices
+                    .iter()
+                    .map(|&id| id.into())
+                    .collect::<Box<[_]>>()
+                    .into(),
+                extra_devices: entry
+                    .extra_devices
+                    .iter()
+                    .map(|&id| id.into())
+                    .collect::<Box<[_]>>()
+                    .into(),
+                stale_devices: entry
+                    .stale_devices
+                    .iter()
+                    .map(|&id| id.into())
+                    .collect::<Box<[_]>>()
+                    .into(),
+            })
+            .collect::<Box<[_]>>()
+            .into())
+    }
+}
+
 impl ResultTypeInfo for Box<[libsignal_net_chat::api::registration::RegisterResponseBadge]> {
     type ResultType = OwnedBufferOf<FfiRegisterResponseBadge>;
 
@@ -938,6 +1002,31 @@ impl<A: ResultTypeInfo, B: ResultTypeInfo> ResultTypeInfo for (A, B) {
         Ok(PairOf {
             first: self.0.convert_into()?,
             second: self.1.convert_into()?,
+        })
+    }
+}
+
+impl<A: ResultTypeInfo, B: ResultTypeInfo> ResultTypeInfo for Option<(A, B)>
+// We can simplify this when our MSRV is 1.88, when pointers become Default.
+// Meanwhile, we'll rely on the fact that every C type is zeroable.
+where
+    A::ResultType: zerocopy::FromZeros,
+    B::ResultType: zerocopy::FromZeros,
+{
+    type ResultType = OptionalPairOf<A::ResultType, B::ResultType>;
+
+    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
+        let Some(value) = self else {
+            return Ok(OptionalPairOf {
+                present: false,
+                first: zerocopy::FromZeros::new_zeroed(),
+                second: zerocopy::FromZeros::new_zeroed(),
+            });
+        };
+        Ok(OptionalPairOf {
+            present: true,
+            first: value.0.convert_into()?,
+            second: value.1.convert_into()?,
         })
     }
 }
@@ -1134,6 +1223,7 @@ macro_rules! ffi_arg_type {
     (RegistrationCreateSessionRequest) => (ffi::FfiRegistrationCreateSessionRequest);
     (RegistrationPushToken) => (*const std::ffi::c_char);
     (SignedPublicPreKey) => (ffi::FfiSignedPublicPreKey);
+    (MultiRecipientSendAuthorization) => (ffi_arg_type!(&[u8]));
     (&SignalFfiError) => (ffi::UnwindSafeArg<*const SignalFfiError>);
     (&[u8; $len:expr]) => (*const [u8; $len]);
     (Option<&[u8; $len:expr]>) => (*const [u8; $len]);
@@ -1184,6 +1274,7 @@ macro_rules! ffi_result_type {
     // Like Result, we can't use `:ty` here because we need the resulting tokens to be matched
     // recursively. We can at least match several tokens in the second component though.
     (($a:tt, $($b:tt)+)) => (ffi::PairOf<ffi_result_type!($a), ffi_result_type!($($b)+)>);
+    (Option<($a:tt, $($b:tt)+)>) => (ffi::OptionalPairOf<ffi_result_type!($a), ffi_result_type!($($b)+)>);
 
     (u8) => (u8);
     (u16) => (u16);
@@ -1210,6 +1301,8 @@ macro_rules! ffi_result_type {
     (Box<[String]>) => (ffi::StringArray);
     (Box<[Vec<u8>]>) => (ffi::BytestringArray);
     (Box<[ChallengeOption]>) => (ffi_result_type!(Vec<u8>));
+    (Vec<ServiceId>) => (ffi::OwnedBufferOf<libsignal_protocol::ServiceIdFixedWidthBinaryBytes>);
+    (&[MismatchedDeviceError]) => (ffi::OwnedBufferOf<ffi::FfiMismatchedDevicesError>);
     (Option<$typ:ty>) => ($crate::ffi::MutPointer<$typ>);
 
     (LookupResponse) => (ffi::FfiCdsiLookupResponse);

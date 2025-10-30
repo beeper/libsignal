@@ -12,10 +12,16 @@ use libsignal_bridge_macros::{bridge_fn, bridge_io};
 use libsignal_bridge_types::net::chat::*;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
 use libsignal_bridge_types::support::AsType;
+use libsignal_core::ServiceId;
 use libsignal_net::auth::Auth;
 use libsignal_net::chat::{self, ConnectError, LanguageList, Response as ChatResponse, SendError};
 use libsignal_net_chat::api::RequestError;
-use libsignal_net_chat::api::usernames::UnauthenticatedChatApi;
+use libsignal_net_chat::api::messages::{
+    MultiRecipientMessageResponse, MultiRecipientSendAuthorization, MultiRecipientSendFailure,
+    UnauthenticatedChatApi as _,
+};
+use libsignal_net_chat::api::usernames::UnauthenticatedChatApi as _;
+use libsignal_protocol::Timestamp;
 use uuid::Uuid;
 
 use crate::support::*;
@@ -127,6 +133,48 @@ async fn UnauthenticatedChatConnection_look_up_username_hash(
         .as_typed(|chat| chat.look_up_username_hash(&hash))
         .await?
         .map(|aci| aci.into()))
+}
+
+#[bridge_io(TokioAsyncContext)]
+async fn UnauthenticatedChatConnection_look_up_username_link(
+    chat: &UnauthenticatedChatConnection,
+    uuid: Uuid,
+    entropy: Box<[u8]>,
+) -> Result<Option<(String, [u8; 32])>, RequestError<::usernames::UsernameLinkError>> {
+    let entropy = entropy[..].try_into().map_err(|_| {
+        RequestError::Other(::usernames::UsernameLinkError::InvalidEntropyDataLength)
+    })?;
+    Ok(chat
+        .as_typed(|chat| chat.look_up_username_link(uuid, &entropy))
+        .await?
+        .map(|username| {
+            // Return both the username and the hash now; we already did the work of computing the
+            // hash when validating the decrypted username.
+            (username.to_string(), username.hash())
+        }))
+}
+
+#[bridge_io(TokioAsyncContext)]
+async fn UnauthenticatedChatConnection_send_multi_recipient_message(
+    chat: &UnauthenticatedChatConnection,
+    payload: Box<[u8]>,
+    timestamp: Timestamp,
+    auth: MultiRecipientSendAuthorization,
+    online_only: bool,
+    is_urgent: bool,
+) -> Result<Vec<ServiceId>, RequestError<MultiRecipientSendFailure>> {
+    let MultiRecipientMessageResponse { unregistered_ids } = chat
+        .as_typed(|chat| {
+            chat.send_multi_recipient_message(
+                payload.into(),
+                timestamp,
+                auth,
+                online_only,
+                is_urgent,
+            )
+        })
+        .await?;
+    Ok(unregistered_ids)
 }
 
 #[bridge_io(TokioAsyncContext)]
