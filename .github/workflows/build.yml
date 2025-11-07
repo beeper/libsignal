@@ -12,7 +12,8 @@ defaults:
 
 env:
   RUSTFLAGS: '-Awarnings -Ctarget-feature=-crt-static --cfg aes_armv8 --cfg polyval_armv8 --cfg curve25519_dalek_bits="64"'
-  IPHONEOS_DEPLOYMENT_TARGET: 17.0
+  IPHONEOS_DEPLOYMENT_TARGET: 18.0
+  MACOSX_DEPLOYMENT_TARGET: 12.0
 
 jobs:
   libsignal-ffi:
