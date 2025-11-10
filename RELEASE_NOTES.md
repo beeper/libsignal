@@ -1,5 +1,4 @@
-v0.85.2
+v0.86.2
 
-- Rust: All serializable zkgroup types are now marked as Clone, since you could get the same effect from serializing and deserializing.
-
-- Node: Remove a stray import from `chai` in a non-testing file.
+- backups: Include more account fields into the exported JSON
+- backups: Throw validator errors if multiple contacts have the same username (a case-insensitive check)

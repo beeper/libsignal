@@ -116,6 +116,7 @@ message AccountData {
     AutoDownloadSettings autoDownloadSettings = 24;
     reserved /* wifiAutoDownloadSettings */ 25;
     optional uint32 screenLockTimeoutMinutes = 26; // If unset, consider screen lock to be disabled.
+    optional bool pinReminders = 27; // If unset, consider pin reminders to be enabled.
   }
 
   message SubscriberData {
@@ -153,6 +154,8 @@ message AccountData {
   IAPSubscriberData backupsSubscriberData = 10;
   string svrPin = 11;
   AndroidSpecificSettings androidSpecificSettings = 12;
+  string bioText = 13;
+  string bioEmoji = 14;
 }
 
 message Recipient {

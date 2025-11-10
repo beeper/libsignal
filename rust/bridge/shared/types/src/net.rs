@@ -13,7 +13,7 @@ use libsignal_net::connect_state::{
     SUGGESTED_CONNECT_CONFIG, SUGGESTED_TLS_PRECONNECT_LIFETIME,
 };
 use libsignal_net::enclave::{EnclaveEndpoint, EnclaveKind};
-use libsignal_net::env::{Env, UserAgent};
+use libsignal_net::env::{Env, StaticIpOrder, UserAgent};
 use libsignal_net::infra::dns::DnsResolver;
 use libsignal_net::infra::route::{
     ConnectionProxyConfig, DirectOrProxyMode, DirectOrProxyProvider, RouteProvider,
@@ -21,9 +21,10 @@ use libsignal_net::infra::route::{
 };
 use libsignal_net::infra::tcp_ssl::{InvalidProxyConfig, TcpSslConnector};
 use libsignal_net::infra::{AsHttpHeader as _, EnableDomainFronting};
+use rand::TryRngCore as _;
 
 pub use self::remote_config::BuildVariant;
-use self::remote_config::{RemoteConfig, RemoteConfigKey};
+use self::remote_config::RemoteConfig;
 use crate::*;
 
 pub mod cdsi;
@@ -149,18 +150,15 @@ impl ConnectionManager {
         let (network_change_event_tx, network_change_event_rx) = ::tokio::sync::watch::channel(());
         let user_agent = UserAgent::with_libsignal_version(user_agent);
 
-        let dns_resolver =
-            DnsResolver::new_with_static_fallback(env.static_fallback(), &network_change_event_rx);
+        let dns_resolver = DnsResolver::new_with_static_fallback(
+            env.static_fallback(StaticIpOrder::Shuffled(&mut rand::rngs::OsRng.unwrap_err())),
+            &network_change_event_rx,
+        );
         let transport_connector =
             std::sync::Mutex::new(TcpSslConnector::new_direct(dns_resolver.clone()));
         let remote_config = RemoteConfig::new(remote_config, build_variant);
-        let enforce_minimum_tls = if remote_config.is_enabled(RemoteConfigKey::EnforceMinimumTls) {
-            EnforceMinimumTls::Yes
-        } else {
-            EnforceMinimumTls::No
-        };
         let endpoints = std::sync::Mutex::new(
-            EndpointConnections::new(&env, false, enforce_minimum_tls).into(),
+            EndpointConnections::new(&env, false, EnforceMinimumTls::Yes).into(),
         );
         Self {
             env,
@@ -213,17 +211,7 @@ impl ConnectionManager {
     /// This is not itself a network change event; existing working connections are expected to
     /// continue to work, and existing failing connections will continue to fail.
     pub fn set_censorship_circumvention_enabled(&self, enabled: bool) {
-        let enforce_minimum_tls = if self
-            .remote_config
-            .lock()
-            .expect("not poisoned")
-            .is_enabled(RemoteConfigKey::EnforceMinimumTls)
-        {
-            EnforceMinimumTls::Yes
-        } else {
-            EnforceMinimumTls::No
-        };
-        let new_endpoints = EndpointConnections::new(&self.env, enabled, enforce_minimum_tls);
+        let new_endpoints = EndpointConnections::new(&self.env, enabled, EnforceMinimumTls::Yes);
         *self.endpoints.lock().expect("not poisoned") = Arc::new(new_endpoints);
     }
 

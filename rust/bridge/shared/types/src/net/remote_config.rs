@@ -61,34 +61,49 @@ pub enum BuildVariant {
     Beta = 1,
 }
 
+macro_rules! define_keys {
+    (
+        $(#[$m:meta])*
+        $v:vis enum RemoteConfigKey {
+            $(
+                $(#[$attrs:meta])*
+                $name:ident => $key:expr $(,)?
+            )*
+        }
+    ) => {
+        $(#[$m])*
+        $v enum RemoteConfigKey {
+            $($(#[$attrs])* $name,)*
+        }
+
+        impl RemoteConfigKey {
+            #[doc = concat!("ts: export const NetRemoteConfigKeys = [", $("'", $key, "', "),* ,"] as const;")]
+            pub const KEYS: &[&str] = &[$($key),*];
+
+            fn raw(&self) -> &'static str {
+                match self {
+                    $(Self::$name => $key,)*
+                }
+            }
+        }
+    };
+}
+
+define_keys! {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, strum::EnumCount, strum::EnumIter)]
 pub enum RemoteConfigKey {
     /// How long to wait for a response to a chat request before checking whether the connection is
     /// still active.
-    ChatRequestConnectionCheckTimeoutMilliseconds,
+    ChatRequestConnectionCheckTimeoutMilliseconds => "chatRequestConnectionCheckTimeoutMillis",
     /// Whether or not to enforce the hardcoded minimum TLS versions for Chat and CDSI endpoints.
-    // TODO: Remove after enforcement has been enabled in production long enough without reported
-    // issues.
-    EnforceMinimumTls,
     /// Determines whether a chat websocket connection attempts to negotiate permessage-deflate support.
-    EnableChatPermessageDeflate,
+    EnableChatPermessageDeflate => "chatPermessageDeflate",
+}
 }
 
 pub enum RemoteConfigValue {
     Disabled,
     Enabled(Arc<str>),
-}
-
-impl RemoteConfigKey {
-    fn raw(&self) -> &'static str {
-        match self {
-            Self::ChatRequestConnectionCheckTimeoutMilliseconds => {
-                "chatRequestConnectionCheckTimeoutMillis"
-            }
-            Self::EnforceMinimumTls => "enforceMinimumTls",
-            Self::EnableChatPermessageDeflate => "chatPermessageDeflate",
-        }
-    }
 }
 
 impl std::fmt::Display for RemoteConfigKey {

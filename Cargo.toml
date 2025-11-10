@@ -37,7 +37,7 @@ default-members = [
 resolver = "2" # so that our dev-dependency features don't leak into products
 
 [workspace.package]
-version = "0.85.2"
+version = "0.86.2"
 authors = ["Signal Messenger LLC"]
 license = "AGPL-3.0-only"
 rust-version = "1.85"
@@ -140,6 +140,7 @@ hmac = "0.12.0"
 hpke-rs = "0.3.0"
 hpke-rs-crypto = "0.3.0"
 http = "1.3.0"
+http-body = "1.0.1"
 http-body-util = "0.1.3"
 hyper = "1.7"
 hyper-util = "0.1.17"
@@ -206,9 +207,9 @@ tokio-socks = "0.5.2"
 tokio-stream = "0.1.16"
 tokio-tungstenite = "0.27.0"
 tokio-util = "0.7.11"
-tonic = "0.13.1"
+tonic = { version = "0.13.1", default-features = false }
 tonic-build = "0.13.1"
-tower = "0.5.2"
+tower-service = "0.3.3"
 tungstenite = "0.27.0"
 unicode-segmentation = "1.12.0"
 url = "2.4.1"
