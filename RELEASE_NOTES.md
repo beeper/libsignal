@@ -1,4 +1,3 @@
-v0.86.2
+v0.86.4
 
-- backups: Include more account fields into the exported JSON
-- backups: Throw validator errors if multiple contacts have the same username (a case-insensitive check)
+backups: Support latest backup.proto definitions
