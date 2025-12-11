@@ -18,7 +18,7 @@ use crate::route::{Connector, DirectOrProxyMode, TcpRoute, TlsRouteFragment};
 #[cfg(feature = "dev-util")]
 #[allow(unused_imports)]
 use crate::utils::development_only_enable_nss_standard_debug_interop;
-use crate::{Alpn, AsyncDuplexStream, Connection};
+use crate::{Alpn, AsyncDuplexStream, Connection, OverrideNagleAlgorithm};
 
 pub mod proxy;
 
@@ -95,7 +95,11 @@ impl Connector<TcpRoute<IpAddr>, ()> for StatelessTcp {
         route: TcpRoute<IpAddr>,
         log_tag: &str,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> {
-        let TcpRoute { address, port } = route;
+        let TcpRoute {
+            address,
+            port,
+            override_nagle_algorithm,
+        } = route;
 
         async move {
             let start = tokio::time::Instant::now();
@@ -106,7 +110,7 @@ impl Connector<TcpRoute<IpAddr>, ()> for StatelessTcp {
             .await
             .map_err(|_| {
                 let elapsed = tokio::time::Instant::now() - start;
-                log::warn!("{log_tag}: TCP connection timed out after {elapsed:?}");
+                log::warn!("[{log_tag}] TCP connection timed out after {elapsed:?}");
                 TransportConnectError::TcpConnectionFailed
             })?
             .map_err(|e| {
@@ -115,10 +119,18 @@ impl Connector<TcpRoute<IpAddr>, ()> for StatelessTcp {
                 //   and it takes a long time to rollout logging, so let's just add it now.
                 let os_error = e.raw_os_error();
                 log::info!(
-                    "{log_tag}: TCP connection failed: kind={error_kind:?}, errno={os_error:?}"
+                    "[{log_tag}] TCP connection failed: kind={error_kind:?}, errno={os_error:?}"
                 );
                 TransportConnectError::TcpConnectionFailed
             })?;
+            match override_nagle_algorithm {
+                OverrideNagleAlgorithm::UseSystemDefault => {}
+                OverrideNagleAlgorithm::OverrideToOff => {
+                    if let Err(e) = result.set_nodelay(true) {
+                        log::info!("[{log_tag}] failed to set TCP_NODELAY: {e}");
+                    }
+                }
+            }
             #[cfg(target_os = "macos")]
             let result = crate::stream::WorkaroundWriteBugDuplexStream::new(result);
             Ok(result)
@@ -237,7 +249,7 @@ pub(crate) mod testutil {
     /// unfortunately, `warp` uses a lot of non-public and unnameable types.
     pub(crate) fn localhost_https_server<F>(service: F) -> (SocketAddr, impl Future<Output = ()>)
     where
-        F: warp::Filter<Error = std::convert::Infallible> + Send + Clone + 'static,
+        F: warp::Filter + Send + Clone + 'static,
         <F::Future as TryFuture>::Ok: warp::Reply,
     {
         localhost_https_server_with_custom_service(
@@ -352,6 +364,7 @@ pub(crate) mod testutil {
                         hyper::server::conn::http2::Builder::new(
                             hyper_util::rt::TokioExecutor::new(),
                         )
+                        .enable_connect_protocol()
                         .serve_connection(stream, service)
                         .await
                         .expect("H2 connection completes without error");
@@ -410,13 +423,17 @@ mod test {
     use std::num::NonZero;
 
     use assert_matches::assert_matches;
+    use boring_signal::x509::X509VerifyError;
     use futures_util::future::Either;
     use test_case::test_case;
     use warp::Filter as _;
 
     use super::testutil::*;
     use super::*;
+    use crate::OverrideNagleAlgorithm;
+    use crate::errors::FailedHandshakeReason;
     use crate::route::{ComposedConnector, ConnectorExt as _, TlsRoute};
+    use crate::tcp_ssl::proxy::testutil::PROXY_CERTIFICATE;
 
     #[test_case(Alpn::Http1_1, Alpn::Http2)]
     #[test_case(Alpn::Http2, Alpn::Http1_1)]
@@ -447,6 +464,7 @@ mod test {
                 inner: TcpRoute {
                     address: addr.ip(),
                     port: NonZero::new(addr.port()).expect("successful listener has a valid port"),
+                    override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                 },
             },
             "transport",
@@ -469,6 +487,48 @@ mod test {
         assert!(
             !reason.to_string().contains("NO_APPLICATION_PROTOCOL"),
             "{reason}"
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn cert_mismatch() {
+        // This is overkill for testing a TLS connection, but it's also simple and more realistic
+        // than a generic server socket.
+        let (addr, server) = simple_localhost_https_server();
+        let server = Box::pin(server);
+
+        type StatelessTlsConnector = ComposedConnector<StatelessTls, StatelessTcp>;
+        let connector = StatelessTlsConnector::default();
+        let client = std::pin::pin!(connector.connect(
+            TlsRoute {
+                fragment: TlsRouteFragment {
+                    root_certs: RootCertificates::FromDer(Cow::Borrowed(
+                        // Wrong certificate!
+                        PROXY_CERTIFICATE.cert.der(),
+                    )),
+                    sni: Host::Domain(SERVER_HOSTNAME.into()),
+                    alpn: None,
+                    min_protocol_version: None,
+                },
+                inner: TcpRoute {
+                    address: addr.ip(),
+                    port: NonZero::new(addr.port()).expect("successful listener has a valid port"),
+                    override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
+                },
+            },
+            "transport",
+        ));
+
+        let err = match futures_util::future::select(client, server).await {
+            Either::Left((stream, _server)) => stream.expect_err("should have failed negotiation"),
+            Either::Right(_) => panic!("server exited unexpectedly"),
+        };
+
+        assert_matches!(
+            err,
+            TransportConnectError::SslFailedHandshake(FailedHandshakeReason::Cert(
+                X509VerifyError::DEPTH_ZERO_SELF_SIGNED_CERT
+            ))
         );
     }
 }

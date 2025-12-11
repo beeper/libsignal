@@ -18,7 +18,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use static_assertions::assert_impl_all;
 
 use crate::errors::{LogSafeDisplay, TransportConnectError};
-use crate::route::{Connector, HttpRouteFragment};
+use crate::route::{Connector, HttpRouteFragment, HttpVersion};
 use crate::{AsyncDuplexStream, Connection};
 
 #[derive(displaydoc::Display, Debug)]
@@ -57,18 +57,18 @@ pub struct Http2Client<B> {
 
 impl<B: hyper::body::Body + 'static> Http2Client<B> {
     #[cfg(feature = "tower-service")]
-    fn poll_ready(
+    pub fn poll_ready(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), hyper::Error>> {
         self.service.poll_ready(cx)
     }
 
-    async fn ready(&mut self) -> Result<(), hyper::Error> {
+    pub async fn ready(&mut self) -> Result<(), hyper::Error> {
         self.service.ready().await
     }
 
-    fn send_request(
+    pub fn send_request(
         &mut self,
         mut req: http::Request<B>,
     ) -> impl Future<Output = Result<http::Response<hyper::body::Incoming>, hyper::Error>> + 'static
@@ -223,13 +223,23 @@ pub enum HttpConnectError {
 assert_impl_all!(TransportConnectError: LogSafeDisplay);
 impl LogSafeDisplay for HttpConnectError {}
 
+/// A refinement of [`hyper::body::Body`] that supports our use of hyper's H2 connections.
+pub trait H2Body:
+    hyper::body::Body<Data: Send, Error: Into<Box<dyn Error + Send + Sync>>> + Send + Unpin + 'static
+{
+}
+impl<T> H2Body for T where
+    T: hyper::body::Body<Data: Send, Error: Into<Box<dyn Error + Send + Sync>>>
+        + Send
+        + Unpin
+        + 'static
+{
+}
+
 impl<B, Inner> Connector<HttpRouteFragment, Inner> for Http2Connector<B>
 where
     Inner: Connection + AsyncDuplexStream + Send + 'static,
-    B: hyper::body::Body<Data: Send, Error: Into<Box<dyn Error + Send + Sync>>>
-        + Send
-        + Unpin
-        + 'static,
+    B: H2Body,
 {
     type Connection = Http2Client<B>;
     type Error = HttpConnectError;
@@ -243,8 +253,13 @@ where
         let HttpRouteFragment {
             host_header,
             path_prefix,
+            http_version,
             front_name: _,
         } = route;
+
+        if http_version != Some(HttpVersion::Http2) {
+            return Err(HttpConnectError::InvalidConfig("wrong HTTP version"));
+        }
 
         let info = over.transport_info();
         let io = TokioIo::new(over);
@@ -302,6 +317,7 @@ mod test {
     use warp::Filter as _;
 
     use super::*;
+    use crate::OverrideNagleAlgorithm;
     use crate::host::Host;
     use crate::route::{
         ComposedConnector, ConnectError, ConnectionOutcomeParams, ConnectionOutcomes,
@@ -436,6 +452,7 @@ mod test {
                 fragment: HttpRouteFragment {
                     host_header: Arc::clone(&host),
                     path_prefix: prefix.into(),
+                    http_version: Some(HttpVersion::Http2),
                     front_name: None,
                 },
                 inner: TlsRoute {
@@ -450,6 +467,7 @@ mod test {
                     inner: TcpRoute {
                         address: Ipv6Addr::LOCALHOST.into(),
                         port: NonZeroU16::new(server_addr.port()).unwrap(),
+                        override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                     },
                 },
             }],
@@ -513,6 +531,7 @@ mod test {
                 fragment: HttpRouteFragment {
                     host_header,
                     path_prefix: "".into(),
+                    http_version: Some(HttpVersion::Http2),
                     front_name: None,
                 },
                 inner: TlsRoute {
@@ -527,6 +546,7 @@ mod test {
                     inner: TcpRoute {
                         address: Ipv6Addr::LOCALHOST.into(),
                         port: NonZeroU16::new(server_addr.port()).unwrap(),
+                        override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                     },
                 },
             }],

@@ -7,6 +7,7 @@
 //    self.special_fields.cached_size().set(my_size as u32)
 // which isn't obviously correct! But protobuf doesn't support messages that big anyway.
 #![expect(clippy::cast_possible_truncation)]
+#![expect(clippy::unwrap_used)]
 
 include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
 
@@ -83,3 +84,4 @@ impl_from_oneof!(
     LearnedProfileChatUpdate,
     LearnedProfileChange
 );
+impl_from_oneof!(chat_update_message::Update, PinMessageUpdate, PinMessage);

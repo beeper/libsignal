@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-#![cfg_attr(not(test), warn(clippy::unwrap_used))]
+#![warn(clippy::unwrap_used)]
 
 mod commitments;
 mod guide;
@@ -102,6 +102,59 @@ impl From<LastTreeHead> for StoredTreeHead {
         Self {
             tree_head: Some(tree_head),
             root: root.into(),
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct Versioned<T> {
+    pub item: T,
+    pub version: Option<u32>,
+}
+
+impl<T> From<T> for Versioned<T> {
+    fn from(item: T) -> Self {
+        Self {
+            item,
+            version: None,
+        }
+    }
+}
+
+impl<T> Versioned<T> {
+    pub fn new(item: T, version: u32) -> Self {
+        Self {
+            item,
+            version: Some(version),
+        }
+    }
+
+    pub fn as_ref(&self) -> Versioned<&T> {
+        Versioned {
+            item: &self.item,
+            version: self.version,
+        }
+    }
+
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Versioned<U> {
+        let Versioned { item, version } = self;
+        Versioned {
+            item: f(item),
+            version,
+        }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.item
+    }
+}
+
+impl<T: Clone> Versioned<&T> {
+    pub fn cloned(self) -> Versioned<T> {
+        let Self { item, version } = self;
+        Versioned {
+            item: item.clone(),
+            version,
         }
     }
 }

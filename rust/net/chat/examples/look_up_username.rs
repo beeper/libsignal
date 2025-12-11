@@ -7,11 +7,9 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use clap::{Parser, ValueEnum};
-use either::Either;
 use libsignal_net::certs::SIGNAL_ROOT_CERTIFICATES;
 use libsignal_net::chat::test_support::simple_chat_connection;
 use libsignal_net::connect_state::{ConnectState, ConnectionResources, SUGGESTED_CONNECT_CONFIG};
-use libsignal_net::infra::EnableDomainFronting;
 use libsignal_net::infra::dns::DnsResolver;
 use libsignal_net::infra::host::Host;
 use libsignal_net::infra::http_client::{Http2Client, Http2Connector};
@@ -22,6 +20,7 @@ use libsignal_net::infra::route::{
 };
 use libsignal_net::infra::timeouts::TimeoutOr;
 use libsignal_net::infra::utils::no_network_change_events;
+use libsignal_net::infra::{EnableDomainFronting, OverrideNagleAlgorithm};
 use libsignal_net_chat::api::Unauth;
 use libsignal_net_chat::api::usernames::UnauthenticatedChatApi;
 use nonzero_ext::nonzero;
@@ -33,8 +32,10 @@ struct Config {
     username: String,
 
     #[arg(long)]
+    h2: bool,
+    #[arg(long)]
     use_grpc: bool,
-    #[arg(long, requires = "use_grpc", default_value = "")]
+    #[arg(long, default_value = "")]
     host: String,
 }
 
@@ -55,38 +56,78 @@ async fn main() -> anyhow::Result<()> {
     let Config {
         env,
         username,
+        h2,
         use_grpc,
         host,
     } = Config::parse();
-    let env = match env {
+    let mut env = match env {
         Environment::Staging => libsignal_net::env::STAGING,
         Environment::Production => libsignal_net::env::PROD,
     };
 
-    let chat_connection = if use_grpc {
+    let grpc_connection;
+    let ws_connection;
+
+    if use_grpc {
         let host = if host.is_empty() {
             env.chat_domain_config.connect.hostname
         } else {
             &host
         };
-        Either::Left(Unauth(grpc_connection(host).await?))
+        grpc_connection = Some(Unauth(make_grpc_connection(host).await?));
+        ws_connection = None;
     } else {
-        Either::Right(Unauth(
-            simple_chat_connection(
-                &env,
-                EnableDomainFronting::AllDomains,
-                DirectOrProxyMode::DirectOnly,
-                |_route| true,
-            )
-            .await?,
-        ))
-    };
+        if !host.is_empty() {
+            // This is cheating, but we're just using it for testing anyway.
+            env.chat_domain_config.connect.hostname = Box::leak(host.into_boxed_str());
+            env.chat_domain_config.ip_v4 = &[];
+            env.chat_domain_config.ip_v6 = &[];
+        }
+        if h2 {
+            env.chat_domain_config.connect.http_version = Some(HttpVersion::Http2);
+        }
+        let chat_connection = simple_chat_connection(
+            &env,
+            EnableDomainFronting::No,
+            DirectOrProxyMode::DirectOnly,
+            |_route| true,
+        )
+        .await?;
+        grpc_connection = chat_connection.shared_h2_connection().await.map(Unauth);
+        ws_connection = Some(Unauth(chat_connection));
+    }
 
     let username = usernames::Username::new(&username)?;
-    if let Some(aci) = chat_connection
-        .look_up_username_hash(&username.hash())
-        .await?
-    {
+    let username_hash = username.hash();
+
+    let result = match (grpc_connection, ws_connection) {
+        (Some(grpc_connection), Some(ws_connection)) => {
+            log::info!("trying both gRPC and websocket...");
+            let (grpc_result, ws_result) = futures_util::future::try_join(
+                grpc_connection.look_up_username_hash(&username_hash),
+                ws_connection.look_up_username_hash(&username_hash),
+            )
+            .await?;
+            assert_eq!(
+                grpc_result, ws_result,
+                "connections disagreed on the answer?"
+            );
+            ws_result
+        }
+        (Some(grpc_connection), None) => {
+            log::info!("sending request over gRPC...");
+            grpc_connection
+                .look_up_username_hash(&username_hash)
+                .await?
+        }
+        (None, Some(ws_connection)) => {
+            log::info!("sending request over websocket...");
+            ws_connection.look_up_username_hash(&username_hash).await?
+        }
+        (None, None) => unreachable!("we established at least one connection"),
+    };
+
+    if let Some(aci) = result {
         log::info!("found {}", aci.service_id_string());
     } else {
         log::info!("no user found");
@@ -101,7 +142,7 @@ assert_impl_all!(Http2Client<tonic::body::Body>: tonic::client::GrpcService<toni
 ///
 /// Eventually this should be covered by a libsignal-net-level API like `simple_chat_connection`.
 /// We're not just making an *arbitrary* H2 connection; we're specifically talking to chat-server.
-async fn grpc_connection(host: &str) -> anyhow::Result<Http2Client<tonic::body::Body>> {
+async fn make_grpc_connection(host: &str) -> anyhow::Result<Http2Client<tonic::body::Body>> {
     let host: Arc<str> = Arc::from(host);
     let connect_state = Arc::new(ConnectState::new(SUGGESTED_CONNECT_CONFIG));
     let resolver = DnsResolver::new(&no_network_change_events());
@@ -123,6 +164,7 @@ async fn grpc_connection(host: &str) -> anyhow::Result<Http2Client<tonic::body::
                 DirectOrProxyProvider::direct(DirectTcpRouteProvider::new(
                     host.clone(),
                     nonzero!(443u16),
+                    OverrideNagleAlgorithm::UseSystemDefault,
                 )),
             ),
         ),

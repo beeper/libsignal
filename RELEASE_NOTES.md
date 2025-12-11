@@ -1,3 +1,3 @@
-v0.86.4
+v0.86.8
 
-backups: Support latest backup.proto definitions
+- backups: Support pinned messages

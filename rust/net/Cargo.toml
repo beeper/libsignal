@@ -62,7 +62,8 @@ tokio = { workspace = true, features = ["rt", "time", "macros"] }
 tokio-boring-signal = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 tokio-tungstenite = { workspace = true }
-tungstenite = { workspace = true, features = ["deflate"] }
+tonic = { workspace = true, default-features = false }
+tungstenite = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 visibility = { workspace = true }
 zerocopy = { workspace = true }

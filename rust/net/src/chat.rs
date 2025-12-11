@@ -12,13 +12,14 @@ use ::http::uri::PathAndQuery;
 use ::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use bytes::Bytes;
 use either::Either;
+use libsignal_net_infra::http_client::Http2Client;
 use libsignal_net_infra::route::{
-    Connector, DefaultGetCurrentInterface, HttpsTlsRoute, RouteProvider, RouteProviderExt,
+    DefaultGetCurrentInterface, HttpsTlsRoute, RouteProvider, RouteProviderExt,
     ThrottlingConnector, TransportRoute, UnresolvedHttpsServiceRoute,
     UnresolvedWebsocketServiceRoute, UsePreconnect, WebSocketRoute, WebSocketRouteFragment,
 };
 use libsignal_net_infra::utils::NetworkChangeEvent;
-use libsignal_net_infra::ws::StreamWithResponseHeaders;
+use libsignal_net_infra::ws::{StreamWithResponseHeaders, WebSocketTransportStream};
 use libsignal_net_infra::{
     AsHttpHeader, AsStaticHttpHeader, Connection, IpType, RECOMMENDED_WS_CONFIG, TransportInfo,
 };
@@ -26,10 +27,9 @@ use tokio_tungstenite::WebSocketStream;
 use tungstenite::protocol::WebSocketConfig;
 
 use crate::auth::Auth;
-use crate::connect_state::{
-    ConnectionResources, DefaultTransportConnector, RouteInfo, WebSocketTransportConnectorFactory,
-};
+use crate::connect_state::{ConnectionResources, RouteInfo, WebSocketTransportConnectorFactory};
 use crate::env::UserAgent;
+use crate::infra::OverrideNagleAlgorithm;
 use crate::proto;
 
 mod error;
@@ -170,15 +170,13 @@ pub struct ChatConnection {
     connection_info: ConnectionInfo,
 }
 
-type ChatTransportConnection =
-    <DefaultTransportConnector as Connector<TransportRoute, ()>>::Connection;
+pub type GrpcBody = tonic::body::Body;
 
 /// A connection to the chat service that isn't yet active.
-///
-/// Parameterized over the type of the transport-level connection for testing.
 #[derive(Debug)]
-pub struct PendingChatConnection<T = ChatTransportConnection> {
-    connection: WebSocketStream<T>,
+pub struct PendingChatConnection {
+    connection: WebSocketStream<Box<dyn WebSocketTransportStream>>,
+    shared_h2_connection: Option<Http2Client<GrpcBody>>,
     connect_response_headers: http::HeaderMap,
     ws_config: ws::Config,
     route_info: RouteInfo,
@@ -222,35 +220,27 @@ impl ChatHeaders {
     }
 }
 
-pub enum EnablePermessageDeflate {
-    No,
-    Yes,
-}
-
 pub type ChatServiceRoute = UnresolvedWebsocketServiceRoute;
 
 impl ChatConnection {
     pub async fn start_connect_with<TC>(
         connection_resources: ConnectionResources<'_, TC>,
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
+        endpoint_path: &'static str,
         user_agent: &UserAgent,
         ws_config: self::ws::Config,
-        enable_permessage_deflate: EnablePermessageDeflate,
         headers: Option<ChatHeaders>,
         log_tag: &str,
     ) -> Result<PendingChatConnection, ConnectError>
     where
-        TC: WebSocketTransportConnectorFactory<
-                UsePreconnect<TransportRoute>,
-                Connection = ChatTransportConnection,
-            >,
+        TC: WebSocketTransportConnectorFactory<UsePreconnect<TransportRoute>>,
     {
         Self::start_connect_with_transport(
             connection_resources,
             http_route_provider,
+            endpoint_path,
             user_agent,
             ws_config,
-            enable_permessage_deflate,
             headers,
             log_tag,
         )
@@ -261,12 +251,12 @@ impl ChatConnection {
     async fn start_connect_with_transport<TC>(
         connection_resources: ConnectionResources<'_, TC>,
         http_route_provider: impl RouteProvider<Route = UnresolvedHttpsServiceRoute>,
+        endpoint_path: &'static str,
         user_agent: &UserAgent,
         ws_config: self::ws::Config,
-        enable_permessage_deflate: EnablePermessageDeflate,
         headers: Option<ChatHeaders>,
         log_tag: &str,
-    ) -> Result<PendingChatConnection<TC::Connection>, ConnectError>
+    ) -> Result<PendingChatConnection, ConnectError>
     where
         TC: WebSocketTransportConnectorFactory<UsePreconnect<TransportRoute>>,
     {
@@ -277,14 +267,9 @@ impl ChatConnection {
             .into_iter()
             .flat_map(ChatHeaders::iter_headers)
             .chain([user_agent.as_header()]);
-        let mut ws_stream_config = WebSocketConfig::default();
-        ws_stream_config.extensions.permessage_deflate = match enable_permessage_deflate {
-            EnablePermessageDeflate::Yes => Some(Default::default()),
-            EnablePermessageDeflate::No => None,
-        };
         let ws_fragment = WebSocketRouteFragment {
-            ws_config: ws_stream_config,
-            endpoint: PathAndQuery::from_static(crate::env::constants::WEB_SOCKET_PATH),
+            ws_config: WebSocketConfig::default(),
+            endpoint: PathAndQuery::from_static(endpoint_path),
             headers: HeaderMap::from_iter(headers),
         };
 
@@ -309,7 +294,7 @@ impl ChatConnection {
                 // lets us get connection parallelism at the transport level (which
                 // is useful) while limiting us to one fully established connection
                 // at a time.
-                ThrottlingConnector::new(crate::infra::ws::Stateless, 1),
+                ThrottlingConnector::new(crate::infra::ws::Stateless::default(), 1),
                 &log_tag,
             )
             .await?;
@@ -319,14 +304,12 @@ impl ChatConnection {
         let StreamWithResponseHeaders {
             stream,
             response_headers,
+            connection: shared_h2_connection,
         } = connection.into_inner();
-
-        if stream.get_config().extensions.permessage_deflate.is_some() {
-            log::info!("[{log_tag}] had permessage-deflate negotiation enabled")
-        }
 
         Ok(PendingChatConnection {
             connection: stream,
+            shared_h2_connection,
             connect_response_headers: response_headers,
             route_info,
             ws_config,
@@ -342,6 +325,7 @@ impl ChatConnection {
     ) -> Self {
         let PendingChatConnection {
             connection,
+            shared_h2_connection,
             connect_response_headers,
             ws_config,
             route_info,
@@ -366,6 +350,7 @@ impl ChatConnection {
                     transport_info,
                     get_current_interface: DefaultGetCurrentInterface,
                 },
+                shared_h2_connection,
                 network_change_event,
                 listener,
             ),
@@ -386,6 +371,10 @@ impl ChatConnection {
     pub fn connection_info(&self) -> &ConnectionInfo {
         &self.connection_info
     }
+
+    pub async fn shared_h2_connection(&self) -> Option<Http2Client<GrpcBody>> {
+        self.inner.shared_h2_connection().await
+    }
 }
 
 impl PendingChatConnection {
@@ -397,6 +386,7 @@ impl PendingChatConnection {
     }
 
     pub async fn disconnect(&mut self) {
+        _ = self.shared_h2_connection.take();
         if let Err(error) = self.connection.close(None).await {
             log::warn!(
                 "[{}] pending chat connection disconnect failed with {error}",
@@ -435,6 +425,7 @@ pub mod test_support {
     use crate::connect_state::{
         ConnectState, DefaultConnectorFactory, PreconnectingFactory, SUGGESTED_CONNECT_CONFIG,
     };
+    use crate::env::constants::CHAT_WEBSOCKET_PATH;
     use crate::env::{Env, StaticIpOrder, UserAgent};
     use crate::infra::route::DirectOrProxyProvider;
 
@@ -450,10 +441,10 @@ pub mod test_support {
         );
 
         let route_provider = DirectOrProxyProvider {
-            inner: env
-                .chat_domain_config
-                .connect
-                .route_provider(enable_domain_fronting),
+            inner: env.chat_domain_config.connect.route_provider(
+                enable_domain_fronting,
+                OverrideNagleAlgorithm::UseSystemDefault,
+            ),
             mode: proxy_mode,
         }
         .filter_routes(filter_routes);
@@ -485,9 +476,9 @@ pub mod test_support {
         let pending = ChatConnection::start_connect_with(
             connection_resources,
             route_provider,
+            CHAT_WEBSOCKET_PATH,
             &user_agent,
             ws_config,
-            EnablePermessageDeflate::No,
             None,
             "test",
         )
@@ -519,7 +510,7 @@ pub(crate) mod test {
     use libsignal_net_infra::host::Host;
     use libsignal_net_infra::route::testutils::ConnectFn;
     use libsignal_net_infra::route::{
-        DEFAULT_HTTPS_PORT, DirectOrProxyRoute, HttpRouteFragment, HttpsTlsRoute,
+        DEFAULT_HTTPS_PORT, DirectOrProxyRoute, HttpRouteFragment, HttpVersion, HttpsTlsRoute,
         PreconnectingFactory, TcpRoute, TlsRoute, TlsRouteFragment, UnresolvedHost,
     };
     use libsignal_net_infra::utils::no_network_change_events;
@@ -529,6 +520,7 @@ pub(crate) mod test {
 
     use super::*;
     use crate::connect_state::{ConnectState, SUGGESTED_CONNECT_CONFIG};
+    use crate::env::constants::CHAT_WEBSOCKET_PATH;
 
     #[test]
     fn proto_into_response_works_with_valid_data() {
@@ -735,6 +727,7 @@ pub(crate) mod test {
                 fragment: HttpRouteFragment {
                     host_header: CHAT_DOMAIN.into(),
                     path_prefix: "".into(),
+                    http_version: Some(HttpVersion::Http1_1),
                     front_name: None,
                 },
                 inner: TlsRoute {
@@ -747,9 +740,11 @@ pub(crate) mod test {
                     inner: DirectOrProxyRoute::Direct(TcpRoute {
                         address: UnresolvedHost(CHAT_DOMAIN.into()),
                         port: DEFAULT_HTTPS_PORT,
+                        override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                     }),
                 },
             }],
+            CHAT_WEBSOCKET_PATH,
             &UserAgent::with_libsignal_version("test"),
             ws::Config {
                 // We shouldn't get to timing out anyway.
@@ -758,7 +753,6 @@ pub(crate) mod test {
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
-            EnablePermessageDeflate::No,
             None,
             "fake chat",
         )
@@ -799,6 +793,7 @@ pub(crate) mod test {
             fragment: HttpRouteFragment {
                 host_header: CHAT_DOMAIN.into(),
                 path_prefix: "".into(),
+                http_version: Some(HttpVersion::Http1_1),
                 front_name: None,
             },
             inner: TlsRoute {
@@ -811,6 +806,7 @@ pub(crate) mod test {
                 inner: DirectOrProxyRoute::Direct(TcpRoute {
                     address: UnresolvedHost(CHAT_DOMAIN.into()),
                     port: DEFAULT_HTTPS_PORT,
+                    override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                 }),
             },
         }];
@@ -850,6 +846,7 @@ pub(crate) mod test {
         let err = ChatConnection::start_connect_with_transport(
             make_connection_resources(),
             routes.clone(),
+            CHAT_WEBSOCKET_PATH,
             &UserAgent::with_libsignal_version("test"),
             ws::Config {
                 // We shouldn't get to timing out anyway.
@@ -858,7 +855,6 @@ pub(crate) mod test {
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
-            EnablePermessageDeflate::No,
             Some(auth_headers.clone().into()),
             "fake chat",
         )
@@ -872,6 +868,7 @@ pub(crate) mod test {
         let err = ChatConnection::start_connect_with_transport(
             make_connection_resources(),
             routes.clone(),
+            CHAT_WEBSOCKET_PATH,
             &UserAgent::with_libsignal_version("test"),
             ws::Config {
                 // We shouldn't get to timing out anyway.
@@ -880,7 +877,6 @@ pub(crate) mod test {
                 remote_idle_timeout: Duration::ZERO,
                 initial_request_id: 0,
             },
-            EnablePermessageDeflate::No,
             Some(auth_headers.into()),
             "fake chat",
         )

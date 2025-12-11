@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+#![warn(clippy::unwrap_used)]
+
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU16;
 use std::sync::Arc;
@@ -21,7 +23,7 @@ pub mod errors;
 pub mod host;
 pub mod http_client;
 pub mod route;
-mod stream;
+pub mod stream;
 pub mod tcp_ssl;
 #[cfg(any(test, feature = "test-util"))]
 pub mod testutil;
@@ -76,6 +78,16 @@ pub enum EnableDomainFronting {
 pub enum EnforceMinimumTls {
     Yes,
     No,
+}
+
+/// Whether to override the platform default for the Nagle algorithm via TCP_NODELAY.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum OverrideNagleAlgorithm {
+    /// Explicitly disable the Nagle algorithm (enable TCP_NODELAY).
+    OverrideToOff,
+    /// Leave the operating system's default behavior unchanged.
+    #[default]
+    UseSystemDefault,
 }
 
 /// The fully general version of [`AsStaticHttpHeader`], where the name of the header may depend on the
@@ -245,7 +257,10 @@ pub enum Alpn {
 
 impl Alpn {
     pub const fn encoded(&self) -> &'static [u8] {
-        self.length_prefixed().split_first().unwrap().1
+        self.length_prefixed()
+            .split_first()
+            .expect("always has a prefix to strip")
+            .1
     }
 
     pub const fn length_prefixed(&self) -> &'static [u8] {

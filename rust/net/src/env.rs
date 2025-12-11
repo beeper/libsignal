@@ -22,7 +22,7 @@ use libsignal_net_infra::route::{
 };
 use libsignal_net_infra::{
     AsStaticHttpHeader, ConnectionParams, EnableDomainFronting, EnforceMinimumTls,
-    RECOMMENDED_WS_CONFIG, RouteType, TransportConnectionParams,
+    OverrideNagleAlgorithm, RECOMMENDED_WS_CONFIG, RouteType, TransportConnectionParams,
 };
 use nonzero_ext::nonzero;
 use rand::seq::SliceRandom;
@@ -52,6 +52,7 @@ const DOMAIN_CONFIG_CHAT: DomainConfig = DomainConfig {
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
         min_tls_version: Some(SslVersion::TLS1_3),
+        http_version: Some(HttpVersion::Http1_1),
         confirmation_header_name: Some(TIMESTAMP_HEADER_NAME),
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/service",
@@ -74,6 +75,7 @@ const DOMAIN_CONFIG_CHAT_STAGING: DomainConfig = DomainConfig {
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
         min_tls_version: Some(SslVersion::TLS1_3),
+        http_version: Some(HttpVersion::Http1_1),
         confirmation_header_name: Some(TIMESTAMP_HEADER_NAME),
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/service-staging",
@@ -88,6 +90,7 @@ const DOMAIN_CONFIG_CDSI: DomainConfig = DomainConfig {
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
         min_tls_version: Some(SslVersion::TLS1_3),
+        http_version: Some(HttpVersion::Http1_1),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/cdsi",
@@ -104,6 +107,7 @@ const DOMAIN_CONFIG_CDSI_STAGING: DomainConfig = DomainConfig {
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
         min_tls_version: Some(SslVersion::TLS1_3),
+        http_version: Some(HttpVersion::Http1_1),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/cdsi-staging",
@@ -120,6 +124,7 @@ const DOMAIN_CONFIG_SVR2: DomainConfig = DomainConfig {
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
         min_tls_version: Some(SslVersion::TLS1_3),
+        http_version: Some(HttpVersion::Http1_1),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/svr2",
@@ -135,7 +140,15 @@ const DOMAIN_CONFIG_SVR2: DomainConfig = DomainConfig {
         ip_addr!(v4, "20.65.43.198"),
         ip_addr!(v4, "13.84.216.212"),
     ],
-    ip_v6: &[],
+    ip_v6: &[
+        ip_addr!(v6, "2603:1030:20e:33::6"),
+        ip_addr!(v6, "2603:1030:408:3::1d"),
+        ip_addr!(v6, "2603:1030:b:2a::12"),
+        ip_addr!(v6, "2603:1030:803:4::65"),
+        ip_addr!(v6, "2a01:111:f100:3000::a83e:1208"),
+        ip_addr!(v6, "2603:1030:c04:1e::31c"),
+        ip_addr!(v6, "2603:1030:f00::17"),
+    ],
 };
 
 const DOMAIN_CONFIG_SVR2_STAGING: DomainConfig = DomainConfig {
@@ -144,6 +157,7 @@ const DOMAIN_CONFIG_SVR2_STAGING: DomainConfig = DomainConfig {
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
         min_tls_version: Some(SslVersion::TLS1_3),
+        http_version: Some(HttpVersion::Http1_1),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/svr2-staging",
@@ -157,7 +171,13 @@ const DOMAIN_CONFIG_SVR2_STAGING: DomainConfig = DomainConfig {
         ip_addr!(v4, "20.127.86.118"),
         ip_addr!(v4, "20.186.175.196"),
     ],
-    ip_v6: &[],
+    ip_v6: &[
+        ip_addr!(v6, "2603:1030:20e:31::20e"),
+        ip_addr!(v6, "2603:1030:403:29::7f"),
+        ip_addr!(v6, "2603:1030:b:2c::26"),
+        ip_addr!(v6, "2603:1030:800:5::bfee:ab23"),
+        ip_addr!(v6, "2603:1030:a04:16::3a"),
+    ],
 };
 
 const DOMAIN_CONFIG_SVRB_STAGING: DomainConfig = DomainConfig {
@@ -166,6 +186,7 @@ const DOMAIN_CONFIG_SVRB_STAGING: DomainConfig = DomainConfig {
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
         min_tls_version: Some(SslVersion::TLS1_3),
+        http_version: Some(HttpVersion::Http1_1),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/svrb-staging",
@@ -179,7 +200,13 @@ const DOMAIN_CONFIG_SVRB_STAGING: DomainConfig = DomainConfig {
         ip_addr!(v4, "20.66.46.240"),
         ip_addr!(v4, "172.178.57.240"),
     ],
-    ip_v6: &[],
+    ip_v6: &[
+        ip_addr!(v6, "2a01:111:f100:2004::8975:6ea4"),
+        ip_addr!(v6, "2603:1030:408:7::31"),
+        ip_addr!(v6, "2603:1030:b:29::8f"),
+        ip_addr!(v6, "2603:1030:800:5::bfee:ab24"),
+        ip_addr!(v6, "2603:1030:a04:26::82"),
+    ],
 };
 
 const DOMAIN_CONFIG_SVRB_PROD: DomainConfig = DomainConfig {
@@ -188,6 +215,7 @@ const DOMAIN_CONFIG_SVRB_PROD: DomainConfig = DomainConfig {
         port: DEFAULT_HTTPS_PORT,
         cert: SIGNAL_ROOT_CERTIFICATES,
         min_tls_version: Some(SslVersion::TLS1_3),
+        http_version: Some(HttpVersion::Http1_1),
         confirmation_header_name: None,
         proxy: Some(ConnectionProxyConfig {
             path_prefix: "/svrb",
@@ -203,7 +231,15 @@ const DOMAIN_CONFIG_SVRB_PROD: DomainConfig = DomainConfig {
         ip_addr!(v4, "20.66.41.177"),
         ip_addr!(v4, "20.114.45.6"),
     ],
-    ip_v6: &[],
+    ip_v6: &[
+        ip_addr!(v6, "2603:1030:20c:6::166"),
+        ip_addr!(v6, "2603:1030:408:6::e5"),
+        ip_addr!(v6, "2603:1030:7:5::22"),
+        ip_addr!(v6, "2a01:111:f100:4001::4625:a047"),
+        ip_addr!(v6, "2a01:111:f100:3000::a83e:14da"),
+        ip_addr!(v6, "2603:1030:c02:5::632"),
+        ip_addr!(v6, "2603:1030:f00:3::27"),
+    ],
 };
 
 pub const PROXY_CONFIG_F_PROD: ProxyConfig = ProxyConfig {
@@ -324,6 +360,10 @@ pub struct ConnectionConfig {
     pub cert: RootCertificates,
     /// Which minimum version of TLS to require when connecting to the resource.
     pub min_tls_version: Option<SslVersion>,
+    /// Which version of HTTP to expect when connecting to the resource.
+    ///
+    /// This may be `None` for a non-HTTP resource.
+    pub http_version: Option<HttpVersion>,
     /// A header to look for that indicates that the resource was reached.
     ///
     /// If this is `Some()`, then the presence of the header in an HTTP response
@@ -433,12 +473,14 @@ impl ConnectionConfig {
     pub fn route_provider(
         &self,
         enable_domain_fronting: EnableDomainFronting,
+        override_nagle_algorithm: OverrideNagleAlgorithm,
     ) -> HttpsProvider<DomainFrontRouteProvider, TlsRouteProvider<DirectTcpRouteProvider>> {
         let Self {
             hostname,
             port,
             cert,
             min_tls_version,
+            http_version,
             confirmation_header_name: _,
             proxy,
         } = self;
@@ -479,15 +521,22 @@ impl ConnectionConfig {
 
         let hostname = Arc::<str>::from(*hostname);
 
+        let direct_tcp_provider =
+            DirectTcpRouteProvider::new(Arc::clone(&hostname), *port, override_nagle_algorithm);
+
         HttpsProvider::new(
             Arc::clone(&hostname),
-            HttpVersion::Http1_1,
-            DomainFrontRouteProvider::new(HttpVersion::Http1_1, domain_front_configs),
+            http_version.expect("must have an HTTP version to connect to an HTTP resource"),
+            DomainFrontRouteProvider::new(
+                HttpVersion::Http1_1,
+                domain_front_configs,
+                override_nagle_algorithm,
+            ),
             TlsRouteProvider::new(
                 cert.clone(),
                 *min_tls_version,
                 Host::Domain(Arc::clone(&hostname)),
-                DirectTcpRouteProvider::new(hostname, *port),
+                direct_tcp_provider,
             ),
         )
     }
@@ -496,12 +545,15 @@ impl ConnectionConfig {
         &self,
         enable_domain_fronting: EnableDomainFronting,
         enforce_minimum_tls: EnforceMinimumTls,
+        override_nagle_algorithm: OverrideNagleAlgorithm,
     ) -> HttpsProvider<DomainFrontRouteProvider, TlsRouteProvider<DirectTcpRouteProvider>> {
         match enforce_minimum_tls {
-            EnforceMinimumTls::Yes => self.route_provider(enable_domain_fronting),
+            EnforceMinimumTls::Yes => {
+                self.route_provider(enable_domain_fronting, override_nagle_algorithm)
+            }
             EnforceMinimumTls::No => self
                 .config_with_permissive_min_tls_version()
-                .route_provider(enable_domain_fronting),
+                .route_provider(enable_domain_fronting, override_nagle_algorithm),
         }
     }
 
@@ -745,7 +797,7 @@ pub const PROD: Env<'static> = Env {
 };
 
 pub mod constants {
-    pub const WEB_SOCKET_PATH: &str = "/v1/websocket/";
+    pub const CHAT_WEBSOCKET_PATH: &str = "/v1/websocket/";
 }
 
 #[cfg(test)]
@@ -815,14 +867,24 @@ mod test {
         }
     }
 
-    #[test_matrix([true, false])]
-    fn connect_config_routes_enable_domain_fronting(enable_domain_fronting: bool) {
+    #[test_matrix(
+        [true, false],
+        [
+            OverrideNagleAlgorithm::UseSystemDefault,
+            OverrideNagleAlgorithm::OverrideToOff
+        ]
+    )]
+    fn connect_config_routes_respect_route_provider_settings(
+        enable_domain_fronting: bool,
+        override_nagle_algorithm: OverrideNagleAlgorithm,
+    ) {
         const PORT: NonZeroU16 = nonzero!(123u16);
         const CONNECT_CONFIG: ConnectionConfig = ConnectionConfig {
             hostname: "host",
             port: PORT,
             cert: RootCertificates::Native,
             min_tls_version: Some(SslVersion::TLS1_2),
+            http_version: Some(HttpVersion::Http1_1),
             confirmation_header_name: None,
             proxy: Some(ConnectionProxyConfig {
                 path_prefix: "proxy-prefix",
@@ -842,17 +904,21 @@ mod test {
                 ],
             }),
         };
-        let route_provider = CONNECT_CONFIG.route_provider(if enable_domain_fronting {
-            EnableDomainFronting::OneDomainPerProxy
-        } else {
-            EnableDomainFronting::No
-        });
+        let route_provider = CONNECT_CONFIG.route_provider(
+            if enable_domain_fronting {
+                EnableDomainFronting::OneDomainPerProxy
+            } else {
+                EnableDomainFronting::No
+            },
+            override_nagle_algorithm,
+        );
         let routes = route_provider.routes(&FakeContext::new()).collect_vec();
 
         let expected_direct_route = HttpsTlsRoute {
             fragment: HttpRouteFragment {
                 host_header: "host".into(),
                 path_prefix: "".into(),
+                http_version: Some(HttpVersion::Http1_1),
                 front_name: None,
             },
             inner: TlsRoute {
@@ -865,9 +931,14 @@ mod test {
                 inner: TcpRoute {
                     address: UnresolvedHost::from(Arc::from("host")),
                     port: PORT,
+                    override_nagle_algorithm,
                 },
             },
         };
+
+        assert!(routes
+            .iter()
+            .all(|route| route.inner.inner.override_nagle_algorithm == override_nagle_algorithm));
 
         if enable_domain_fronting {
             assert_eq!(routes.first(), Some(&expected_direct_route));
