@@ -12,7 +12,7 @@ defaults:
 
 env:
   RUSTFLAGS: '-Awarnings -Ctarget-feature=-crt-static --cfg aes_armv8 --cfg polyval_armv8 --cfg curve25519_dalek_bits="64"'
-  IPHONEOS_DEPLOYMENT_TARGET: 18.0
+  IPHONEOS_DEPLOYMENT_TARGET: 17.0
   MACOSX_DEPLOYMENT_TARGET: 12.0
 
 jobs:
@@ -127,8 +127,16 @@ jobs:
           export CARGO_TARGET_${ANDROID_ENV_UPPER}_LINKER=$CC_${{ matrix.android-env }}
         fi
 
-        if [[ "${{ matrix.target }}" = *"ios"* || "${{ matrix.target }}" = *"android"* ]]; then
-          # These might not work with GCC, so they're only enabled on Android/iOS which use clang/llvm
+        if [[ "${{ matrix.target }}" = *"ios"* ]]; then
+          export CFLAGS="-DOPENSSL_SMALL -DOPENSSL_USE_NISTZ256"
+          export CXXFLAGS="-DOPENSSL_SMALL -DOPENSSL_USE_NISTZ256"
+          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+          export CARGO_PROFILE_RELEASE_DEBUG=1
+          export CARGO_PROFILE_RELEASE_OPT_LEVEL="z"
+        fi
+
+        if [[ "${{ matrix.target }}" = *"android"* ]]; then
+          # These might not work with GCC, so they're only enabled on Android which use clang/llvm
           export CFLAGS="-DOPENSSL_SMALL -flto=full"
           export CXXFLAGS="-DOPENSSL_SMALL -flto=full"
           export CARGO_PROFILE_RELEASE_LTO=fat
