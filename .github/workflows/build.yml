@@ -128,15 +128,15 @@ jobs:
         fi
 
         if [[ "${{ matrix.target }}" = *"ios"* ]]; then
-          export CFLAGS="-DOPENSSL_SMALL"
-          export CXXFLAGS="-DOPENSSL_SMALL"
+          export CFLAGS="-DOPENSSL_SMALL -DOPENSSL_USE_NISTZ256"
+          export CXXFLAGS="-DOPENSSL_SMALL -DOPENSSL_USE_NISTZ256"
           export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
           export CARGO_PROFILE_RELEASE_DEBUG=1
           export CARGO_PROFILE_RELEASE_OPT_LEVEL="z"
         fi
 
         if [[ "${{ matrix.target }}" = *"android"* ]]; then
-          # These might not work with GCC, so they're only enabled on Android/iOS which use clang/llvm
+          # These might not work with GCC, so they're only enabled on Android which use clang/llvm
           export CFLAGS="-DOPENSSL_SMALL -flto=full"
           export CXXFLAGS="-DOPENSSL_SMALL -flto=full"
           export CARGO_PROFILE_RELEASE_LTO=fat
