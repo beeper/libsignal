@@ -17,15 +17,15 @@ pub use jni::JNIEnv;
 use jni::JavaVM;
 pub use jni::objects::{
     AutoElements, JByteArray, JClass, JLongArray, JObject, JObjectArray, JString, JValue,
-    ReleaseMode,
+    JValueOwned, ReleaseMode,
 };
-use jni::objects::{GlobalRef, JThrowable, JValueOwned};
+use jni::objects::{GlobalRef, JThrowable};
 pub use jni::sys::{jboolean, jint, jlong};
 use libsignal_account_keys::Error as PinError;
 use libsignal_core::try_scoped;
 use libsignal_net::chat::{ConnectError as ChatConnectError, SendError as ChatSendError};
-use libsignal_net::infra::errors::RetryLater;
-use libsignal_net::infra::ws::WebSocketError;
+use libsignal_net::infra::errors::{RetryLater, TransportConnectError};
+use libsignal_net::infra::ws::{WebSocketConnectError, WebSocketError};
 use libsignal_net::svrb::Error as SvrbError;
 use libsignal_net_chat::api::{RateLimitChallenge, RequestError as ChatRequestError};
 use libsignal_protocol::*;
@@ -864,6 +864,13 @@ impl JniError for ChatConnectError {
             ChatConnectError::DeviceDeregistered => {
                 ClassName("org.signal.libsignal.net.DeviceDeregisteredException")
             }
+            // Special case for self-signed certs, in case the app wants to tell the user to switch
+            // networks.
+            ChatConnectError::WebSocket(WebSocketConnectError::Transport(
+                TransportConnectError::SslFailedHandshake(ref reason),
+            )) if reason.is_possible_captive_network() => {
+                ClassName("org.signal.libsignal.net.PossibleCaptiveNetworkException")
+            }
             ChatConnectError::WebSocket(_)
             | ChatConnectError::Timeout
             | ChatConnectError::AllAttemptsFailed
@@ -1448,6 +1455,44 @@ impl<'a> EnvHandle<'a> {
     }
 }
 
+/// A standard idiom for a callback object usable from any thread, used by `bridge_callbacks`.
+pub struct GlobalAndVM {
+    vm: JavaVM,
+    object: GlobalRef,
+}
+
+impl GlobalAndVM {
+    pub fn new(
+        env: &mut JNIEnv<'_>,
+        object: &JObject,
+        expected_class: ClassName<'static>,
+    ) -> Result<Self, BridgeLayerError> {
+        check_jobject_type(env, object, expected_class)?;
+        Ok(Self {
+            vm: env.get_java_vm().expect("can get VM"),
+            object: env.new_global_ref(object).expect("can get env"),
+        })
+    }
+
+    pub fn attach_and_log_on_error(
+        &self,
+        name: &'static str,
+        operation: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<(), BridgeLayerError>,
+    ) {
+        let mut env = self.vm.attach_current_thread().expect("can attach thread");
+        env.with_local_frame(REASONABLE_JNI_BACKGROUND_THREAD_FRAME_SIZE, |env| {
+            // with_local_frame wants an error type convertible from jni::error::Error, but we use
+            // check_exceptions to do that. So we'll wrap in an extra layer of Ok here, and unwrap
+            // it afterwards.
+            // TODO: Use flatten() instead (below) when our MSRV is 1.89.
+            Ok(operation(env, self.object.as_ref()))
+        })
+        .check_exceptions(&mut env, name)
+        .unwrap_or_else(Err)
+        .unwrap_or_else(|e| log::error!("failed to report {name}: {e}"))
+    }
+}
+
 /// A helper to convert a primitive value, like `int`, to its boxed types, like `Integer`.
 ///
 /// A value that's already an object will be unchanged. A `void` "value" will be converted to
@@ -1500,4 +1545,15 @@ fn box_primitive_if_needed<'a>(
         ),
         JValueOwned::Void => Ok(JObject::null()),
     }
+}
+
+/// Like [`ResultTypeInfo::JNI_SIGNATURE`], but catches when that hasn't been filled in.
+///
+/// This only exists so that we can leave `JNI_SIGNATURE` blank when the type isn't used in a
+/// context where its type signature is needed. If all types have signatures, we can remove this.
+#[inline]
+pub const fn jni_signature_for<T: ResultTypeInfo<'static>>() -> &'static str {
+    let result = T::JNI_SIGNATURE;
+    assert!(!result.is_empty(), "missing JNI_SIGNATURE");
+    result
 }

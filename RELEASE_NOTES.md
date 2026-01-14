@@ -1,3 +1,4 @@
-v0.86.8
+v0.86.11
 
-- backups: Support pinned messages
+- net: Address issue with TLS proxy connectivity when using certain kinds of TLS certificates
+

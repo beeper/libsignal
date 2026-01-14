@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use crate::backup::TryIntoWith;
 use crate::backup::call::{GroupCall, IndividualCall};
 use crate::backup::chat::ChatItemError;
 use crate::backup::chat::group::GroupChatUpdate;
@@ -12,6 +11,7 @@ use crate::backup::frame::RecipientId;
 use crate::backup::method::LookupPair;
 use crate::backup::recipient::{ChatItemAuthorKind, ChatRecipientKind, E164, MinimalRecipientData};
 use crate::backup::time::{Duration, ReportUnusualTimestamp};
+use crate::backup::{HasUnknownFields, TryIntoWith};
 use crate::proto::backup as proto;
 
 /// Validated version of [`proto::chat_update_message::Update`].
@@ -61,10 +61,12 @@ impl<C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusualTimestam
     fn try_into_with(self, context: &C) -> Result<UpdateMessage<R>, Self::Error> {
         let proto::ChatUpdateMessage {
             update,
-            special_fields: _,
+            special_fields,
         } = self;
 
-        let update = update.ok_or(ChatItemError::UpdateIsEmpty)?;
+        let update = update.ok_or_else(|| {
+            ChatItemError::UpdateIsEmpty(HasUnknownFields::check(&special_fields))
+        })?;
 
         use proto::chat_update_message::Update;
         Ok(match update {
@@ -113,11 +115,15 @@ impl<C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusualTimestam
                                 i,
                                 proto::group_change_chat_update::Update {
                                     update,
-                                    special_fields: _,
+                                    special_fields,
                                 },
                             )| {
-                                let update =
-                                    update.ok_or(ChatItemError::GroupChangeUpdateIsEmpty(i))?;
+                                let update = update.ok_or_else(|| {
+                                    ChatItemError::GroupChangeUpdateIsEmpty(
+                                        i,
+                                        HasUnknownFields::check(&special_fields),
+                                    )
+                                })?;
                                 GroupChatUpdate::try_from(update).map_err(ChatItemError::from)
                             },
                         )
@@ -345,8 +351,6 @@ impl<R> UpdateMessage<R> {
                 | SimpleChatUpdate::BadDecrypt
                 | SimpleChatUpdate::UnsupportedProtocolMessage
                 | SimpleChatUpdate::ReportedSpam
-                | SimpleChatUpdate::Blocked
-                | SimpleChatUpdate::Unblocked
                 | SimpleChatUpdate::MessageRequestAccepted,
             )
             | UpdateMessage::ProfileChange { .. }
@@ -369,6 +373,11 @@ impl<R> UpdateMessage<R> {
                 } else {
                     Ok(())
                 }
+            }
+            UpdateMessage::Simple(SimpleChatUpdate::Blocked | SimpleChatUpdate::Unblocked) => {
+                // It is possible to block the Release Notes chat in addition to a contact or group.
+                // Self is allowed because of possible past thread merging; see above.
+                Ok(())
             }
             UpdateMessage::GroupChange { .. } => {
                 if !matches!(chat, ChatRecipientKind::Group) {
@@ -413,8 +422,10 @@ impl<R> UpdateMessage<R> {
                 }
             }
             UpdateMessage::PollTerminate(_) => {
-                if !chat.is_group() {
-                    Err(ChatItemError::PollTerminateNotInGroup((*chat).into()))
+                if matches!(chat, ChatRecipientKind::ReleaseNotes) {
+                    Err(ChatItemError::PollTerminateUnexpectedDestination(
+                        (*chat).into(),
+                    ))
                 } else {
                     Ok(())
                 }
@@ -433,7 +444,7 @@ impl<R> UpdateMessage<R> {
 #[cfg(test)]
 mod test {
     use assert_matches::assert_matches;
-    use test_case::test_case;
+    use test_case::{test_case, test_matrix};
 
     use super::*;
     use crate::backup::call::CallError;
@@ -496,7 +507,7 @@ mod test {
     fn chat_update_message_no_item() {
         assert_matches!(
             proto::ChatUpdateMessage::default().try_into_with(&TestContext::default()),
-            Err(ChatItemError::UpdateIsEmpty)
+            Err(ChatItemError::UpdateIsEmpty(HasUnknownFields::No))
         );
     }
 
@@ -548,6 +559,10 @@ mod test {
         proto::PinMessageUpdate::test_data(),
         Ok(())
     )]
+    #[test_case(
+        proto::PollTerminateUpdate::test_data(),
+        Ok(())
+    )]
     fn chat_update_message_item(
         update: impl Into<proto::chat_update_message::Update>,
         expected: Result<(), ChatItemError>,
@@ -585,5 +600,34 @@ mod test {
         .expect("Conversion should succeed for a valid SessionSwitchover update");
 
         assert_eq!(result, expected);
+    }
+
+    #[test_matrix(
+        [proto::simple_chat_update::Type::BLOCKED, proto::simple_chat_update::Type::UNBLOCKED],
+        [
+            ChatRecipientKind::Self_,
+            ChatRecipientKind::Group,
+            ChatRecipientKind::Contact { has_aci: true },
+            ChatRecipientKind::Contact { has_aci: false },
+            ChatRecipientKind::ReleaseNotes
+        ]
+    )]
+    fn updates_for_every_chat(
+        update_type: proto::simple_chat_update::Type,
+        chat_kind: ChatRecipientKind,
+    ) {
+        let um: UpdateMessage<_> = proto::ChatUpdateMessage {
+            update: Some(proto::chat_update_message::Update::SimpleUpdate(
+                proto::SimpleChatUpdate {
+                    type_: update_type.into(),
+                    special_fields: Default::default(),
+                },
+            )),
+            ..Default::default()
+        }
+        .try_into_with(&TestContext::default())
+        .expect("Conversion should succeed for a valid update");
+        um.validate_chat_recipient(&chat_kind)
+            .expect("should be valid");
     }
 }

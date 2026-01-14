@@ -21,8 +21,9 @@ use zkgroup::ZkGroupDeserializationFailure;
 use super::*;
 use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
-use crate::net::chat::ChatListener;
-use crate::node::chat::NodeChatListener;
+use crate::net::chat::{
+    ChatListener, NodeChatListener, NodeProvisioningListener, ProvisioningListener,
+};
 use crate::support::{Array, AsType, FixedLengthBincodeSerializable, Serialized, extend_lifetime};
 
 /// Converts arguments from their JavaScript form to their Rust form.
@@ -221,6 +222,7 @@ impl<'a> AsyncArgTypeInfo<'a> for &'a [SessionRecord] {
 /// Converts result values from their Rust form to their JavaScript form.
 ///
 /// `ResultTypeInfo` is used to implement the `bridge_fn` macro, but can also be used outside it.
+/// `ResultTypeInfo` is also used for callback arguments in the `bridge_callback` macro.
 ///
 /// ```no_run
 /// # use libsignal_bridge_types::node::*;
@@ -743,35 +745,19 @@ bridge_trait!(SignedPreKeyStore);
 bridge_trait!(KyberPreKeyStore);
 bridge_trait!(InputStream);
 
-impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context> for Box<dyn ChatListener> {
+impl SimpleArgTypeInfo for Box<dyn ChatListener> {
     type ArgType = JsObject;
-    type StoredType = NodeChatListener;
 
-    fn borrow(
-        cx: &mut FunctionContext<'context>,
-        foreign: Handle<'context, Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        NodeChatListener::new(cx, foreign)
-    }
-
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
-        stored.make_listener()
+    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+        Ok(Box::new(NodeChatListener::new(cx, foreign)?))
     }
 }
 
-impl<'a> AsyncArgTypeInfo<'a> for Box<dyn ChatListener> {
+impl SimpleArgTypeInfo for Box<dyn ProvisioningListener> {
     type ArgType = JsObject;
-    type StoredType = NodeChatListener;
 
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        NodeChatListener::new(cx, foreign)
-    }
-
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored.make_listener()
+    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+        Ok(Box::new(NodeProvisioningListener::new(cx, foreign)?))
     }
 }
 
@@ -952,6 +938,13 @@ impl<'a, T: ResultTypeInfo<'a>> ResultTypeInfo<'a> for Option<T> {
 }
 
 impl<'a> ResultTypeInfo<'a> for Vec<u8> {
+    type ResultType = JsUint8Array;
+    fn convert_into(self, cx: &mut impl Context<'a>) -> NeonResult<Handle<'a, Self::ResultType>> {
+        JsUint8Array::from_slice(cx, &self)
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for bytes::Bytes {
     type ResultType = JsUint8Array;
     fn convert_into(self, cx: &mut impl Context<'a>) -> NeonResult<Handle<'a, Self::ResultType>> {
         JsUint8Array::from_slice(cx, &self)
@@ -1343,6 +1336,17 @@ impl<'a> ResultTypeInfo<'a>
         let entries = entries.as_value(cx);
 
         map_constructor.construct(cx, [entries])
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for libsignal_net::chat::server_requests::DisconnectCause {
+    type ResultType = JsValue;
+
+    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
+        match self {
+            Self::LocalDisconnect => Ok(cx.null().upcast()),
+            Self::Error(err) => Ok(err.into_throwable(cx, "DisconnectCause").upcast()),
+        }
     }
 }
 

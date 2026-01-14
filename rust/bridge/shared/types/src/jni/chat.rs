@@ -5,43 +5,15 @@
 
 use std::panic::UnwindSafe;
 
-use bytes::Bytes;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use libsignal_net::chat::ChatConnection;
-use libsignal_net::chat::server_requests::DisconnectCause;
 use libsignal_net_chat::api::Unauth;
 
 use super::*;
-use crate::net::chat::{ChatListener, ServerMessageAck};
-
-pub type JavaBridgeChatListener<'a> = JObject<'a>;
-
-pub struct JniBridgeChatListener(JniChatListener);
-
-impl JniBridgeChatListener {
-    pub fn new(env: &mut JNIEnv<'_>, listener: &JObject) -> Result<Self, BridgeLayerError> {
-        check_jobject_type(
-            env,
-            listener,
-            ClassName("org.signal.libsignal.net.internal.BridgeChatListener"),
-        )?;
-        Ok(Self(JniChatListener {
-            vm: env.get_java_vm().expect("can get VM"),
-            listener: env.new_global_ref(listener).expect("can get env"),
-        }))
-    }
-
-    pub(crate) fn into_listener(self) -> Box<dyn ChatListener> {
-        let Self(listener) = self;
-        Box::new(listener)
-    }
-}
-
-struct JniChatListener {
-    vm: JavaVM,
-    listener: GlobalRef,
-}
+// TODO: This re-export is because of the jni_arg_type macro expecting all bridging structs to be
+// under the jni module; eventually we should be able to remove it.
+pub use crate::net::chat::{JavaBridgeChatListener, JavaBridgeProvisioningListener};
 
 fn attach_and_log_on_error(
     vm: &JavaVM,
@@ -61,82 +33,6 @@ fn attach_and_log_on_error(
         Err(e) => {
             log::error!("failed to report {name}: {e}")
         }
-    }
-}
-
-impl ChatListener for JniChatListener {
-    fn received_incoming_message(
-        &mut self,
-        envelope: Bytes,
-        timestamp: Timestamp,
-        ack: ServerMessageAck,
-    ) {
-        let listener = &self.listener;
-        attach_and_log_on_error(&self.vm, "incoming message", move |env| {
-            let env_array = envelope.convert_into(env)?;
-            let ack_handle = ack.convert_into(env)?;
-            call_method_checked(
-                env,
-                listener,
-                "onIncomingMessage",
-                jni_args!((
-                    env_array => [byte],
-                    timestamp.epoch_millis() as i64 => long,
-                    ack_handle => long,
-                ) -> void),
-            )
-        });
-    }
-
-    fn received_queue_empty(&mut self) {
-        let listener = &self.listener;
-        attach_and_log_on_error(&self.vm, "queue empty", move |env| {
-            call_method_checked(env, listener, "onQueueEmpty", jni_args!(() -> void))
-        });
-    }
-
-    fn received_alerts(&mut self, alerts: Vec<String>) {
-        let listener = &self.listener;
-        attach_and_log_on_error(&self.vm, "received alerts", move |env| {
-            let alerts = alerts.into_boxed_slice().convert_into(env)?;
-            call_method_checked(
-                env,
-                listener,
-                "onReceivedAlerts",
-                jni_args!((alerts => [java.lang.String]) -> void),
-            )
-        });
-    }
-
-    fn connection_interrupted(&mut self, disconnect_cause: DisconnectCause) {
-        let listener = &self.listener;
-        attach_and_log_on_error(&self.vm, "connection interrupted", move |env| {
-            let report_to_java = move |env, listener, throwable: JThrowable<'_>| {
-                call_method_checked(
-                    env,
-                    listener,
-                    "onConnectionInterrupted",
-                    jni_args!((throwable => java.lang.Throwable) -> void),
-                )?;
-                Ok(())
-            };
-            match disconnect_cause {
-                DisconnectCause::LocalDisconnect => {
-                    report_to_java(env, listener, JObject::null().into())?
-                }
-                DisconnectCause::Error(disconnect_cause) => {
-                    let throwable = SignalJniError::from(disconnect_cause).to_throwable(env);
-                    throwable
-                        .and_then(|throwable| report_to_java(env, listener, throwable))
-                        .unwrap_or_else(|error| {
-                            log::error!(
-                                "failed to call onConnectionInterrupted with cause: {error}"
-                            );
-                        });
-                }
-            };
-            Ok(())
-        });
     }
 }
 

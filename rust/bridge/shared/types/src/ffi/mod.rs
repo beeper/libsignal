@@ -117,6 +117,24 @@ impl<T> From<Box<[T]>> for OwnedBufferOf<T> {
     }
 }
 
+/// A helper trait for types that need to be explicitly destroyed, similar to Neon's `Finalize`.
+///
+/// Meant for use with [`OwnedCallbackStruct`] and the `bridge_callbacks` macro (all
+/// `bridge_callbacks` FFI structs implement `FfiDestroyable`).
+pub trait FfiDestroyable {
+    fn destroy(&mut self);
+}
+
+/// A wrapper around a `bridge_callbacks` struct that calls the `destroy` function on Drop.
+#[derive(derive_more::Deref, derive_more::DerefMut)]
+pub struct OwnedCallbackStruct<T: FfiDestroyable>(pub T);
+
+impl<T: FfiDestroyable> Drop for OwnedCallbackStruct<T> {
+    fn drop(&mut self) {
+        self.0.destroy();
+    }
+}
+
 #[repr(C)]
 pub struct BytestringArray {
     bytes: OwnedBufferOf<std::ffi::c_uchar>,
@@ -186,7 +204,18 @@ pub struct OptionalBorrowedSliceOf<T> {
     pub value: BorrowedSliceOf<T>,
 }
 
-pub type OptionalUuid = [u8; 17];
+/// A wrapper type for raw UUIDs, because C treats arrays specially in argument position.
+#[repr(C)]
+pub struct Uuid {
+    pub bytes: [u8; 16],
+}
+
+#[derive(Default)]
+#[repr(C)]
+pub struct OptionalUuid {
+    pub present: bool,
+    pub bytes: [u8; 16],
+}
 
 #[repr(C)]
 pub struct PairOf<A, B> {

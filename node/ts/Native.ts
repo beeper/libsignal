@@ -129,20 +129,6 @@ export type InputStream = {
 
 export type SyncInputStream = Uint8Array;
 
-export type ChatListener = {
-  _incoming_message: (
-    envelope: Uint8Array,
-    timestamp: number,
-    ack: ServerMessageAck
-  ) => void;
-  _queue_empty: () => void;
-  _received_alerts: (alerts: string[]) => void;
-  _connection_interrupted: (
-    // A LibSignalError or null, but not naming the type to avoid circular import dependencies.
-    reason: Error | null
-  ) => void;
-};
-
 export type ChallengeOption = 'pushChallenge' | 'captcha';
 
 export type RegistrationPushTokenType = 'apn' | 'fcm';
@@ -557,6 +543,10 @@ type NativeFunctions = {
   AuthenticatedChatConnection_disconnect: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<AuthenticatedChatConnection>) => CancellablePromise<void>;
   AuthenticatedChatConnection_info: (chat: Wrapper<AuthenticatedChatConnection>) => ChatConnectionInfo;
   ServerMessageAck_SendStatus: (ack: Wrapper<ServerMessageAck>, status: number) => void;
+  ProvisioningChatConnection_connect: (asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>) => CancellablePromise<ProvisioningChatConnection>;
+  ProvisioningChatConnection_init_listener: (chat: Wrapper<ProvisioningChatConnection>, listener: ProvisioningListener) => void;
+  ProvisioningChatConnection_info: (chat: Wrapper<ProvisioningChatConnection>) => ChatConnectionInfo;
+  ProvisioningChatConnection_disconnect: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<ProvisioningChatConnection>) => CancellablePromise<void>;
   KeyTransparency_AciSearchKey: (aci: Uint8Array) => Uint8Array;
   KeyTransparency_E164SearchKey: (e164: string) => Uint8Array;
   KeyTransparency_UsernameHashSearchKey: (hash: Uint8Array) => Uint8Array;
@@ -705,8 +695,10 @@ type NativeFunctions = {
   TESTING_FakeChatServer_Create: () => FakeChatServer;
   TESTING_FakeChatServer_GetNextRemote: (asyncRuntime: Wrapper<TokioAsyncContext>, server: Wrapper<FakeChatServer>) => CancellablePromise<FakeChatRemoteEnd>;
   TESTING_FakeChatConnection_Create: (tokio: Wrapper<TokioAsyncContext>, listener: ChatListener, alertsJoinedByNewlines: string) => FakeChatConnection;
+  TESTING_FakeChatConnection_CreateProvisioning: (tokio: Wrapper<TokioAsyncContext>, listener: ProvisioningListener) => FakeChatConnection;
   TESTING_FakeChatConnection_TakeAuthenticatedChat: (chat: Wrapper<FakeChatConnection>) => AuthenticatedChatConnection;
   TESTING_FakeChatConnection_TakeUnauthenticatedChat: (chat: Wrapper<FakeChatConnection>) => UnauthenticatedChatConnection;
+  TESTING_FakeChatConnection_TakeProvisioningChat: (chat: Wrapper<FakeChatConnection>) => ProvisioningChatConnection;
   TESTING_FakeChatConnection_TakeRemote: (chat: Wrapper<FakeChatConnection>) => FakeChatRemoteEnd;
   TESTING_FakeChatRemoteEnd_SendRawServerRequest: (chat: Wrapper<FakeChatRemoteEnd>, bytes: Uint8Array) => void;
   TESTING_FakeChatRemoteEnd_SendRawServerResponse: (chat: Wrapper<FakeChatRemoteEnd>, bytes: Uint8Array) => void;
@@ -1103,6 +1095,10 @@ const { registerErrors,
   AuthenticatedChatConnection_disconnect,
   AuthenticatedChatConnection_info,
   ServerMessageAck_SendStatus,
+  ProvisioningChatConnection_connect,
+  ProvisioningChatConnection_init_listener,
+  ProvisioningChatConnection_info,
+  ProvisioningChatConnection_disconnect,
   KeyTransparency_AciSearchKey,
   KeyTransparency_E164SearchKey,
   KeyTransparency_UsernameHashSearchKey,
@@ -1251,8 +1247,10 @@ const { registerErrors,
   TESTING_FakeChatServer_Create,
   TESTING_FakeChatServer_GetNextRemote,
   TESTING_FakeChatConnection_Create,
+  TESTING_FakeChatConnection_CreateProvisioning,
   TESTING_FakeChatConnection_TakeAuthenticatedChat,
   TESTING_FakeChatConnection_TakeUnauthenticatedChat,
+  TESTING_FakeChatConnection_TakeProvisioningChat,
   TESTING_FakeChatConnection_TakeRemote,
   TESTING_FakeChatRemoteEnd_SendRawServerRequest,
   TESTING_FakeChatRemoteEnd_SendRawServerResponse,
@@ -1651,6 +1649,10 @@ export { registerErrors,
   AuthenticatedChatConnection_disconnect,
   AuthenticatedChatConnection_info,
   ServerMessageAck_SendStatus,
+  ProvisioningChatConnection_connect,
+  ProvisioningChatConnection_init_listener,
+  ProvisioningChatConnection_info,
+  ProvisioningChatConnection_disconnect,
   KeyTransparency_AciSearchKey,
   KeyTransparency_E164SearchKey,
   KeyTransparency_UsernameHashSearchKey,
@@ -1799,8 +1801,10 @@ export { registerErrors,
   TESTING_FakeChatServer_Create,
   TESTING_FakeChatServer_GetNextRemote,
   TESTING_FakeChatConnection_Create,
+  TESTING_FakeChatConnection_CreateProvisioning,
   TESTING_FakeChatConnection_TakeAuthenticatedChat,
   TESTING_FakeChatConnection_TakeUnauthenticatedChat,
+  TESTING_FakeChatConnection_TakeProvisioningChat,
   TESTING_FakeChatConnection_TakeRemote,
   TESTING_FakeChatRemoteEnd_SendRawServerRequest,
   TESTING_FakeChatRemoteEnd_SendRawServerResponse,
@@ -1858,8 +1862,20 @@ export interface CdsiLookup { readonly __type: unique symbol; }
 export interface ChatConnectionInfo { readonly __type: unique symbol; }
 export interface UnauthenticatedChatConnection { readonly __type: unique symbol; }
 export interface AuthenticatedChatConnection { readonly __type: unique symbol; }
+export interface ProvisioningChatConnection { readonly __type: unique symbol; }
 export interface HttpRequest { readonly __type: unique symbol; }
+export /*trait*/ type ChatListener = {
+  receivedIncomingMessage: (envelope: Uint8Array, timestamp: Timestamp, ack: ServerMessageAck) => void;
+  receivedQueueEmpty: () => void;
+  receivedAlerts: (alerts: string[]) => void;
+  connectionInterrupted: (disconnectCause: Error|null) => void;
+};
 export interface ServerMessageAck { readonly __type: unique symbol; }
+export /*trait*/ type ProvisioningListener = {
+  receivedAddress: (address: string, sendAck: ServerMessageAck) => void;
+  receivedEnvelope: (envelope: Uint8Array, sendAck: ServerMessageAck) => void;
+  connectionInterrupted: (disconnectCause: Error|null) => void;
+};
 export interface RegistrationService { readonly __type: unique symbol; }
 export interface RegistrationSession { readonly __type: unique symbol; }
 export interface RegisterAccountRequest { readonly __type: unique symbol; }

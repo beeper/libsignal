@@ -59,11 +59,13 @@ public class ChatServiceTest {
   public void chatConnectErrorConvert() {
     assertChatConnectErrorIs("AppExpired", AppExpiredException.class);
     assertChatConnectErrorIs("DeviceDeregistered", DeviceDeregisteredException.class);
+    assertChatConnectErrorIs("PossibleCaptiveNetwork", PossibleCaptiveNetworkException.class);
 
     assertChatConnectErrorIs("WebSocketConnectionFailed", ChatServiceException.class);
     assertChatConnectErrorIs("Timeout", ChatServiceException.class);
     assertChatConnectErrorIs("AllAttemptsFailed", ChatServiceException.class);
     assertChatConnectErrorIs("InvalidConnectionConfiguration", ChatServiceException.class);
+
     RetryLaterException retryLater =
         assertChatConnectErrorIs("RetryAfter42Seconds", RetryLaterException.class);
     assertEquals(retryLater.duration, Duration.ofSeconds(42));
@@ -165,6 +167,10 @@ public class ChatServiceTest {
                 chatHandle, Base64.decode(requestBase64)));
   }
 
+  private void injectConnectionInterrupted(FakeChatRemote fakeRemote) {
+    fakeRemote.guardedRun(NativeTesting::TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted);
+  }
+
   @Test
   public void testConnectionListenerCallbacks() throws Throwable {
     class Listener implements ChatConnectionListener {
@@ -172,7 +178,7 @@ public class ChatServiceTest {
       boolean receivedMessage1;
       boolean receivedMessage2;
       boolean receivedQueueEmpty;
-      Throwable error;
+      Throwable anyError;
       CountDownLatch latch = new CountDownLatch(1);
 
       public void onIncomingMessage(
@@ -200,8 +206,8 @@ public class ChatServiceTest {
               throw new AssertionError("unexpected message");
           }
         } catch (Throwable error) {
-          if (this.error == null) {
-            this.error = error;
+          if (anyError == null) {
+            anyError = error;
           }
         }
       }
@@ -214,8 +220,8 @@ public class ChatServiceTest {
           assertFalse(receivedQueueEmpty);
           receivedQueueEmpty = true;
         } catch (Throwable error) {
-          if (this.error == null) {
-            this.error = error;
+          if (anyError == null) {
+            anyError = error;
           }
         }
       }
@@ -229,8 +235,8 @@ public class ChatServiceTest {
           assertArrayEquals(alerts, new String[] {"UPPERcase", "lowercase"});
           receivedAlerts = true;
         } catch (Throwable error) {
-          if (this.error == null) {
-            this.error = error;
+          if (anyError == null) {
+            anyError = error;
           }
         }
       }
@@ -244,8 +250,8 @@ public class ChatServiceTest {
           assertTrue(receivedQueueEmpty);
           assertEquals("websocket error: channel already closed", disconnectReason.getMessage());
         } catch (Throwable error) {
-          if (this.error == null) {
-            this.error = error;
+          if (anyError == null) {
+            anyError = error;
           }
         } finally {
           latch.countDown();
@@ -294,12 +300,12 @@ public class ChatServiceTest {
     // 4: 99
     injectServerRequest(fakeRemote, "CgNQVVQSEy9hcGkvdjEvcXVldWUvZW1wdHkgYw==");
 
-    fakeRemote.guardedRun(NativeTesting::TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted);
+    injectConnectionInterrupted(fakeRemote);
 
     listener.latch.await();
-    if (listener.error != null) {
+    if (listener.anyError != null) {
       // Rethrow for the original backtrace.
-      throw listener.error;
+      throw listener.anyError;
     }
 
     // Make sure the chat object doesn't get GC'd early.
@@ -416,5 +422,107 @@ public class ChatServiceTest {
       System.gc();
       System.runFinalization();
     } while (!latch.await(100, TimeUnit.MILLISECONDS));
+  }
+
+  @Test
+  public void testProvisioningListenerCallbacks() throws Throwable {
+    class Listener implements ProvisioningConnectionListener {
+      boolean receivedAddress;
+      boolean receivedEnvelope;
+      Throwable anyError;
+      CountDownLatch latch = new CountDownLatch(1);
+
+      public void onReceivedAddress(
+          ProvisioningConnection connection,
+          String address,
+          ChatConnectionListener.ServerMessageAck sendAck) {
+        try {
+          receivedAddress = true;
+          assertEquals("the address", address);
+          sendAck.send();
+        } catch (Throwable error) {
+          if (anyError == null) {
+            anyError = error;
+          }
+        }
+      }
+
+      public void onReceivedEnvelope(
+          ProvisioningConnection connection,
+          byte[] envelope,
+          ChatConnectionListener.ServerMessageAck sendAck) {
+        try {
+          receivedEnvelope = true;
+          assertArrayEquals("encoded envelope".getBytes(StandardCharsets.UTF_8), envelope);
+          sendAck.send();
+        } catch (Throwable error) {
+          if (anyError == null) {
+            anyError = error;
+          }
+        }
+      }
+
+      public void onConnectionInterrupted(
+          ProvisioningConnection connection, ChatServiceException disconnectReason) {
+        try {
+          assertTrue(receivedAddress);
+          assertTrue(receivedEnvelope);
+          assertEquals("websocket error: channel already closed", disconnectReason.getMessage());
+        } catch (Throwable error) {
+          if (anyError == null) {
+            anyError = error;
+          }
+        } finally {
+          latch.countDown();
+        }
+      }
+    }
+
+    final TokioAsyncContext tokioAsyncContext = new TokioAsyncContext();
+    final Listener listener = new Listener();
+    final Pair<ProvisioningConnection, FakeChatRemote> connectionAndFakeRemote =
+        ProvisioningConnection.fakeConnect(tokioAsyncContext, listener);
+    final ProvisioningConnection connection = connectionAndFakeRemote.getFirst();
+    final FakeChatRemote fakeRemote = connectionAndFakeRemote.getSecond();
+
+    // The following payloads were generated via protoscope.
+    // % protoscope -s | base64
+    // The fields are described by chat_websocket.proto and chat_provisioning.proto in the
+    // libsignal-net crate.
+
+    // 1: {"PUT"}
+    // 2: {"/v1/address"}
+    // 3: {1: {"the address"}}
+    // 5: {"x-signal-timestamp: 1000"}
+    // 4: 1
+    injectServerRequest(
+        fakeRemote,
+        "CgNQVVQSCy92MS9hZGRyZXNzGg0KC3RoZSBhZGRyZXNzKhh4LXNpZ25hbC10aW1lc3RhbXA6IDEwMDAgAQ==");
+    // 1: {"PUT"}
+    // 2: {"/v1/message"}
+    // 3: {"encoded envelope"}
+    // 5: {"x-signal-timestamp: 1000"}
+    // 4: 2
+    injectServerRequest(
+        fakeRemote,
+        "CgNQVVQSCy92MS9tZXNzYWdlGhBlbmNvZGVkIGVudmVsb3BlKhh4LXNpZ25hbC10aW1lc3RhbXA6IDEwMDAgAg==");
+
+    // Sending an invalid message should not affect the listener at all, nor should it stop future
+    // requests.
+    // 1: {"PUT"}
+    // 2: {"/invalid"}
+    // 4: 10
+    injectServerRequest(fakeRemote, "CgNQVVQSCC9pbnZhbGlkIAo=");
+
+    injectConnectionInterrupted(fakeRemote);
+
+    listener.latch.await();
+    if (listener.anyError != null) {
+      // Rethrow for the original backtrace.
+      throw listener.anyError;
+    }
+
+    // Make sure the chat object doesn't get GC'd early.
+    Native.keepAlive(connection);
   }
 }

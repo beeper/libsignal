@@ -129,20 +129,6 @@ export type InputStream = {
 
 export type SyncInputStream = Uint8Array;
 
-export type ChatListener = {
-  _incoming_message: (
-    envelope: Uint8Array,
-    timestamp: number,
-    ack: ServerMessageAck
-  ) => void;
-  _queue_empty: () => void;
-  _received_alerts: (alerts: string[]) => void;
-  _connection_interrupted: (
-    // A LibSignalError or null, but not naming the type to avoid circular import dependencies.
-    reason: Error | null
-  ) => void;
-};
-
 export type ChallengeOption = 'pushChallenge' | 'captcha';
 
 export type RegistrationPushTokenType = 'apn' | 'fcm';

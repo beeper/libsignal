@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use heck::ToLowerCamelCase as _;
+use itertools::Itertools as _;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::*;
+use syn::spanned::Spanned as _;
 use syn::*;
 use syn_mid::Signature;
 
@@ -246,4 +249,147 @@ fn generate_ts_signature_comment(
 
 pub(crate) fn name_from_ident(ident: &Ident) -> String {
     ident.to_string()
+}
+
+/// Generates a wrapper around a globally-owned JS object expected to match the bridged
+/// representation of a trait.
+///
+/// The wrapper will be named "Node{MyTrait}" and will implement the original trait, as well as
+/// `neon::types::Finalize`.
+pub(crate) fn bridge_trait(trait_to_bridge: &ItemTrait) -> Result<TokenStream2> {
+    let trait_name = &trait_to_bridge.ident;
+    let wrapper_name = format_ident!("Node{}", trait_to_bridge.ident);
+
+    let callbacks = trait_to_bridge
+        .items
+        .iter()
+        .map(bridge_callback_item)
+        .collect::<Result<Vec<_>>>()?;
+    let callback_impls = callbacks.iter().map(|c| &c.implementation);
+    let callback_ts_decls = callbacks.iter().map(|c| &c.ts_decl);
+
+    let ts_declaration_comment = format!(
+        "ts: export /*trait*/ type {trait_name} = {{\n{}\n}};",
+        callback_ts_decls.format("\n")
+    );
+
+    Ok(quote! {
+        #[cfg(feature = "node")]
+        #[doc = #ts_declaration_comment]
+        pub struct #wrapper_name(node::RootAndChannel);
+
+        #[cfg(feature = "node")]
+        impl #wrapper_name {
+            pub fn new(
+                cx: &mut node::FunctionContext,
+                object: node::Handle<node::JsObject>,
+            ) -> node::NeonResult<Self> {
+                Ok(Self(node::RootAndChannel::new(cx, object)?))
+            }
+        }
+
+        #[cfg(feature = "node")]
+        impl node::Finalize for #wrapper_name {
+            fn finalize<'a, C: node::Context<'a>>(self, cx: &mut C) {
+                self.0.finalize(cx);
+            }
+        }
+
+        #[cfg(feature = "node")]
+        impl #trait_name for #wrapper_name {
+            #(#callback_impls)*
+        }
+    })
+}
+
+struct Callback {
+    implementation: TokenStream2,
+    ts_decl: String,
+}
+
+fn bridge_callback_item(item: &TraitItem) -> Result<Callback> {
+    let TraitItem::Fn(item) = item else {
+        return Err(Error::new(item.span(), "only fns are supported"));
+    };
+
+    let sig = &item.sig;
+    let req_name = &item.sig.ident;
+    let js_operation_name = req_name.to_string().to_lower_camel_case();
+
+    // fn operation(foo: u32) {
+    //     self.0.send_and_log_on_error("operation", move |cx, object| {
+    //         let js_foo = node::ResultTypeInfo::convert_into(foo, cx)?.upcast();
+    //         let _result = call_method(
+    //             cx,
+    //             object,
+    //             "operation",
+    //             [js_foo],
+    //         )?;
+    //         Ok(())
+    //     })
+    // }
+    let arg_conversions = item.sig.inputs.iter().filter_map(|arg| match arg {
+        FnArg::Receiver(_) => None,
+        FnArg::Typed(arg) => {
+            let Pat::Ident(arg_name) = &*arg.pat else {
+                return Some(
+                    Error::new(arg.pat.span(), "only simple argument syntax is supported")
+                        .into_compile_error(),
+                );
+            };
+            let js_arg_name = format_ident!("js_{}", arg_name.ident);
+            Some(quote! {
+                // Note that we use *Result*TypeInfo for callback arguments,
+                // since we are passing values from Rust into JS.
+                let #js_arg_name = node::ResultTypeInfo::convert_into(#arg_name, cx)?
+                    .upcast() // note no trailing semicolon
+            })
+        }
+    });
+    let converted_args = item.sig.inputs.iter().filter_map(|arg| match arg {
+        FnArg::Receiver(_) => None,
+        FnArg::Typed(arg) => {
+            let Pat::Ident(arg_name) = &*arg.pat else {
+                return Some(
+                    Error::new(arg.pat.span(), "only simple argument syntax is supported")
+                        .into_compile_error(),
+                );
+            };
+            Some(format_ident!("js_{}", arg_name.ident).into_token_stream())
+        }
+    });
+    let implementation = quote! {
+        // #sig carries everything from `fn` to the return type and possible where-clause.
+        // All we provide is the body.
+        #sig {
+            self.0.send_and_log_on_error(#js_operation_name, move |cx, object| {
+                #(#arg_conversions;)*
+                let _result = node::call_method(
+                    cx,
+                    object,
+                    #js_operation_name,
+                    [#(#converted_args),*],
+                )?;
+                Ok(())
+            })
+        }
+    };
+
+    // operation(foo: number): void;
+    let js_arg_decls = item.sig.inputs.iter().filter_map(|arg| match arg {
+        FnArg::Receiver(_) => None,
+        FnArg::Typed(arg) => {
+            let Pat::Ident(arg_name) = &*arg.pat else {
+                // Diagnosed elsewhere.
+                return None;
+            };
+            Some(format!("{}: {}", arg_name.ident, arg.ty.to_token_stream()))
+        }
+    });
+    let ts_decl = format!("{js_operation_name}({}): void;", js_arg_decls.format(", "));
+
+    Ok(Callback {
+        implementation,
+        ts_decl,
+    })
 }

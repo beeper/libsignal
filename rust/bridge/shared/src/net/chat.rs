@@ -30,6 +30,7 @@ use crate::*;
 bridge_handle_fns!(HttpRequest, clone = false);
 bridge_handle_fns!(UnauthenticatedChatConnection, clone = false);
 bridge_handle_fns!(AuthenticatedChatConnection, clone = false);
+bridge_handle_fns!(ProvisioningChatConnection, clone = false);
 
 #[bridge_fn(ffi = false)]
 fn HttpRequest_new(
@@ -251,4 +252,29 @@ fn ServerMessageAck_SendStatus(
 ) -> Result<(), SendError> {
     let sender = ack.take().expect("a message is only acked once");
     sender(status.into_inner().into())
+}
+
+#[bridge_io(TokioAsyncContext)]
+async fn ProvisioningChatConnection_connect(
+    connection_manager: &ConnectionManager,
+) -> Result<ProvisioningChatConnection, ConnectError> {
+    ProvisioningChatConnection::connect(connection_manager).await
+}
+
+#[bridge_fn]
+fn ProvisioningChatConnection_init_listener(
+    chat: &ProvisioningChatConnection,
+    listener: Box<dyn ProvisioningListener>,
+) {
+    chat.init_listener(listener)
+}
+
+#[bridge_fn(jni = false)]
+fn ProvisioningChatConnection_info(chat: &ProvisioningChatConnection) -> ChatConnectionInfo {
+    chat.info()
+}
+
+#[bridge_io(TokioAsyncContext)]
+async fn ProvisioningChatConnection_disconnect(chat: &ProvisioningChatConnection) {
+    chat.disconnect().await
 }

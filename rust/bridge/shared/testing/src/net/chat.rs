@@ -8,7 +8,8 @@ use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use libsignal_bridge_macros::*;
 use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::net::chat::{
-    AuthenticatedChatConnection, ChatListener, HttpRequest, UnauthenticatedChatConnection,
+    AuthenticatedChatConnection, ChatListener, HttpRequest, ProvisioningChatConnection,
+    ProvisioningListener, UnauthenticatedChatConnection,
 };
 use libsignal_net::chat::fake::FakeChatRemote;
 use libsignal_net::chat::{
@@ -78,8 +79,24 @@ fn TESTING_FakeChatConnection_Create(
     let alerts = alerts_joined_by_newlines.split_terminator('\n');
     let (chat, remote) = libsignal_bridge_types::net::chat::FakeChatConnection::new(
         tokio.handle(),
-        listener,
+        listener.into_event_listener(),
         alerts,
+    );
+    FakeChatConnection {
+        chat: Some(chat).into(),
+        remote_end: Some(remote).into(),
+    }
+}
+
+#[bridge_fn]
+fn TESTING_FakeChatConnection_CreateProvisioning(
+    tokio: &TokioAsyncContext,
+    listener: Box<dyn ProvisioningListener>,
+) -> FakeChatConnection {
+    let (chat, remote) = libsignal_bridge_types::net::chat::FakeChatConnection::new(
+        tokio.handle(),
+        listener.into_event_listener(),
+        vec![],
     );
     FakeChatConnection {
         chat: Some(chat).into(),
@@ -101,6 +118,14 @@ fn TESTING_FakeChatConnection_TakeUnauthenticatedChat(
 ) -> UnauthenticatedChatConnection {
     let chat = chat.chat.lock().expect("not poisoned").take();
     chat.expect("can't take chat twice").into_unauthenticated()
+}
+
+#[bridge_fn]
+fn TESTING_FakeChatConnection_TakeProvisioningChat(
+    chat: &FakeChatConnection,
+) -> ProvisioningChatConnection {
+    let chat = chat.chat.lock().expect("not poisoned").take();
+    chat.expect("can't take chat twice").into_provisioning()
 }
 
 #[bridge_fn]
@@ -263,6 +288,8 @@ make_error_testing_enum! {
         AllAttemptsFailed => AllAttemptsFailed,
         InvalidConnectionConfiguration => InvalidConnectionConfiguration,
         RetryLater => RetryAfter42Seconds,
+        ;
+        PossibleCaptiveNetwork,
     }
 }
 
@@ -287,6 +314,15 @@ fn TESTING_ChatConnectErrorConvert(
         TestingChatConnectError::RetryAfter42Seconds => ConnectError::RetryLater(RetryLater {
             retry_after_seconds: 42,
         }),
+        TestingChatConnectError::PossibleCaptiveNetwork => {
+            ConnectError::WebSocket(libsignal_net::infra::ws::WebSocketConnectError::Transport(
+                libsignal_net::infra::errors::TransportConnectError::SslFailedHandshake(
+                    libsignal_net::infra::errors::FailedHandshakeReason::Cert(
+                        boring_signal::x509::X509VerifyError::SELF_SIGNED_CERT_IN_CHAIN,
+                    ),
+                ),
+            ))
+        }
     })
 }
 

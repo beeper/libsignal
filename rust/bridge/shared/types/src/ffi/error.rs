@@ -11,7 +11,8 @@ use attest::enclave::Error as EnclaveError;
 use attest::hsm_enclave::Error as HsmEnclaveError;
 use device_transfer::Error as DeviceTransferError;
 use libsignal_account_keys::Error as PinError;
-use libsignal_net::infra::errors::LogSafeDisplay;
+use libsignal_net::infra::errors::{LogSafeDisplay, TransportConnectError};
+use libsignal_net::infra::ws::WebSocketConnectError;
 use libsignal_net_chat::api::RateLimitChallenge;
 use libsignal_net_chat::api::keytrans::Error as KeyTransError;
 use libsignal_net_chat::api::messages::MismatchedDeviceError;
@@ -22,7 +23,7 @@ use usernames::{UsernameError, UsernameLinkError};
 use zkgroup::{ZkGroupDeserializationFailure, ZkGroupVerificationFailure};
 
 use super::{FutureCancelled, NullPointerError, UnexpectedPanic};
-use crate::support::{IllegalArgumentError, describe_panic};
+use crate::support::{IllegalArgumentError, WithContext, describe_panic};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -100,6 +101,7 @@ pub enum SignalErrorCode {
     ChatServiceInactive = 149,
     RequestTimedOut = 150,
     RateLimitChallenge = 151,
+    PossibleCaptiveNetwork = 152,
 
     SvrDataMissing = 160,
     SvrRestoreFailed = 161,
@@ -629,6 +631,13 @@ impl IntoFfiError for libsignal_net::cdsi::LookupError {
 impl IntoFfiError for libsignal_net::chat::ConnectError {
     fn into_ffi_error(self) -> impl Into<SignalFfiError> {
         match self {
+            // Special case for self-signed certs, in case the app wants to tell the user to switch
+            // networks.
+            Self::WebSocket(WebSocketConnectError::Transport(
+                ref e @ TransportConnectError::SslFailedHandshake(ref reason),
+            )) if reason.is_possible_captive_network() => {
+                SimpleError::new(SignalErrorCode::PossibleCaptiveNetwork, e.to_string()).into()
+            }
             Self::WebSocket(e) => {
                 SimpleError::new(SignalErrorCode::WebSocket, format!("WebSocket error: {e}")).into()
             }
@@ -1145,6 +1154,13 @@ impl CallbackError {
             Some(value) => Err(Self { value }),
         }
     }
+
+    pub fn log_on_error(operation: &str, value: i32) {
+        match Self::check(value) {
+            Ok(()) => {}
+            Err(value) => log::error!("failed '{operation}' with {value}"),
+        }
+    }
 }
 
 impl fmt::Display for CallbackError {
@@ -1154,3 +1170,22 @@ impl fmt::Display for CallbackError {
 }
 
 impl std::error::Error for CallbackError {}
+
+impl From<WithContext<CallbackError>> for SignalProtocolError {
+    fn from(value: WithContext<CallbackError>) -> Self {
+        let WithContext { operation, inner } = value;
+        SignalProtocolError::for_application_callback(operation)(inner)
+    }
+}
+
+/// This is overly general, but in practice is only used to handle errors converting callback
+/// results.
+impl From<WithContext<SignalFfiError>> for SignalProtocolError {
+    fn from(value: WithContext<SignalFfiError>) -> Self {
+        let WithContext {
+            operation: _,
+            inner,
+        } = value;
+        SignalProtocolError::FfiBindingError(inner.to_string())
+    }
+}

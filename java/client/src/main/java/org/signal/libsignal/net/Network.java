@@ -318,8 +318,9 @@ public class Network {
    * to the chat service, and incoming events will be provided via the provided {@link
    * ChatConnectionListener} argument.
    *
-   * <p>If the connection attempt fails, the future will contain a {@link ChatServiceException} or
-   * other exception type wrapped in a {@link ExecutionException}.
+   * <p>If the connection attempt fails, the future will contain a {@link ChatServiceException},
+   * {@link PossibleCaptiveNetworkException}, or other exception type wrapped in a {@link
+   * ExecutionException}.
    */
   public CompletableFuture<UnauthenticatedChatConnection> connectUnauthChat(
       final Locale locale, ChatConnectionListener listener) {
@@ -344,8 +345,9 @@ public class Network {
    * the chat service, and incoming events will be provided via the provided {@link
    * ChatConnectionListener} argument.
    *
-   * <p>If the connection attempt fails, the future will contain a {@link ChatServiceException} or
-   * other exception type wrapped in a {@link ExecutionException}.
+   * <p>If the connection attempt fails, the future will contain a {@link ChatServiceException},
+   * {@link PossibleCaptiveNetworkException}, or other exception type wrapped in a {@link
+   * ExecutionException}.
    */
   public CompletableFuture<AuthenticatedChatConnection> connectAuthChat(
       final String username,
@@ -373,6 +375,17 @@ public class Network {
     return locale == null
         ? new String[0]
         : new String[] {locale.getLanguage() + "-" + locale.getCountry()};
+  }
+
+  /**
+   * Creates a new instance of {@link ProvisioningConnection}.
+   *
+   * <p>If the connection attempt fails, the future will contain a {@link ChatServiceException} or
+   * other exception type wrapped in a {@link ExecutionException}.
+   */
+  public CompletableFuture<ProvisioningConnection> connectProvisioning(
+      ProvisioningConnectionListener listener) {
+    return ProvisioningConnection.connect(tokioAsyncContext, connectionManager, listener);
   }
 
   static class ConnectionManager extends NativeHandleGuard.SimpleOwner

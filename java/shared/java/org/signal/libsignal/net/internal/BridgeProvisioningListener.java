@@ -1,5 +1,5 @@
 //
-// Copyright 2024 Signal Messenger, LLC.
+// Copyright 2025 Signal Messenger, LLC.
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
@@ -10,15 +10,13 @@ import org.signal.libsignal.internal.CalledFromNative;
 /**
  * A helper interface that represents the callback methods used by the Rust side of the bridge.
  *
- * <p>The app-facing listener API is {@link org.signal.libsignal.net.ChatConnectionListener}.
+ * <p>The app-facing listener API is {@link org.signal.libsignal.net.ProvisioningListener}.
  */
 @CalledFromNative
-public interface BridgeChatListener {
-  void receivedIncomingMessage(byte[] envelope, long serverDeliveryTimestamp, long sendAckHandle);
+public interface BridgeProvisioningListener {
+  void receivedAddress(String address, long sendAckHandle);
 
-  void receivedQueueEmpty();
-
-  void receivedAlerts(String[] alerts);
+  void receivedEnvelope(byte[] envelope, long sendAckHandle);
 
   // disconnectReason should always be a ChatServiceError, but it is converted to a Throwable
   //   just to be easily passed across the bridge.
