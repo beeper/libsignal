@@ -63,16 +63,17 @@ pub fn decrypt_username(
     }
 
     let mac_key = hkdf(entropy, USERNAME_LINK_LABEL_AUTHENTICATION_KEY);
-    let (iv_and_ctext, expected_hash) = encrypted_username.split_at(len - USERNAME_LINK_HMAC_LEN);
+    let (iv_and_ctext, expected_hash) = encrypted_username
+        .split_last_chunk::<USERNAME_LINK_HMAC_LEN>()
+        .expect("length already checked");
     let actual_hash = hmac(&mac_key, iv_and_ctext);
 
     if !bool::from(expected_hash.ct_eq(&actual_hash)) {
         return Err(UsernameLinkError::HmacMismatch);
     }
 
-    let ctext = &encrypted_username[USERNAME_LINK_IV_SIZE..len - USERNAME_LINK_HMAC_LEN];
+    let (iv, ctext) = iv_and_ctext.split_at(USERNAME_LINK_IV_SIZE);
     let aes_key = hkdf(entropy, USERNAME_LINK_LABEL_ENCRYPTION_KEY);
-    let iv = &encrypted_username[..USERNAME_LINK_IV_SIZE];
     let ptext =
         aes_256_cbc_decrypt(ctext, &aes_key, iv).map_err(|_| UsernameLinkError::BadCiphertext)?;
 

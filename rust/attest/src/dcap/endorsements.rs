@@ -106,6 +106,7 @@ impl TryFrom<&[u8]> for SgxEndorsements {
 
         let (offsets, data) = src.split_at(offsets_required_size);
 
+        // TODO: Use as_chunks instead at MSRV 1.88.
         let offsets = offsets
             .chunks_exact(4)
             .map(|d| u32::from_le_bytes(d.try_into().expect("correct size")) as usize)
@@ -304,13 +305,9 @@ mod tests {
 
     #[test]
     fn make_endorsements_header() {
-        let data: [u8; std::mem::size_of::<EndorsementsHeader>()] =
-            include_bytes!("../../tests/data/dcap.endorsements")
-                [..std::mem::size_of::<EndorsementsHeader>()]
-                .try_into()
-                .unwrap();
-
-        let header = EndorsementsHeader::read_from_bytes(&data).expect("failed to parse header");
+        let data: &[u8] = include_bytes!("../../tests/data/dcap.endorsements");
+        let (header, _remaining) =
+            EndorsementsHeader::read_from_prefix(data).expect("failed to parse header");
 
         assert_eq!(1, header.version.get());
         assert_eq!(2, header.enclave_type.get()) // oe_enclave_type_t (include/openenclave/bits/types.h)
