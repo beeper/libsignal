@@ -228,8 +228,9 @@ impl Visit<Scrambler> for proto::AccountData {
             svrPin,
             bioText,
             bioEmoji,
-            special_fields: _,
+            keyTransparencyData,
             androidSpecificSettings: _,
+            special_fields: _,
         } = self;
 
         profileKey.randomize(&mut visitor.rng);
@@ -250,6 +251,7 @@ impl Visit<Scrambler> for proto::AccountData {
         if !bioEmoji.is_empty() {
             *bioEmoji = REPLACEMENT_EMOJI.to_string();
         }
+        keyTransparencyData.randomize(&mut visitor.rng);
     }
 }
 
@@ -310,6 +312,7 @@ impl Visit<Scrambler> for proto::account_data::AccountSettings {
             screenLockTimeoutMinutes: _,
             pinReminders: _,
             allowSealedSenderFromAnyone: _,
+            allowAutomaticKeyVerification: _,
             special_fields: _,
         } = self;
 
@@ -481,6 +484,7 @@ impl Visit<Scrambler> for proto::Contact {
             hideStory: _,
             identityKey,
             identityState: _,
+            keyTransparencyData,
             registration,
             nickname,
             systemGivenName,
@@ -530,6 +534,7 @@ impl Visit<Scrambler> for proto::Contact {
         systemFamilyName.randomize(&mut visitor.rng);
         systemNickname.randomize(&mut visitor.rng);
         note.randomize(&mut visitor.rng);
+        keyTransparencyData.randomize(&mut visitor.rng);
     }
 }
 
@@ -644,12 +649,20 @@ impl Visit<Scrambler> for proto::group::AccessControl {
 impl Visit<Scrambler> for proto::group::Member {
     fn accept(&mut self, visitor: &mut Scrambler) {
         let Self {
-            userId,
+            user_id,
             role: _,
             joinedAtVersion: _,
+            label_emoji,
+            label_string,
             special_fields: _,
         } = self;
-        visitor.replace_service_id(userId);
+        visitor.replace_service_id(user_id);
+        if !label_emoji.is_empty() {
+            *label_emoji = REPLACEMENT_EMOJI.to_string();
+        }
+        if !label_string.is_empty() {
+            label_string.randomize(&mut visitor.rng);
+        }
     }
 }
 
@@ -669,22 +682,22 @@ impl Visit<Scrambler> for proto::group::MemberPendingProfileKey {
 impl Visit<Scrambler> for proto::group::MemberPendingAdminApproval {
     fn accept(&mut self, visitor: &mut Scrambler) {
         let Self {
-            userId,
+            user_id,
             timestamp: _,
             special_fields: _,
         } = self;
-        visitor.replace_service_id(userId);
+        visitor.replace_service_id(user_id);
     }
 }
 
 impl Visit<Scrambler> for proto::group::MemberBanned {
     fn accept(&mut self, visitor: &mut Scrambler) {
         let Self {
-            userId,
+            user_id,
             timestamp: _,
             special_fields: _,
         } = self;
-        visitor.replace_service_id(userId);
+        visitor.replace_service_id(user_id);
     }
 }
 

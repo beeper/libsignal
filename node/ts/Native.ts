@@ -216,7 +216,6 @@ type NativeFunctions = {
   ProtocolAddress_DeviceId: (obj: Wrapper<ProtocolAddress>) => number;
   ProtocolAddress_Name: (obj: Wrapper<ProtocolAddress>) => string;
   PublicKey_Equals: (lhs: Wrapper<PublicKey>, rhs: Wrapper<PublicKey>) => boolean;
-  PublicKey_Compare: (key1: Wrapper<PublicKey>, key2: Wrapper<PublicKey>) => number;
   PublicKey_Verify: (key: Wrapper<PublicKey>, message: Uint8Array, signature: Uint8Array) => boolean;
   PrivateKey_Deserialize: (data: Uint8Array) => PrivateKey;
   PrivateKey_Serialize: (obj: Wrapper<PrivateKey>) => Uint8Array;
@@ -553,6 +552,7 @@ type NativeFunctions = {
   KeyTransparency_Search: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array | null, usernameHash: Uint8Array | null, accountData: Uint8Array | null, lastDistinguishedTreeHead: Uint8Array) => CancellablePromise<Uint8Array>;
   KeyTransparency_Monitor: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array | null, usernameHash: Uint8Array | null, accountData: Uint8Array | null, lastDistinguishedTreeHead: Uint8Array, isSelfMonitor: boolean) => CancellablePromise<Uint8Array>;
   KeyTransparency_Distinguished: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, lastDistinguishedTreeHead: Uint8Array | null) => CancellablePromise<Uint8Array>;
+  UnauthenticatedChatConnection_account_exists: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, account: Uint8Array) => CancellablePromise<boolean>;
   RegistrationService_CreateSession: (asyncRuntime: Wrapper<TokioAsyncContext>, createSession: RegistrationCreateSessionRequest, connectChat: ConnectChatBridge) => CancellablePromise<RegistrationService>;
   RegistrationService_ResumeSession: (asyncRuntime: Wrapper<TokioAsyncContext>, sessionId: string, number: string, connectChat: ConnectChatBridge) => CancellablePromise<RegistrationService>;
   RegistrationService_RequestVerificationCode: (asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, transport: string, client: string, languages: string[]) => CancellablePromise<void>;
@@ -768,7 +768,6 @@ const { registerErrors,
   ProtocolAddress_DeviceId,
   ProtocolAddress_Name,
   PublicKey_Equals,
-  PublicKey_Compare,
   PublicKey_Verify,
   PrivateKey_Deserialize,
   PrivateKey_Serialize,
@@ -1105,6 +1104,7 @@ const { registerErrors,
   KeyTransparency_Search,
   KeyTransparency_Monitor,
   KeyTransparency_Distinguished,
+  UnauthenticatedChatConnection_account_exists,
   RegistrationService_CreateSession,
   RegistrationService_ResumeSession,
   RegistrationService_RequestVerificationCode,
@@ -1322,7 +1322,6 @@ export { registerErrors,
   ProtocolAddress_DeviceId,
   ProtocolAddress_Name,
   PublicKey_Equals,
-  PublicKey_Compare,
   PublicKey_Verify,
   PrivateKey_Deserialize,
   PrivateKey_Serialize,
@@ -1659,6 +1658,7 @@ export { registerErrors,
   KeyTransparency_Search,
   KeyTransparency_Monitor,
   KeyTransparency_Distinguished,
+  UnauthenticatedChatConnection_account_exists,
   RegistrationService_CreateSession,
   RegistrationService_ResumeSession,
   RegistrationService_RequestVerificationCode,
@@ -1883,7 +1883,7 @@ export interface RegisterAccountResponse { readonly __type: unique symbol; }
 export interface RegistrationAccountAttributes { readonly __type: unique symbol; }
 export interface BackupStoreResponse { readonly __type: unique symbol; }
 export interface BackupRestoreResponse { readonly __type: unique symbol; }
-export const NetRemoteConfigKeys = ['chatRequestConnectionCheckTimeoutMillis', 'chatPermessageDeflate', 'disableNagleAlgorithm', 'useH2ForUnauthChat', ] as const;
+export const NetRemoteConfigKeys = ['chatRequestConnectionCheckTimeoutMillis', 'disableNagleAlgorithm', 'useH2ForUnauthChat', 'grpc.AccountsAnonymousLookupUsernameHash', ] as const;
 export interface TokioAsyncContext { readonly __type: unique symbol; }
 export interface ConnectionManager { readonly __type: unique symbol; }
 export interface ConnectionProxyConfig { readonly __type: unique symbol; }

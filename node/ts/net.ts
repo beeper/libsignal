@@ -25,6 +25,7 @@ import { BridgedStringMap, newNativeHandle } from './internal.js';
 export * from './net/CDSI.js';
 export * from './net/Chat.js';
 export * from './net/chat/UnauthMessagesService.js';
+export * from './net/chat/UnauthProfilesService.js';
 export * from './net/chat/UnauthUsernamesService.js';
 export * from './net/Registration.js';
 export * from './net/SvrB.js';
@@ -524,11 +525,11 @@ export class Net {
    * @param buildVariant The build variant (BuildVariant.Production or BuildVariant.Beta) that determines which remote config keys to use.
    */
   setRemoteConfig(
-    remoteConfig: ReadonlyMap<string, string>,
+    remoteConfig: ReadonlyMap<(typeof REMOTE_CONFIG_KEYS)[number], string>,
     buildVariant: BuildVariant
   ): void;
   setRemoteConfig(
-    remoteConfig: ReadonlyMap<string, string>,
+    remoteConfig: ReadonlyMap<(typeof REMOTE_CONFIG_KEYS)[number], string>,
     buildVariant: BuildVariant = BuildVariant.Production
   ): void {
     Native.ConnectionManager_set_remote_config(

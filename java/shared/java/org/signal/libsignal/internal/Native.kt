@@ -15,9 +15,9 @@ import org.signal.libsignal.protocol.groups.state.SenderKeyStore
 import org.signal.libsignal.protocol.logging.Log
 import org.signal.libsignal.protocol.logging.SignalProtocolLogger
 import org.signal.libsignal.protocol.message.CiphertextMessage
+import org.signal.libsignal.protocol.state.internal.PreKeyStore
 import org.signal.libsignal.protocol.state.IdentityKeyStore
 import org.signal.libsignal.protocol.state.KyberPreKeyStore
-import org.signal.libsignal.protocol.state.PreKeyStore
 import org.signal.libsignal.protocol.state.SessionStore
 import org.signal.libsignal.protocol.state.SignedPreKeyStore
 import java.io.File
@@ -446,8 +446,6 @@ internal object Native {
   @JvmStatic @Throws(Exception::class)
   public external fun ECPrivateKey_Sign(key: ObjectHandle, message: ByteArray): ByteArray
 
-  @JvmStatic
-  public external fun ECPublicKey_Compare(key1: ObjectHandle, key2: ObjectHandle): Int
   @JvmStatic @Throws(Exception::class)
   public external fun ECPublicKey_Deserialize(data: ByteArray, offset: Int, length: Int): ObjectHandle
   @JvmStatic
@@ -1268,6 +1266,8 @@ internal object Native {
 
   @JvmStatic
   public external fun UnauthenticatedChatConnection_Destroy(handle: ObjectHandle): Unit
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_account_exists(asyncRuntime: ObjectHandle, chat: ObjectHandle, account: ByteArray): CompletableFuture<Boolean>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_connect(asyncRuntime: ObjectHandle, connectionManager: ObjectHandle, languages: Array<Object>): CompletableFuture<ObjectHandle>
   @JvmStatic

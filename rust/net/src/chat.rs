@@ -4,6 +4,7 @@
 //
 
 use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +30,6 @@ use tungstenite::protocol::WebSocketConfig;
 use crate::auth::Auth;
 use crate::connect_state::{ConnectionResources, RouteInfo, WebSocketTransportConnectorFactory};
 use crate::env::UserAgent;
-use crate::infra::OverrideNagleAlgorithm;
 use crate::proto;
 
 mod error;
@@ -168,9 +168,16 @@ pub struct ConnectionInfo {
 pub struct ChatConnection {
     inner: self::ws::Chat,
     connection_info: ConnectionInfo,
+    grpc_overrides: HashMap<&'static str, GrpcOverride>,
 }
 
 pub type GrpcBody = tonic::body::Body;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GrpcOverride {
+    UseGrpc,
+    UseWs,
+}
 
 /// A connection to the chat service that isn't yet active.
 #[derive(Debug)]
@@ -321,6 +328,7 @@ impl ChatConnection {
     pub fn finish_connect(
         tokio_runtime: tokio::runtime::Handle,
         pending: PendingChatConnection,
+        grpc_overrides: HashMap<&'static str, GrpcOverride>,
         listener: ws::EventListener,
     ) -> Self {
         let PendingChatConnection {
@@ -354,6 +362,7 @@ impl ChatConnection {
                 network_change_event,
                 listener,
             ),
+            grpc_overrides,
         }
     }
 
@@ -374,6 +383,10 @@ impl ChatConnection {
 
     pub async fn shared_h2_connection(&self) -> Option<Http2Client<GrpcBody>> {
         self.inner.shared_h2_connection().await
+    }
+
+    pub fn grpc_overrides(&self) -> &HashMap<&'static str, GrpcOverride> {
+        &self.grpc_overrides
     }
 }
 
@@ -427,6 +440,7 @@ pub mod test_support {
     };
     use crate::env::constants::CHAT_WEBSOCKET_PATH;
     use crate::env::{Env, StaticIpOrder, UserAgent};
+    use crate::infra::OverrideNagleAlgorithm;
     use crate::infra::route::DirectOrProxyProvider;
 
     pub async fn simple_chat_connection(
@@ -488,7 +502,8 @@ pub mod test_support {
         let listener: ws::EventListener = Box::new(|_event| {});
 
         let tokio_runtime = tokio::runtime::Handle::try_current().expect("can get tokio runtime");
-        let chat_connection = ChatConnection::finish_connect(tokio_runtime, pending, listener);
+        let chat_connection =
+            ChatConnection::finish_connect(tokio_runtime, pending, Default::default(), listener);
 
         Ok(chat_connection)
     }
@@ -521,6 +536,7 @@ pub(crate) mod test {
     use super::*;
     use crate::connect_state::{ConnectState, SUGGESTED_CONNECT_CONFIG};
     use crate::env::constants::CHAT_WEBSOCKET_PATH;
+    use crate::infra::OverrideNagleAlgorithm;
 
     #[test]
     fn proto_into_response_works_with_valid_data() {

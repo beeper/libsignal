@@ -121,6 +121,36 @@ where
     }
 }
 
+/// A variation of [`ArgTypeInfo`] for callback results.
+///
+/// All [`SimpleArgTypeInfo`] implementations are reusable for this, but the general [`ArgTypeInfo`]
+/// allows borrowing from the foreign value and a callback result can't do that.
+///
+/// Note that because a JNI type signature is required, while [`SimpleArgTypeInfo`] doesn't provide
+/// one, the blanket implementation for `CallbackResultTypeInfo` also requires [`ResultTypeInfo`].
+/// If this is not available, you'll have to provide a manual implementation of
+/// `CallbackResultTypeInfo` instead.
+pub trait CallbackResultTypeInfo<'a>: Sized {
+    type ResultType;
+    const JNI_RESULT_SIGNATURE: &'static str;
+    fn convert_from_callback(
+        env: &mut JNIEnv<'a>,
+        foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError>;
+}
+
+impl<'a, T: SimpleArgTypeInfo<'a> + ResultTypeInfo<'a>> CallbackResultTypeInfo<'a> for T {
+    type ResultType = <T as SimpleArgTypeInfo<'a>>::ArgType;
+    const JNI_RESULT_SIGNATURE: &'static str = <T as ResultTypeInfo<'a>>::JNI_SIGNATURE;
+
+    fn convert_from_callback(
+        env: &mut JNIEnv<'a>,
+        foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError> {
+        Self::convert_from(env, &foreign)
+    }
+}
+
 /// Converts result values from their Rust form to their FFI form.
 ///
 /// `ResultTypeInfo` is used to implement the `bridge_fn` macro, but can also be used outside it.
@@ -621,13 +651,54 @@ macro_rules! bridge_trait {
 }
 
 bridge_trait!(IdentityKeyStore);
-bridge_trait!(PreKeyStore);
+// bridge_trait!(PreKeyStore);
 bridge_trait!(SenderKeyStore);
 bridge_trait!(SessionStore);
 bridge_trait!(SignedPreKeyStore);
 bridge_trait!(KyberPreKeyStore);
 bridge_trait!(InputStream);
 bridge_trait!(SyncInputStream);
+
+impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
+    for &'storage mut dyn PreKeyStore
+{
+    type ArgType = JObject<'context>;
+    type StoredType = BridgedStore<JniBridgePreKeyStore>;
+    fn borrow(
+        env: &mut JNIEnv<'context>,
+        store: &'param Self::ArgType,
+    ) -> Result<Self::StoredType, BridgeLayerError> {
+        Ok(BridgedStore(JniBridgePreKeyStore::new(env, store)?))
+    }
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        stored
+    }
+}
+
+impl<'a> CallbackResultTypeInfo<'a> for Option<PreKeyRecord> {
+    type ResultType = JObject<'a>;
+    const JNI_RESULT_SIGNATURE: &'static str =
+        jni_signature!(org.signal.libsignal.internal.NativeHandleGuard::Owner);
+
+    fn convert_from_callback(
+        env: &mut JNIEnv<'a>,
+        foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError> {
+        if foreign.is_null() {
+            Ok(None)
+        } else {
+            let handle: jlong = call_method_checked(
+                env,
+                foreign,
+                "unsafeNativeHandleWithoutGuard",
+                jni_args!(() -> long),
+            )?;
+            let object: &PreKeyRecord =
+                unsafe { BridgeHandle::native_handle_cast(handle)?.as_ref() };
+            Ok(Some(object.clone()))
+        }
+    }
+}
 
 impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
     for Option<Box<dyn ChatListener>>
@@ -775,6 +846,26 @@ impl<'a> ResultTypeInfo<'a> for crate::cds2::Cds2Metrics {
     }
 }
 
+impl ResultTypeInfo<'_> for () {
+    type ResultType = ();
+    const JNI_SIGNATURE: &'static str = jni_signature!(void);
+    fn convert_into(self, _env: &mut JNIEnv) -> Result<Self::ResultType, BridgeLayerError> {
+        Ok(self)
+    }
+}
+
+impl CallbackResultTypeInfo<'_> for () {
+    type ResultType = ();
+    const JNI_RESULT_SIGNATURE: &'static str = jni_signature!(void);
+
+    fn convert_from_callback(
+        _env: &mut JNIEnv<'_>,
+        _foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError> {
+        Ok(())
+    }
+}
+
 impl ResultTypeInfo<'_> for bool {
     type ResultType = jboolean;
     fn convert_into(self, _env: &mut JNIEnv) -> Result<Self::ResultType, BridgeLayerError> {
@@ -803,6 +894,7 @@ impl ResultTypeInfo<'_> for u16 {
 /// Note that this is different from the implementation of [`ArgTypeInfo`] for `u32`.
 impl ResultTypeInfo<'_> for u32 {
     type ResultType = jint;
+    const JNI_SIGNATURE: &'static str = jni_signature!(int);
     fn convert_into(self, _env: &mut JNIEnv) -> Result<Self::ResultType, BridgeLayerError> {
         // Note that we don't check bounds here.
         Ok(self as jint)
@@ -2076,25 +2168,18 @@ macro_rules! jni_bridge_handle_fns {
     };
 }
 
-macro_rules! trivial {
-    ($typ:ty) => {
-        impl SimpleArgTypeInfo<'_> for $typ {
-            type ArgType = Self;
-            fn convert_from(_env: &mut JNIEnv, foreign: &Self) -> Result<Self, BridgeLayerError> {
-                Ok(*foreign)
-            }
-        }
-        impl ResultTypeInfo<'_> for $typ {
-            type ResultType = Self;
-            fn convert_into(self, _env: &mut JNIEnv) -> Result<Self, BridgeLayerError> {
-                Ok(self)
-            }
-        }
-    };
+impl SimpleArgTypeInfo<'_> for i32 {
+    type ArgType = Self;
+    fn convert_from(_env: &mut JNIEnv, foreign: &Self) -> Result<Self, BridgeLayerError> {
+        Ok(*foreign)
+    }
 }
-
-trivial!(i32);
-trivial!(());
+impl ResultTypeInfo<'_> for i32 {
+    type ResultType = Self;
+    fn convert_into(self, _env: &mut JNIEnv) -> Result<Self, BridgeLayerError> {
+        Ok(self)
+    }
+}
 
 /// Syntactically translates `bridge_fn` argument types to JNI types for `cbindgen` and
 /// `gen_java_decl.py`.
@@ -2252,6 +2337,13 @@ macro_rules! jni_arg_type {
     (TestingFutureCancellationGuard) => { ::jni::sys::jlong };
 
     (Ignored<$typ:ty>) => (::jni::objects::JObject<'local>);
+
+    // For use in callbacks.
+    (Result<$typ:tt $(, $ignored:ty)?>) => (jni_arg_type!($typ));
+    (Result<$typ:tt<$($args:tt),+> $(, $ignored:ty)?>) => (jni_arg_type!($typ<$($args),+>));
+    (Option<$typ:ty>) => ($crate::jni::Nullable<jni_arg_type!($typ)>);
+    (()) => (());
+    ($typ:ty) => (::jni::objects::JObject<'local>);
 }
 
 /// Syntactically translates `bridge_fn` result types to JNI types for `cbindgen` and

@@ -312,29 +312,45 @@ pub(crate) const ENDPOINT_PARAMS_CDSI_STAGING: EndpointParams<'static, Cdsi> = E
     raft_config: (),
 };
 
-pub(crate) const ENDPOINT_PARAMS_SVR2_STAGING: EndpointParams<'static, SvrSgx> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_STAGING),
-    raft_config: attest::constants::RAFT_CONFIG_SVR2_STAGING,
-};
+pub(crate) const ENDPOINT_PARAMS_SVR2_2026Q1_STAGING: EndpointParams<'static, SvrSgx> =
+    EndpointParams {
+        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_2026Q1_STAGING),
+        raft_config: attest::constants::RAFT_CONFIG_SVR2_2026Q1_STAGING,
+    };
 
-pub(crate) const ENDPOINT_PARAMS_SVRB_STAGING: EndpointParams<'static, SvrSgx> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_STAGING),
-    raft_config: attest::constants::RAFT_CONFIG_SVRB_STAGING,
-};
+pub(crate) const ENDPOINT_PARAMS_SVRB_2025Q3_STAGING: EndpointParams<'static, SvrSgx> =
+    EndpointParams {
+        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_2025Q3_STAGING),
+        raft_config: attest::constants::RAFT_CONFIG_SVRB_2025Q3_STAGING,
+    };
 
-pub(crate) const ENDPOINT_PARAMS_SVRB_PROD: EndpointParams<'static, SvrSgx> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_PROD),
-    raft_config: attest::constants::RAFT_CONFIG_SVRB_PROD,
-};
+pub(crate) const ENDPOINT_PARAMS_SVRB_2026Q1_STAGING: EndpointParams<'static, SvrSgx> =
+    EndpointParams {
+        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_2026Q1_STAGING),
+        raft_config: attest::constants::RAFT_CONFIG_SVRB_2026Q1_STAGING,
+    };
+
+pub(crate) const ENDPOINT_PARAMS_SVR2_2026Q1_PROD: EndpointParams<'static, SvrSgx> =
+    EndpointParams {
+        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_2026Q1_PROD),
+        raft_config: attest::constants::RAFT_CONFIG_SVR2_2026Q1_PROD,
+    };
+
+pub(crate) const ENDPOINT_PARAMS_SVRB_2025Q3_PROD: EndpointParams<'static, SvrSgx> =
+    EndpointParams {
+        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_2025Q3_PROD),
+        raft_config: attest::constants::RAFT_CONFIG_SVRB_2025Q3_PROD,
+    };
+
+pub(crate) const ENDPOINT_PARAMS_SVRB_2026Q1_PROD: EndpointParams<'static, SvrSgx> =
+    EndpointParams {
+        mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVRB_2026Q1_PROD),
+        raft_config: attest::constants::RAFT_CONFIG_SVRB_2026Q1_PROD,
+    };
 
 pub(crate) const ENDPOINT_PARAMS_CDSI_PROD: EndpointParams<'static, Cdsi> = EndpointParams {
     mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_CDSI_PROD),
     raft_config: (),
-};
-
-pub(crate) const ENDPOINT_PARAMS_SVR2_PROD: EndpointParams<'static, SvrSgx> = EndpointParams {
-    mr_enclave: MrEnclave::new(attest::constants::ENCLAVE_ID_SVR2_PROD),
-    raft_config: attest::constants::RAFT_CONFIG_SVR2_PROD,
 };
 
 pub(crate) const KEYTRANS_SIGNING_KEY_MATERIAL_STAGING: &[u8; 32] =
@@ -785,19 +801,27 @@ pub const STAGING: Env<'static> = Env {
     svr2: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_SVR2_STAGING,
         ws_config: RECOMMENDED_WS_CONFIG,
-        params: ENDPOINT_PARAMS_SVR2_STAGING,
+        params: ENDPOINT_PARAMS_SVR2_2026Q1_STAGING,
     },
     svr_b: SvrBEnv {
         current: [
             Some(EnclaveEndpoint {
                 domain_config: DOMAIN_CONFIG_SVRB_STAGING,
                 ws_config: RECOMMENDED_WS_CONFIG,
-                params: ENDPOINT_PARAMS_SVRB_STAGING,
+                params: ENDPOINT_PARAMS_SVRB_2026Q1_STAGING,
             }),
             None,
             None,
         ],
-        previous: [None, None, None],
+        previous: [
+            Some(EnclaveEndpoint {
+                domain_config: DOMAIN_CONFIG_SVRB_STAGING,
+                ws_config: RECOMMENDED_WS_CONFIG,
+                params: ENDPOINT_PARAMS_SVRB_2025Q3_STAGING,
+            }),
+            None,
+            None,
+        ],
     },
     keytrans_config: KEYTRANS_CONFIG_STAGING,
 };
@@ -814,16 +838,20 @@ pub const PROD: Env<'static> = Env {
     svr2: EnclaveEndpoint {
         domain_config: DOMAIN_CONFIG_SVR2,
         ws_config: RECOMMENDED_WS_CONFIG,
-        params: ENDPOINT_PARAMS_SVR2_PROD,
+        params: ENDPOINT_PARAMS_SVR2_2026Q1_PROD,
     },
     svr_b: SvrBEnv {
         current: [
             Some(EnclaveEndpoint {
                 domain_config: DOMAIN_CONFIG_SVRB_PROD,
                 ws_config: RECOMMENDED_WS_CONFIG,
-                params: ENDPOINT_PARAMS_SVRB_PROD,
+                params: ENDPOINT_PARAMS_SVRB_2026Q1_PROD,
             }),
-            None,
+            Some(EnclaveEndpoint {
+                domain_config: DOMAIN_CONFIG_SVRB_PROD,
+                ws_config: RECOMMENDED_WS_CONFIG,
+                params: ENDPOINT_PARAMS_SVRB_2025Q3_PROD,
+            }),
             None,
         ],
         previous: [None, None, None],
@@ -948,7 +976,7 @@ mod test {
             },
             override_nagle_algorithm,
         );
-        let routes = route_provider.routes(&FakeContext::new()).collect_vec();
+        let routes = route_provider.routes(&mut FakeContext::new()).collect_vec();
 
         let expected_direct_route = HttpsTlsRoute {
             fragment: HttpRouteFragment {

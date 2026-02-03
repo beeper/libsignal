@@ -330,7 +330,7 @@ impl SenderCertificate {
 
     pub fn validate_with_trust_roots(
         &self,
-        trust_roots: &[&PublicKey],
+        trust_roots: &[impl AsRef<PublicKey>],
         validation_time: Timestamp,
     ) -> Result<bool> {
         let signer = self.signer()?;
@@ -338,7 +338,7 @@ impl SenderCertificate {
         // Check the signer against every trust root to hide which one was the correct one.
         let mut any_valid = Choice::from(0u8);
         for root in trust_roots {
-            let ok = signer.validate(root)?;
+            let ok = signer.validate(root.as_ref())?;
             any_valid |= Choice::from(u8::from(ok));
         }
         if !bool::from(any_valid) {
@@ -701,7 +701,7 @@ mod sealed_sender_v1 {
     #[cfg(test)]
     use std::fmt;
 
-    use zerocopy::IntoBytes;
+    use libsignal_core::derive_arrays;
 
     use super::*;
 
@@ -732,15 +732,11 @@ mod sealed_sender_v1 {
             .concat();
 
             let shared_secret = our_keys.private_key.calculate_agreement(their_public)?;
-            #[derive(Default, KnownLayout, IntoBytes, FromBytes)]
-            #[repr(C, packed)]
-            struct DerivedValues([u8; 32], [u8; 32], [u8; 32]);
-            let mut derived_values = DerivedValues::default();
-            hkdf::Hkdf::<sha2::Sha256>::new(Some(&ephemeral_salt), &shared_secret)
-                .expand(&[], derived_values.as_mut_bytes())
-                .expect("valid output length");
-
-            let DerivedValues(chain_key, cipher_key, mac_key) = derived_values;
+            let (chain_key, cipher_key, mac_key) = derive_arrays(|bytes| {
+                hkdf::Hkdf::<sha2::Sha256>::new(Some(&ephemeral_salt), &shared_secret)
+                    .expand(&[], bytes)
+                    .expect("valid output length")
+            });
 
             Ok(Self {
                 chain_key,
@@ -794,15 +790,11 @@ mod sealed_sender_v1 {
             // 96 bytes are derived, but the first 32 are discarded/unused. This is intended to
             // mirror the way the EphemeralKeys are derived, even though StaticKeys does not end up
             // requiring a third "chain key".
-            #[derive(Default, KnownLayout, IntoBytes, FromBytes)]
-            #[repr(C, packed)]
-            struct DerivedValues(#[allow(unused)] [u8; 32], [u8; 32], [u8; 32]);
-            let mut derived_values = DerivedValues::default();
-            hkdf::Hkdf::<sha2::Sha256>::new(Some(&salt), &shared_secret)
-                .expand(&[], derived_values.as_mut_bytes())
-                .expect("valid output length");
-
-            let DerivedValues(_, cipher_key, mac_key) = derived_values;
+            let (_, cipher_key, mac_key) = derive_arrays::<32, 32, 32>(|bytes| {
+                hkdf::Hkdf::<sha2::Sha256>::new(Some(&salt), &shared_secret)
+                    .expand(&[], bytes)
+                    .expect("valid output length")
+            });
 
             Ok(Self {
                 cipher_key,

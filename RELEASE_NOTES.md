@@ -1,5 +1,10 @@
-v0.86.12
+v0.87.0
 
-- Adds the "useH2ForUnauthChat" remote config, for experimenting with running unauthenticated chat connections over H2.
+- Expose accountExists() API to client libraries
 
-- Update to latest libcrux-ml-kem and spqr crates, addressing https://github.com/signalapp/libsignal/issues/641. Thank you to @GuuJiang for investigating and helping fix this issue!
+- Expose "grpc.AccountsAnonymousLookupUsernameHash" remote config key. When enabled, the typed chat API `lookUpUsernameHash` will use gRPC instead of the default websocket-based implementation. This has no effect if "useH2ForUnauthChat" is unset, or if an H2 connection cannot be established for some other reason.
+
+- Updated Kotlin and Android Gradle Plugin versions.
+
+- Remove PublicKey ordered comparsion
+

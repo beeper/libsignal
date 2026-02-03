@@ -26,6 +26,7 @@ use argon2::{
     Algorithm, Argon2, ParamsBuilder, PasswordHash, PasswordHasher, PasswordVerifier, Version,
 };
 use hkdf::Hkdf;
+use libsignal_core::try_derive_arrays;
 use sha2::Sha256;
 
 use crate::error::Result;
@@ -60,15 +61,12 @@ impl PinHash {
                 .build()
                 .expect("valid params"),
         );
-        let mut output_key_material = [0u8; 64];
-        hasher.hash_password_into(pin, salt, &mut output_key_material)?;
+        let (encryption_key, access_key, []) = try_derive_arrays(|output_key_material| {
+            hasher.hash_password_into(pin, salt, output_key_material)
+        })?;
         Ok(PinHash {
-            encryption_key: output_key_material[..32]
-                .try_into()
-                .expect("target length 32"),
-            access_key: output_key_material[32..]
-                .try_into()
-                .expect("target length 32"),
+            encryption_key,
+            access_key,
         })
     }
 
@@ -160,15 +158,12 @@ mod test {
     fn encrypt_hmac_sha256_siv(k: &[u8; 32], m: &[u8; 32]) -> Encrypted {
         let k_a = hmac_sha256(k, AUTH_BYTES);
         let k_e = hmac_sha256(k, ENC_BYTES);
-        let iv: [u8; 16] = hmac_sha256(&k_a, m)[..16].try_into().expect("must be 16");
+        let iv = *hmac_sha256(&k_a, m)
+            .first_chunk()
+            .expect("IV is shorter than SHA-256 output");
         let k_x = hmac_sha256(&k_e, &iv);
-        let c: [u8; 32] = k_x
-            .iter()
-            .zip(m.iter())
-            .map(|(a, b)| a ^ b)
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("must be length 32");
+        let mut c = k_x;
+        c.iter_mut().zip(m).for_each(|(c_i, m_i)| *c_i ^= m_i);
         Encrypted { iv, ciphertext: c }
     }
 

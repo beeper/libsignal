@@ -37,10 +37,10 @@ default-members = [
 resolver = "2" # so that our dev-dependency features don't leak into products
 
 [workspace.package]
-version = "0.86.12"
+version = "0.87.0"
 authors = ["Signal Messenger LLC"]
 license = "AGPL-3.0-only"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.lints.clippy]
 # Prefer TryFrom between integers unless truncation is desired.
@@ -170,6 +170,7 @@ proptest = "1.7"
 proptest-state-machine = "0.4"
 prost = "0.14"
 prost-build = "0.14"
+prost-types = "0.14"
 protobuf = "3.7.2"
 protobuf-codegen = "3.7.2"
 protobuf-json-mapping = "3.7.2"
@@ -208,7 +209,7 @@ tokio-tungstenite = "0.28.0"
 tokio-util = "0.7.11"
 tonic = { version = "0.14", default-features = false }
 tonic-prost = "0.14"
-tonic-prost-build = "0.14"
+tonic-prost-build = { version = "0.14", default-features = false }
 tower-service = "0.3.3"
 tungstenite = "0.28.0"
 unicode-segmentation = "1.12.0"

@@ -16,6 +16,27 @@ pub mod proto {
         pub mod device {
             tonic::include_proto!("org.signal.chat.device");
         }
+        pub mod errors {
+            tonic::include_proto!("org.signal.chat.errors");
+        }
+
+        // Not actually a proto, we just make sure to generate our helper file in the same place.
+        pub mod services {
+            tonic::include_proto!("service_methods");
+        }
+    }
+
+    // These protos come directly from Google and their doc comments aren't necessarily valid Markdown.
+    #[allow(
+        clippy::doc_overindented_list_items,
+        rustdoc::bare_urls,
+        rustdoc::broken_intra_doc_links,
+        rustdoc::invalid_html_tags
+    )]
+    pub mod google {
+        pub mod rpc {
+            tonic::include_proto!("google.rpc");
+        }
     }
 }
 
@@ -46,19 +67,63 @@ impl From<libsignal_core::Pni> for proto::chat::common::ServiceIdentifier {
 }
 
 impl proto::chat::common::ServiceIdentifier {
-    pub fn try_into_service_id(self) -> Option<libsignal_core::ServiceId> {
+    pub fn try_as_service_id(&self) -> Option<libsignal_core::ServiceId> {
         let Self {
             identity_type,
             uuid,
         } = self;
-        Some(match identity_type.try_into().ok()? {
+        Some(match (*identity_type).try_into().ok()? {
             proto::chat::common::IdentityType::Aci => {
-                libsignal_core::Aci::from_uuid_bytes(uuid.try_into().ok()?).into()
+                libsignal_core::Aci::from_uuid_bytes(uuid.as_slice().try_into().ok()?).into()
             }
             proto::chat::common::IdentityType::Pni => {
-                libsignal_core::Pni::from_uuid_bytes(uuid.try_into().ok()?).into()
+                libsignal_core::Pni::from_uuid_bytes(uuid.as_slice().try_into().ok()?).into()
             }
             proto::chat::common::IdentityType::Unspecified => return None,
         })
+    }
+}
+
+// We only need Name support for these few types, so we just do it here instead of adding it during
+// the build step using `prost_build::Config::enable_type_names`.
+impl prost::Name for proto::google::rpc::ErrorInfo {
+    const NAME: &'static str = "ErrorInfo";
+    const PACKAGE: &'static str = "google.rpc";
+
+    fn type_url() -> String {
+        const_str::concat!(
+            "type.googleapis.com/",
+            proto::google::rpc::ErrorInfo::PACKAGE,
+            proto::google::rpc::ErrorInfo::NAME
+        )
+        .to_owned()
+    }
+}
+
+impl prost::Name for proto::google::rpc::BadRequest {
+    const NAME: &'static str = "BadRequest";
+    const PACKAGE: &'static str = "google.rpc";
+
+    fn type_url() -> String {
+        const_str::concat!(
+            "type.googleapis.com/",
+            proto::google::rpc::BadRequest::PACKAGE,
+            proto::google::rpc::BadRequest::NAME
+        )
+        .to_owned()
+    }
+}
+
+impl prost::Name for proto::google::rpc::RetryInfo {
+    const NAME: &'static str = "RetryInfo";
+    const PACKAGE: &'static str = "google.rpc";
+
+    fn type_url() -> String {
+        const_str::concat!(
+            "type.googleapis.com/",
+            proto::google::rpc::RetryInfo::PACKAGE,
+            proto::google::rpc::RetryInfo::NAME
+        )
+        .to_owned()
     }
 }
