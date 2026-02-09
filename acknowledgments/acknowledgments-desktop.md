@@ -4634,7 +4634,7 @@ DEALINGS IN THE SOFTWARE.
 
 ```
 
-## bytes 1.11.0
+## bytes 1.11.1
 
 ```
 Copyright (c) 2018 Carl Lerche
@@ -5823,7 +5823,7 @@ DEALINGS IN THE SOFTWARE.
 
 ```
 
-## num-conv 0.1.0
+## num-conv 0.2.0
 
 ```
 Copyright (c) 2023 Jacob Pratt
@@ -5973,7 +5973,7 @@ SOFTWARE.
 
 ```
 
-## time-core 0.1.6, time 0.3.44
+## time-core 0.1.8, time 0.3.47
 
 ```
 Copyright (c) Jacob Pratt et al.
