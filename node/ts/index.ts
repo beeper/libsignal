@@ -1156,38 +1156,13 @@ export abstract class IdentityKeyStore implements Native.IdentityKeyStore {
   abstract getIdentity(name: ProtocolAddress): Promise<PublicKey | null>;
 }
 
-export abstract class PreKeyStore implements Native.PreKeyStore {
-  async _savePreKey(id: number, record: Native.PreKeyRecord): Promise<void> {
-    return this.savePreKey(id, PreKeyRecord._fromNativeHandle(record));
-  }
-  async _getPreKey(id: number): Promise<Native.PreKeyRecord> {
-    const pk = await this.getPreKey(id);
-    return pk._nativeHandle;
-  }
-  async _removePreKey(id: number): Promise<void> {
-    return this.removePreKey(id);
-  }
-
+export abstract class PreKeyStore {
   abstract savePreKey(id: number, record: PreKeyRecord): Promise<void>;
   abstract getPreKey(id: number): Promise<PreKeyRecord>;
   abstract removePreKey(id: number): Promise<void>;
 }
 
-export abstract class SignedPreKeyStore implements Native.SignedPreKeyStore {
-  async _saveSignedPreKey(
-    id: number,
-    record: Native.SignedPreKeyRecord
-  ): Promise<void> {
-    return this.saveSignedPreKey(
-      id,
-      SignedPreKeyRecord._fromNativeHandle(record)
-    );
-  }
-  async _getSignedPreKey(id: number): Promise<Native.SignedPreKeyRecord> {
-    const pk = await this.getSignedPreKey(id);
-    return pk._nativeHandle;
-  }
-
+export abstract class SignedPreKeyStore {
   abstract saveSignedPreKey(
     id: number,
     record: SignedPreKeyRecord
@@ -1514,6 +1489,41 @@ export function signalDecrypt(
   );
 }
 
+function bridgePreKeyStore(store: PreKeyStore): Native.BridgePreKeyStore {
+  return {
+    async storePreKey(id: number, record: Native.PreKeyRecord): Promise<void> {
+      return store.savePreKey(id, PreKeyRecord._fromNativeHandle(record));
+    },
+    async loadPreKey(id: number): Promise<Native.PreKeyRecord> {
+      const pk = await store.getPreKey(id);
+      return pk._nativeHandle;
+    },
+    async removePreKey(id: number): Promise<void> {
+      return store.removePreKey(id);
+    },
+  };
+}
+
+function bridgeSignedPreKeyStore(
+  store: SignedPreKeyStore
+): Native.BridgeSignedPreKeyStore {
+  return {
+    async storeSignedPreKey(
+      id: number,
+      record: Native.SignedPreKeyRecord
+    ): Promise<void> {
+      return store.saveSignedPreKey(
+        id,
+        SignedPreKeyRecord._fromNativeHandle(record)
+      );
+    },
+    async loadSignedPreKey(id: number): Promise<Native.SignedPreKeyRecord> {
+      const pk = await store.getSignedPreKey(id);
+      return pk._nativeHandle;
+    },
+  };
+}
+
 export function signalDecryptPreKey(
   message: PreKeySignalMessage,
   address: ProtocolAddress,
@@ -1528,8 +1538,8 @@ export function signalDecryptPreKey(
     address,
     sessionStore,
     identityStore,
-    prekeyStore,
-    signedPrekeyStore,
+    bridgePreKeyStore(prekeyStore),
+    bridgeSignedPreKeyStore(signedPrekeyStore),
     kyberPrekeyStore
   );
 }
@@ -1644,8 +1654,8 @@ export async function sealedSenderDecryptMessage(
     localDeviceId,
     sessionStore,
     identityStore,
-    prekeyStore,
-    signedPrekeyStore,
+    bridgePreKeyStore(prekeyStore),
+    bridgeSignedPreKeyStore(signedPrekeyStore),
     kyberPrekeyStore
   );
   return SealedSenderDecryptionResult._fromNativeHandle(ssdr);

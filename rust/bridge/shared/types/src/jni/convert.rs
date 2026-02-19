@@ -24,7 +24,10 @@ use crate::net::chat::{
     ChatListener, JniChatListener, JniProvisioningListener, ProvisioningListener,
 };
 use crate::net::registration::{ConnectChatBridge, RegistrationPushToken};
-use crate::support::{Array, AsType, FixedLengthBincodeSerializable, Serialized, extend_lifetime};
+use crate::protocol::storage::{JniBridgePreKeyStore, JniBridgeSignedPreKeyStore};
+use crate::support::{
+    Array, AsType, BridgedCallbacks, FixedLengthBincodeSerializable, Serialized, extend_lifetime,
+};
 
 /// Converts arguments from their JNI form to their Rust form.
 ///
@@ -654,7 +657,7 @@ bridge_trait!(IdentityKeyStore);
 // bridge_trait!(PreKeyStore);
 bridge_trait!(SenderKeyStore);
 bridge_trait!(SessionStore);
-bridge_trait!(SignedPreKeyStore);
+// bridge_trait!(SignedPreKeyStore);
 bridge_trait!(KyberPreKeyStore);
 bridge_trait!(InputStream);
 bridge_trait!(SyncInputStream);
@@ -663,12 +666,30 @@ impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param,
     for &'storage mut dyn PreKeyStore
 {
     type ArgType = JObject<'context>;
-    type StoredType = BridgedStore<JniBridgePreKeyStore>;
+    type StoredType = BridgedCallbacks<JniBridgePreKeyStore>;
     fn borrow(
         env: &mut JNIEnv<'context>,
         store: &'param Self::ArgType,
     ) -> Result<Self::StoredType, BridgeLayerError> {
-        Ok(BridgedStore(JniBridgePreKeyStore::new(env, store)?))
+        Ok(BridgedCallbacks(JniBridgePreKeyStore::new(env, store)?))
+    }
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        stored
+    }
+}
+
+impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
+    for &'storage mut dyn SignedPreKeyStore
+{
+    type ArgType = JObject<'context>;
+    type StoredType = BridgedCallbacks<JniBridgeSignedPreKeyStore>;
+    fn borrow(
+        env: &mut JNIEnv<'context>,
+        store: &'param Self::ArgType,
+    ) -> Result<Self::StoredType, BridgeLayerError> {
+        Ok(BridgedCallbacks(JniBridgeSignedPreKeyStore::new(
+            env, store,
+        )?))
     }
     fn load_from(stored: &'storage mut Self::StoredType) -> Self {
         stored
@@ -694,6 +715,31 @@ impl<'a> CallbackResultTypeInfo<'a> for Option<PreKeyRecord> {
                 jni_args!(() -> long),
             )?;
             let object: &PreKeyRecord =
+                unsafe { BridgeHandle::native_handle_cast(handle)?.as_ref() };
+            Ok(Some(object.clone()))
+        }
+    }
+}
+
+impl<'a> CallbackResultTypeInfo<'a> for Option<SignedPreKeyRecord> {
+    type ResultType = JObject<'a>;
+    const JNI_RESULT_SIGNATURE: &'static str =
+        jni_signature!(org.signal.libsignal.internal.NativeHandleGuard::Owner);
+
+    fn convert_from_callback(
+        env: &mut JNIEnv<'a>,
+        foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError> {
+        if foreign.is_null() {
+            Ok(None)
+        } else {
+            let handle: jlong = call_method_checked(
+                env,
+                foreign,
+                "unsafeNativeHandleWithoutGuard",
+                jni_args!(() -> long),
+            )?;
+            let object: &SignedPreKeyRecord =
                 unsafe { BridgeHandle::native_handle_cast(handle)?.as_ref() };
             Ok(Some(object.clone()))
         }

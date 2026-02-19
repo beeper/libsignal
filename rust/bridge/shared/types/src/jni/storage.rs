@@ -6,21 +6,12 @@
 use std::cell::RefCell;
 
 use async_trait::async_trait;
-use libsignal_bridge_macros::bridge_callbacks;
 use uuid::Uuid;
 
 use super::*;
-use crate::jni;
-
-/// A wrapper struct so we can implement e.g. [`PreKeyStore`] for all
-/// [`BridgePreKeyStore`]s.
-///
-/// Trying to do so directly would violate the [orphan rule][], because rustc doesn't know
-/// `BridgePreKeyStore` is only implemented by a closed set of types defined in this crate.
-///
-/// [orphan rule]: https://doc.rust-lang.org/book/ch20-02-advanced-traits.html#implementing-external-traits-with-the-newtype-pattern
-// TODO: Merge with the one in ffi/storage.
-pub struct BridgedStore<T>(pub T);
+// TODO: This re-export is because of the jni_arg_type macro expecting all bridging structs to
+// appear in the jni module.
+pub use crate::protocol::storage::JavaPreKeyStore;
 
 pub type JavaIdentityKeyStore<'a> = JObject<'a>;
 // pub type JavaPreKeyStore<'a> = JObject<'a>;
@@ -254,128 +245,6 @@ impl IdentityKeyStore for JniIdentityKeyStore<'_> {
         address: &ProtocolAddress,
     ) -> Result<Option<IdentityKey>, SignalProtocolError> {
         Ok(self.do_get_identity(address)?)
-    }
-}
-
-/// A bridge-friendly version of [`PreKeyStore`].
-// TODO: merge with the one in ffi/storage.
-#[bridge_callbacks(
-    ffi = false,
-    jni = "org.signal.libsignal.protocol.state.internal.PreKeyStore",
-    node = false
-)]
-pub trait BridgePreKeyStore {
-    fn load_pre_key(&self, id: u32) -> Result<Option<PreKeyRecord>, SignalProtocolError>;
-    fn store_pre_key(&self, id: u32, record: PreKeyRecord) -> Result<(), SignalProtocolError>;
-    fn remove_pre_key(&self, id: u32) -> Result<(), SignalProtocolError>;
-}
-
-#[async_trait(? Send)]
-impl<T: BridgePreKeyStore> PreKeyStore for BridgedStore<T> {
-    async fn get_pre_key(&self, prekey_id: PreKeyId) -> Result<PreKeyRecord, SignalProtocolError> {
-        self.0
-            .load_pre_key(prekey_id.into())?
-            .ok_or(SignalProtocolError::InvalidPreKeyId)
-    }
-
-    async fn save_pre_key(
-        &mut self,
-        prekey_id: PreKeyId,
-        record: &PreKeyRecord,
-    ) -> Result<(), SignalProtocolError> {
-        self.0.store_pre_key(prekey_id.into(), record.clone())
-    }
-
-    async fn remove_pre_key(&mut self, prekey_id: PreKeyId) -> Result<(), SignalProtocolError> {
-        self.0.remove_pre_key(prekey_id.into())
-    }
-}
-
-pub struct JniSignedPreKeyStore<'a> {
-    env: RefCell<EnvHandle<'a>>,
-    store: &'a JObject<'a>,
-}
-
-impl<'a> JniSignedPreKeyStore<'a> {
-    pub fn new<'context: 'a>(
-        env: &mut JNIEnv<'context>,
-        store: &'a JObject<'a>,
-    ) -> Result<Self, BridgeLayerError> {
-        check_jobject_type(
-            env,
-            store,
-            ClassName("org.signal.libsignal.protocol.state.SignedPreKeyStore"),
-        )?;
-        Ok(Self {
-            env: EnvHandle::new(env).into(),
-            store,
-        })
-    }
-}
-
-impl JniSignedPreKeyStore<'_> {
-    fn do_get_signed_pre_key(
-        &self,
-        prekey_id: u32,
-    ) -> Result<SignedPreKeyRecord, BridgeOrProtocolError> {
-        self.env
-            .borrow_mut()
-            .with_local_frame(8, "loadSignedPreKey", |env| {
-                let callback_args = jni_args!((
-            prekey_id.convert_into(env)? => int
-        ) -> org.signal.libsignal.protocol.state.SignedPreKeyRecord);
-                let spk: Option<SignedPreKeyRecord> = get_object_with_native_handle(
-                    env,
-                    self.store,
-                    callback_args,
-                    "loadSignedPreKey",
-                )?;
-                match spk {
-                    Some(spk) => Ok(spk),
-                    None => Err(SignalProtocolError::InvalidSignedPreKeyId.into()),
-                }
-            })
-    }
-
-    fn do_save_signed_pre_key(
-        &mut self,
-        prekey_id: u32,
-        record: &SignedPreKeyRecord,
-    ) -> Result<(), BridgeOrProtocolError> {
-        self.env
-            .borrow_mut()
-            .with_local_frame(8, "storeSignedPreKey", |env| {
-                let record_handle = record.clone().convert_into(env)?;
-                let jobject_record = jobject_from_native_handle(
-                    env,
-                    ClassName("org.signal.libsignal.protocol.state.SignedPreKeyRecord"),
-                    record_handle,
-                )?;
-                let callback_args = jni_args!((
-                    prekey_id.convert_into(env)? => int,
-                    jobject_record => org.signal.libsignal.protocol.state.SignedPreKeyRecord
-                ) -> void);
-                call_method_checked(env, self.store, "storeSignedPreKey", callback_args)?;
-                Ok(())
-            })
-    }
-}
-
-#[async_trait(? Send)]
-impl SignedPreKeyStore for JniSignedPreKeyStore<'_> {
-    async fn get_signed_pre_key(
-        &self,
-        prekey_id: SignedPreKeyId,
-    ) -> Result<SignedPreKeyRecord, SignalProtocolError> {
-        Ok(self.do_get_signed_pre_key(prekey_id.into())?)
-    }
-
-    async fn save_signed_pre_key(
-        &mut self,
-        prekey_id: SignedPreKeyId,
-        record: &SignedPreKeyRecord,
-    ) -> Result<(), SignalProtocolError> {
-        Ok(self.do_save_signed_pre_key(prekey_id.into(), record)?)
     }
 }
 

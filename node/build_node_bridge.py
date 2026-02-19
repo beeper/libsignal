@@ -153,6 +153,9 @@ def main(args: Optional[List[str]] = None) -> int:
     cargo_env['RUSTFLAGS'] += ' --cfg aes_armv8'
     # Access tokio's unstable metrics
     cargo_env['RUSTFLAGS'] += ' --cfg tokio_unstable'
+    # Work around CMake bug introduced in cmake-rs v1.49.0
+    # https://github.com/rust-lang/cmake-rs/pull/158#issuecomment-1544782070
+    cargo_env['CMAKE_ARGS'] = '-DCMAKE_SYSTEM_NAME='
     # Strip absolute paths
     for path in build_helpers.rust_paths_to_remap():
         cargo_env['RUSTFLAGS'] += f' --remap-path-prefix {path}='
@@ -161,10 +164,6 @@ def main(args: Optional[List[str]] = None) -> int:
     objcopy = None
 
     if node_os_name == 'win32':
-        # By default, Rust on Windows depends on an MSVC component for the C runtime.
-        # Link it statically to avoid propagating that dependency.
-        cargo_env['RUSTFLAGS'] += ' -C target-feature=+crt-static'
-
         # Hint to the Rust compiler that we're cross-compiling. This shouldn't be necessary
         # since the invoking build script (if any) should be doing that but it's needed
         # since Rust nightly-2024-10-03.

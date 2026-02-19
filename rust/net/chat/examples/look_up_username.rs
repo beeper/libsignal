@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use base64::Engine as _;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use clap::{Parser, ValueEnum};
 use libsignal_net::certs::SIGNAL_ROOT_CERTIFICATES;
 use libsignal_net::chat::test_support::simple_chat_connection;
@@ -97,35 +100,44 @@ async fn main() -> anyhow::Result<()> {
         ws_connection = Some(Unauth(chat_connection));
     }
 
-    let username = usernames::Username::new(&username)?;
+    let username = if let Some(offset) = username.find("//signal.me/#eu/") {
+        let payload = username[offset..]
+            .strip_prefix("//signal.me/#eu/")
+            .and_then(|payload| BASE64_URL_SAFE_NO_PAD.decode(payload).ok())
+            .ok_or_else(|| anyhow!("invalid username link"))?;
+        let (entropy, handle_uuid) = payload
+            .split_first_chunk::<{ usernames::constants::USERNAME_LINK_ENTROPY_SIZE }>()
+            .ok_or_else(|| anyhow!("invalid username link payload"))?;
+        let handle_uuid = uuid::Uuid::from_slice(handle_uuid)
+            .map_err(|_| anyhow!("invalid username link UUID"))?;
+        let username = apply_to_both(
+            grpc_connection.as_ref(),
+            ws_connection.as_ref(),
+            |c| c.look_up_username_link(handle_uuid, entropy),
+            |c| c.look_up_username_link(handle_uuid, entropy),
+        )
+        .await?;
+
+        let Some(username) = username else {
+            log::info!("username link not found");
+            return Ok(());
+        };
+
+        log::info!("found username {username}");
+        username
+    } else {
+        usernames::Username::new(&username)?
+    };
+
     let username_hash = username.hash();
 
-    let result = match (grpc_connection, ws_connection) {
-        (Some(grpc_connection), Some(ws_connection)) => {
-            log::info!("trying both gRPC and websocket...");
-            let (grpc_result, ws_result) = futures_util::future::try_join(
-                grpc_connection.look_up_username_hash(&username_hash),
-                ws_connection.look_up_username_hash(&username_hash),
-            )
-            .await?;
-            assert_eq!(
-                grpc_result, ws_result,
-                "connections disagreed on the answer?"
-            );
-            ws_result
-        }
-        (Some(grpc_connection), None) => {
-            log::info!("sending request over gRPC...");
-            grpc_connection
-                .look_up_username_hash(&username_hash)
-                .await?
-        }
-        (None, Some(ws_connection)) => {
-            log::info!("sending request over websocket...");
-            ws_connection.look_up_username_hash(&username_hash).await?
-        }
-        (None, None) => unreachable!("we established at least one connection"),
-    };
+    let result = apply_to_both(
+        grpc_connection.as_ref(),
+        ws_connection.as_ref(),
+        |c| c.look_up_username_hash(&username_hash),
+        |c| c.look_up_username_hash(&username_hash),
+    )
+    .await?;
 
     if let Some(aci) = result {
         log::info!("found {}", aci.service_id_string());
@@ -134,6 +146,47 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Helper to call an operation on both gRPC and WS connections.
+///
+/// Unfortunately, the operation has to be specified twice because the two may not share a common
+/// trait. For instance, `usernames::UnauthApi<OverWs>` and `usernames::UnauthApi<OverGrpc>` are not
+/// the same type.
+async fn apply_to_both<'a, A, B, F, T, E>(
+    grpc_connection: Option<&'a A>,
+    ws_connection: Option<&'a B>,
+    grpc_operation: impl Fn(&'a A) -> F,
+    ws_operation: impl Fn(&'a B) -> F,
+) -> Result<T, E>
+where
+    F: Future<Output = Result<T, E>> + 'a,
+    T: PartialEq + Debug,
+{
+    match (grpc_connection, ws_connection) {
+        (Some(grpc_connection), Some(ws_connection)) => {
+            log::info!("trying both gRPC and websocket...");
+            let (grpc_result, ws_result) = futures_util::future::try_join(
+                grpc_operation(grpc_connection),
+                ws_operation(ws_connection),
+            )
+            .await?;
+            assert_eq!(
+                grpc_result, ws_result,
+                "connections disagreed on the answer?"
+            );
+            Ok(ws_result)
+        }
+        (Some(grpc_connection), None) => {
+            log::info!("sending request over gRPC...");
+            grpc_operation(grpc_connection).await
+        }
+        (None, Some(ws_connection)) => {
+            log::info!("sending request over websocket...");
+            ws_operation(ws_connection).await
+        }
+        (None, None) => unreachable!("we established at least one connection"),
+    }
 }
 
 assert_impl_all!(Http2Client<tonic::body::Body>: tonic::client::GrpcService<tonic::body::Body>);
