@@ -14,7 +14,6 @@ env:
   RUSTFLAGS: '-Awarnings -Ctarget-feature=-crt-static --cfg aes_armv8 --cfg polyval_armv8 --cfg curve25519_dalek_bits="64"'
   IPHONEOS_DEPLOYMENT_TARGET: 17.0
   MACOSX_DEPLOYMENT_TARGET: 12.0
-  NASM_VERSION: 3.0.1
 
 jobs:
   libsignal-ffi:
@@ -39,7 +38,7 @@ jobs:
         - target: aarch64-unknown-linux-gnu
           runs-on: ubuntu-arm64
         - target: x86_64-pc-windows-gnu
-          runs-on: windows-2022
+          runs-on: windows-2025
         - target: aarch64-pc-windows-gnullvm
           runs-on: windows-11-arm
 
@@ -86,12 +85,6 @@ jobs:
       uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
       with:
         packages: 'tools platform-tools ndk;26.1.10909125'
-
-    - name: Install NASM for Windows
-      if: matrix.target == 'x86_64-pc-windows-gnu'
-      uses: ilammy/setup-nasm@v1
-      with:
-        version: 3.01
 
     - uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd # v1.6.0
       if: runner.os == 'macOS'
