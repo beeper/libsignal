@@ -1,11 +1,11 @@
-v0.87.2
+v0.87.5
 
-- Expose "grpc.AccountsAnonymousLookupUsernameLink" remote config key. When enabled, the typed chat API `lookUpUsernameLink` will use gRPC instead of the default websocket-based implementation. This has no effect if "useH2ForUnauthChat" is unset, or if an H2 connection cannot be established for some other reason.
+- SPQR: upgrade to v1.5.0.
 
-- Panic on integer overflow, even in release mode
+- iOS: 5xx responses to typed chat APIs are now treated as retryable `ioError`s rather than `networkProtocolError`s.
 
-- keytrans: Include search key and distinguished tree last update time in stored account data
+- Log hashes of TLS certs on verification failure
 
-- Windows: build without `+crt-static`, i.e. we now use `/MD` to link the C stdlib instead of `/MT`.
+- Treat HTTP/2 transport errors disinct from gRPC status
 
-- backups: Support admin deleted messages
+- backup: Support iOS specific settings in account data.

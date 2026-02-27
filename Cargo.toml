@@ -37,7 +37,7 @@ default-members = [
 resolver = "2" # so that our dev-dependency features don't leak into products
 
 [workspace.package]
-version = "0.87.2"
+version = "0.87.5"
 authors = ["Signal Messenger LLC"]
 license = "AGPL-3.0-only"
 rust-version = "1.88"
@@ -84,10 +84,10 @@ signal-neon-futures = { path = "rust/bridge/node/futures" }
 # Our forks of some dependencies, accessible as xxx_signal so that usages of them are obvious in source code. Crates
 # that want to use the real things can depend on those directly.
 
-boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v4.21.1a", package = "boring", default-features = false }
+boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v5.0.2", package = "boring", default-features = false }
 curve25519-dalek-signal = { git = 'https://github.com/signalapp/curve25519-dalek', package = "curve25519-dalek", tag = 'signal-curve25519-4.1.3' }
-spqr = { git = "https://github.com/signalapp/SparsePostQuantumRatchet.git", tag = "v1.4.0" }
-tokio-boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v4.21.1a", package = "tokio-boring" }
+spqr = { git = "https://github.com/signalapp/SparsePostQuantumRatchet.git", tag = "v1.5.0" }
+tokio-boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v5.0.2", package = "tokio-boring" }
 
 aes = "0.8.3"
 aes-gcm-siv = "0.11.1"
@@ -107,8 +107,8 @@ bincode = "1.3.2"
 bitflags = "2.9"
 bitstream-io = "1.10.0"
 blake2 = "0.10.6"
-boring = { version = "4.6.0", default-features = false }
-boring-sys = { version = "4.6.0", default-features = false }
+boring = { version = "5.0", default-features = false }
+boring-sys = { version = "5.0", default-features = false }
 bytes = "1.11.1"
 cbc = "0.1.2"
 cfg-if = "1.0.0"
@@ -137,8 +137,8 @@ hex = "0.4.3"
 hickory-proto = "0.25"
 hkdf = "0.12"
 hmac = "0.12.0"
-hpke-rs = "0.5.0"
-hpke-rs-crypto = "0.4.0"
+hpke-rs = "0.6.0"
+hpke-rs-crypto = "0.6.0"
 http = "1.3.0"
 http-body = "1.0.1"
 http-body-util = "0.1.3"
@@ -149,7 +149,7 @@ intmap = "3.1.2"
 itertools = "0.14.0"
 jni = "0.21"
 libc = "0.2.175"
-libcrux-ml-kem = { version = "0.0.5", default-features = false }
+libcrux-ml-kem = { version = "0.0.7", default-features = false }
 linkme = "0.3.33"
 log = "0.4.21"
 log-panics = "2.1.0"
@@ -223,12 +223,13 @@ warp = "0.4.2"
 webpsan = { version = "0.5.3", default-features = false }
 x25519-dalek = "2.0.0"
 zerocopy = "0.8.24"
+zeroize = "1.8.2"
 
 [patch.crates-io]
 # When building libsignal, just use our forks so we don't end up with two different versions of the libraries.
 
-boring = { git = "https://github.com/signalapp/boring", tag = "signal-v4.21.1a" }
-boring-sys = { git = "https://github.com/signalapp/boring", tag = "signal-v4.21.1a" }
+boring = { git = 'https://github.com/signalapp/boring', tag = "signal-v5.0.2" }
+boring-sys = { git = 'https://github.com/signalapp/boring', tag = "signal-v5.0.2" }
 curve25519-dalek = { git = 'https://github.com/signalapp/curve25519-dalek', tag = 'signal-curve25519-4.1.3' }
 
 [profile.dev.package.argon2]

@@ -5,7 +5,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'LibSignalClient'
-  s.version          = '0.87.2'
+  s.version          = '0.87.5'
   s.summary          = 'A Swift wrapper library for communicating with the Signal messaging service.'
 
   s.homepage         = 'https://github.com/signalapp/libsignal'
@@ -15,7 +15,6 @@ Pod::Spec.new do |s|
 
   s.swift_version    = '5'
   s.platform         = :ios, '15.0'
-  s.libraries        = ['z']
 
   s.source_files = ['swift/Sources/**/*.swift', 'swift/Sources/**/*.m']
   s.preserve_paths = [

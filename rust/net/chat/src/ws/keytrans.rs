@@ -12,19 +12,25 @@ use base64::prelude::{
 use http::header::ACCEPT;
 use http::uri::PathAndQuery;
 use libsignal_core::{Aci, E164};
-use libsignal_keytrans::{AccountData, LastTreeHead, Versioned};
+use libsignal_keytrans::{AccountData, LastTreeHead};
 use libsignal_net::chat;
 use libsignal_protocol::PublicKey;
 use serde::{Deserialize, Serialize};
 
 use super::{CONTENT_TYPE_JSON, CustomError, TryIntoResponse as _, WsConnection};
 use crate::api::keytrans::*;
-use crate::api::{RequestError, Unauth};
+use crate::api::{AllowRateLimitChallenges, RequestError, Unauth};
 use crate::logging::DebugAsStrOrBytes;
 
 const SEARCH_PATH: &str = "/v1/key-transparency/search";
 const DISTINGUISHED_PATH: &str = "/v1/key-transparency/distinguished";
 const MONITOR_PATH: &str = "/v1/key-transparency/monitor";
+
+/// Key transparency requests are unauthenticated and thus cannot have challenges.
+///
+/// This is a free constant rather than an associated one (like the other services) because the KT
+/// implementation uses `dyn`, which isn't compatible with associated constants.
+const ALLOW_RATE_LIMIT_CHALLENGES: AllowRateLimitChallenges = AllowRateLimitChallenges::No;
 
 fn common_headers() -> http::HeaderMap {
     http::HeaderMap::from_iter([CONTENT_TYPE_JSON, (ACCEPT, CONTENT_TYPE_JSON.1)])
@@ -67,34 +73,25 @@ struct RawChatSearchRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     last_tree_head_size: Option<u64>,
     distinguished_tree_head_size: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    aci_version: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    e164_version: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    username_hash_version: Option<u32>,
 }
 
 impl RawChatSearchRequest {
     fn new(
-        aci: Versioned<&Aci>,
+        aci: &Aci,
         aci_identity_key: &PublicKey,
-        e164: Option<Versioned<&(E164, Vec<u8>)>>,
-        username_hash: Option<Versioned<&UsernameHash>>,
+        e164: Option<&(E164, Vec<u8>)>,
+        username_hash: Option<&UsernameHash>,
         last_tree_head_size: Option<u64>,
         distinguished_tree_head_size: u64,
     ) -> Self {
         Self {
-            aci: aci.item.as_chat_value(),
+            aci: aci.as_chat_value(),
             aci_identity_key: BASE64_STANDARD.encode(aci_identity_key.serialize()),
-            e164: e164.as_ref().map(|x| x.item.0.as_chat_value()),
-            username_hash: username_hash.as_ref().map(|x| x.item.as_chat_value()),
-            unidentified_access_key: e164.as_ref().map(|x| BASE64_STANDARD.encode(&x.item.1)),
+            e164: e164.as_ref().map(|x| x.0.as_chat_value()),
+            username_hash: username_hash.as_ref().map(|x| x.as_chat_value()),
+            unidentified_access_key: e164.as_ref().map(|x| BASE64_STANDARD.encode(&x.1)),
             last_tree_head_size,
             distinguished_tree_head_size,
-            aci_version: aci.version,
-            e164_version: e164.and_then(|x| x.version),
-            username_hash_version: username_hash.and_then(|x| x.version),
         }
     }
 }
@@ -289,9 +286,9 @@ impl<T: WsConnection> Unauth<T> {
                 &body_slice[..body_slice.len().min(1024)]
             })
         );
-        let response: RawChatSerializedResponse = response
-            .try_into_response()
-            .map_err(|e| e.into_request_error(CustomError::no_custom_handling))?;
+        let response: RawChatSerializedResponse = response.try_into_response().map_err(|e| {
+            e.into_request_error(ALLOW_RATE_LIMIT_CHALLENGES, CustomError::no_custom_handling)
+        })?;
         BASE64_STANDARD_NO_PAD
             .decode(&response.serialized_response)
             .map_err(|_| RequestError::Other(Error::InvalidResponse("invalid base64".to_string())))
@@ -302,10 +299,10 @@ impl<T: WsConnection> Unauth<T> {
 impl<T: WsConnection> LowLevelChatApi for Unauth<T> {
     async fn search(
         &self,
-        aci: Versioned<&Aci>,
+        aci: &Aci,
         aci_identity_key: &PublicKey,
-        e164: Option<Versioned<&(E164, Vec<u8>)>>,
-        username_hash: Option<Versioned<&UsernameHash<'_>>>,
+        e164: Option<&(E164, Vec<u8>)>,
+        username_hash: Option<&UsernameHash<'_>>,
         stored_account_data: Option<&AccountData>,
         distinguished_tree_head: &LastTreeHead,
     ) -> Result<Vec<u8>, RequestError<Error>> {
@@ -445,10 +442,10 @@ mod test_support {
 
         let account_data = kt
             .search(
-                (&aci).into(),
+                &aci,
                 &aci_identity_key,
-                Some(e164.clone().into()),
-                Some(username_hash.clone().into()),
+                Some(e164.clone()),
+                Some(username_hash.clone()),
                 None,
                 &distinguished_tree,
             )
@@ -484,10 +481,10 @@ mod test_support {
         prompt("Now advance the tree. Yes, again! (and press ENTER)");
 
         let raw_request = RawChatSearchRequest::new(
-            (&aci).into(),
+            &aci,
             &aci_identity_key,
-            Some((&e164).into()),
-            Some((&username_hash).into()),
+            Some(&e164),
+            Some(&username_hash),
             Some(account_data.last_tree_head.0.tree_size),
             distinguished_tree.0.tree_size,
         );
@@ -567,10 +564,10 @@ mod test {
                 let known_account_data = test_account_data();
 
                 kt.search(
-                    (&aci).into(),
+                    &aci,
                     &aci_identity_key,
-                    use_e164.then_some(e164.into()),
-                    use_username_hash.then_some(username_hash.into()),
+                    use_e164.then_some(e164),
+                    use_username_hash.then_some(username_hash),
                     Some(known_account_data),
                     &test_distinguished_tree(),
                 )
@@ -594,15 +591,11 @@ mod test {
                 let chat = make_chat().await;
                 let kt = make_kt(&chat);
 
-                let known_account_data = test_account_data();
-                let aci_version = known_account_data.aci.greatest_version();
-
                 kt.search(
-                    Versioned::new(&test_account::aci(), aci_version),
-                    // (&test_account::aci()).into(),
+                    &test_account::aci(),
                     &test_account::aci_identity_key(),
-                    Some(test_account::e164_pair().into()),
-                    Some(test_account::username_hash().into()),
+                    Some(test_account::e164_pair()),
+                    Some(test_account::username_hash()),
                     None,
                     &test_distinguished_tree(),
                 )
@@ -715,7 +708,7 @@ mod test {
 
         let result = kt
             .search(
-                (&test_account::aci()).into(),
+                &test_account::aci(),
                 &wrong_identity_key,
                 None,
                 None,
@@ -745,7 +738,7 @@ mod test {
 
         let result = kt
             .search(
-                (&aci).into(),
+                &aci,
                 &wrong_identity_key,
                 None,
                 None,

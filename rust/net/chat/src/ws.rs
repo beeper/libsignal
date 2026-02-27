@@ -6,6 +6,7 @@
 //! The `ws` module and its submodules implement a chat server based on REST-like requests over a
 //! websocket, as implemented in [`libsignal_net::chat`].
 
+mod keys;
 mod keytrans;
 mod messages;
 mod profiles;
@@ -20,14 +21,17 @@ use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use http::StatusCode;
 use libsignal_net::chat;
+use libsignal_net::chat::{Request, Response, SendError};
 use libsignal_net::infra::errors::LogSafeDisplay;
 use libsignal_net::infra::http_client::Http2Client;
 use libsignal_net::infra::{AsHttpHeader, extract_retry_later};
 use serde_with::serde_as;
 
 use crate::api::{
-    ChallengeOption, DisconnectedError, RateLimitChallenge, RequestError, UserBasedAuthorization,
+    AllowRateLimitChallenges, ChallengeOption, DisconnectedError, RateLimitChallenge, RequestError,
+    UserBasedAuthorization,
 };
+use crate::grpc::GrpcServiceProvider;
 use crate::logging::DebugAsStrOrBytes;
 
 const ACCESS_KEY_HEADER_NAME: http::HeaderName =
@@ -67,9 +71,28 @@ pub trait WsConnection: Sync {
 
     fn grpc_service_to_use_instead(
         &self,
-        _message: &'static str,
+        message: &'static str,
     ) -> impl Future<Output = Option<impl crate::grpc::GrpcServiceProvider>> + Send {
+        let _ = message;
         std::future::ready(None::<Http2Client<chat::GrpcBody>>)
+    }
+}
+
+impl<T: WsConnection> WsConnection for &T {
+    fn send(
+        &self,
+        log_tag: &'static str,
+        log_safe_path: &str,
+        request: Request,
+    ) -> impl Future<Output = Result<Response, SendError>> + Send {
+        <T as WsConnection>::send(self, log_tag, log_safe_path, request)
+    }
+
+    fn grpc_service_to_use_instead(
+        &self,
+        message: &'static str,
+    ) -> impl Future<Output = Option<impl GrpcServiceProvider>> + Send {
+        <T as WsConnection>::grpc_service_to_use_instead(self, message)
     }
 }
 
@@ -198,6 +221,7 @@ impl ResponseError {
     /// response codes (like 429 Too Many Requests).
     pub(crate) fn into_request_error<E, D>(
         self,
+        allow_rate_limit_errors: AllowRateLimitChallenges,
         map_unrecognized: impl FnOnce(&chat::Response) -> CustomError<E>,
     ) -> RequestError<E, D> {
         match self {
@@ -229,7 +253,9 @@ impl ResponseError {
                             return RequestError::RetryLater(retry_later);
                         }
                     }
-                    if status.as_u16() == 428 {
+                    if status.as_u16() == 428
+                        && allow_rate_limit_errors == AllowRateLimitChallenges::Yes
+                    {
                         #[serde_as]
                         #[derive(serde::Deserialize)]
                         struct ChallengeBody {
@@ -449,9 +475,28 @@ mod test {
     fn try_parse_empty(
         input: chat::Response,
     ) -> Result<Empty, RequestError<std::convert::Infallible>> {
-        input
-            .try_into_response()
-            .map_err(|e| e.into_request_error(CustomError::no_custom_handling))
+        input.try_into_response().map_err(|e| {
+            e.into_request_error(
+                AllowRateLimitChallenges::Yes,
+                CustomError::no_custom_handling,
+            )
+        })
+    }
+
+    #[test_case(empty(428) => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("428"))]
+    #[test_case(json(428, "{}") => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("428"))]
+    #[test_case(json(
+        428, r#"{"token": "zzz", "options": ["captcha"]}"#
+    ) => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("428"))]
+    fn try_parse_empty_without_rate_limit_challenges(
+        input: chat::Response,
+    ) -> Result<Empty, RequestError<std::convert::Infallible>> {
+        input.try_into_response().map_err(|e| {
+            e.into_request_error(
+                AllowRateLimitChallenges::No,
+                CustomError::no_custom_handling,
+            )
+        })
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -474,8 +519,11 @@ mod test {
     fn try_parse_json(
         input: chat::Response,
     ) -> Result<Example, RequestError<std::convert::Infallible>> {
-        input
-            .try_into_response()
-            .map_err(|e| e.into_request_error(CustomError::no_custom_handling))
+        input.try_into_response().map_err(|e| {
+            e.into_request_error(
+                AllowRateLimitChallenges::Yes,
+                CustomError::no_custom_handling,
+            )
+        })
     }
 }

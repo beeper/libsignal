@@ -11,6 +11,7 @@ use std::convert::Infallible;
 use libsignal_net::infra::errors::LogSafeDisplay;
 use ref_cast::RefCast as _;
 
+pub mod keys;
 pub mod keytrans;
 pub mod messages;
 pub mod profiles;
@@ -33,6 +34,12 @@ impl<'a, T> From<&'a T> for &'a Unauth<T> {
 /// Marker wrapper for registration connections.
 #[derive(derive_more::Deref)]
 pub struct Registration<T>(pub T);
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum AllowRateLimitChallenges {
+    No,
+    Yes,
+}
 
 /// Authorization for requests on unauthenticated connections involving other users.
 ///
@@ -129,14 +136,16 @@ pub enum ChallengeOption {
 /// Any concrete type will only impl this trait in one way; anywhere that needs to use
 /// UnauthenticatedChatApi generically should accept an arbitrary `T` here.
 pub trait UnauthenticatedChatApi<T>:
-    keytrans::UnauthenticatedChatApi
+    keys::UnauthenticatedChatApi<T>
+    + keytrans::UnauthenticatedChatApi
     + messages::UnauthenticatedChatApi
     + profiles::UnauthenticatedChatApi
     + usernames::UnauthenticatedChatApi<T>
 {
 }
 impl<T, U> UnauthenticatedChatApi<T> for U where
-    U: keytrans::UnauthenticatedChatApi
+    U: keys::UnauthenticatedChatApi<T>
+        + keytrans::UnauthenticatedChatApi
         + messages::UnauthenticatedChatApi
         + profiles::UnauthenticatedChatApi
         + usernames::UnauthenticatedChatApi<T>

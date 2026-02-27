@@ -9,10 +9,12 @@
 mod profiles;
 mod usernames;
 
+use std::error::Error;
 use std::future::Future;
 
 use itertools::Itertools;
-use libsignal_net::infra::errors::RetryLater;
+use libsignal_net::infra::errors::{LogSafeDisplay, RetryLater};
+use libsignal_net::infra::http_client::{Http2TransportError, Http2TransportErrorKind};
 use libsignal_net_grpc::proto::google;
 use prost::Message as _;
 use tonic::codegen::StdError;
@@ -111,14 +113,40 @@ where
 
 impl<E> From<tonic::Status> for RequestError<E> {
     fn from(status: tonic::Status) -> Self {
+        if let Some(transport_error) = status
+            .source()
+            .and_then(|source| source.downcast_ref::<Http2TransportError>())
+        {
+            log::debug!("HTTP/2 transport error: {transport_error:?}");
+            log::info!(
+                "HTTP/2 transport error: {}",
+                transport_error.kind().log_safe_display()
+            );
+            // If hyper gives an error, we need to disconnect. Any higher-level issues would be
+            // handled at the HTTP/2 level. A hyper error means that there's something wrong with
+            // the HTTP/2 level.
+            return RequestError::Disconnected(match transport_error.kind() {
+                Http2TransportErrorKind::Closed => DisconnectedError::Closed,
+                e @ (Http2TransportErrorKind::Unknown
+                | Http2TransportErrorKind::BodyWriteAborted
+                | Http2TransportErrorKind::Canceled
+                | Http2TransportErrorKind::IncompleteMessage
+                | Http2TransportErrorKind::Shutdown
+                | Http2TransportErrorKind::Timeout
+                | Http2TransportErrorKind::ParseStatus
+                | Http2TransportErrorKind::Parse
+                | Http2TransportErrorKind::User) => DisconnectedError::Transport {
+                    log_safe: format!("HTTP/2 transport error: {}", e.log_safe_display()),
+                },
+            });
+        }
         if let Some((details, info)) = extract_server_side_error(&status) {
             return request_error_from_server_side_error_info(details, info);
         }
-
+        // Unfortunately we can't distinguish between server-side gRPC library errors and
+        // client-side gRPC library errors, so we need to pick a conservative interpretation of all
+        // of these codes. That being said, any hyper transport errors have been handled above.
         match status.code() {
-            // TODO: Unfortunately we can't distinguish between server-side gRPC library errors and
-            // client-side gRPC library errors, so we need to pick a conservative interpretation of all
-            // of these codes.
             tonic::Code::DeadlineExceeded => return RequestError::Timeout,
             tonic::Code::Unavailable => {
                 return RequestError::Disconnected(DisconnectedError::Closed);
@@ -320,9 +348,11 @@ fn matching_details<M: Default + prost::Name>(
 pub(crate) mod testutil {
     use futures_util::FutureExt as _;
     use http_body_util::BodyExt as _;
+    use libsignal_net::chat::{Request, Response, SendError};
     use tonic::Status;
 
     use super::*;
+    use crate::ws::WsConnection;
 
     pub(crate) fn req(uri: &str, body: impl prost::Message + 'static) -> http::Request<Vec<u8>> {
         let body = tonic::codec::EncodeBody::new_client(
@@ -371,6 +401,29 @@ pub(crate) mod testutil {
         Status::new(code, "").into_http()
     }
 
+    pub(crate) struct GrpcOverrideRequestValidator {
+        pub(crate) validator: RequestValidator,
+        pub(crate) message: &'static str,
+    }
+    impl WsConnection for GrpcOverrideRequestValidator {
+        async fn send(
+            &self,
+            _log_tag: &'static str,
+            _log_safe_path: &str,
+            _request: Request,
+        ) -> Result<Response, SendError> {
+            panic!("We should be only sending grpc here");
+        }
+
+        async fn grpc_service_to_use_instead(
+            &self,
+            message: &'static str,
+        ) -> Option<impl GrpcServiceProvider> {
+            assert_eq!(message, self.message);
+            Some(&self.validator)
+        }
+    }
+
     pub(crate) struct RequestValidator {
         pub expected: http::Request<Vec<u8>>,
         pub response: http::Response<Vec<u8>>,
@@ -401,18 +454,159 @@ pub(crate) mod testutil {
             pretty_assertions::assert_eq!(self.expected.uri(), &parts.uri, "uri");
             pretty_assertions::assert_eq!(self.expected.method(), &parts.method, "method");
             pretty_assertions::assert_eq!(self.expected.headers(), &parts.headers, "headers");
-            pretty_assertions::assert_eq!(&self.expected.body()[..], &body, "body");
+
+            if self.expected.body()[..] != body {
+                let expected_body = DynMessage::decode_single_grpc_body(
+                    bytes::Bytes::copy_from_slice(self.expected.body()),
+                );
+                let actual_body = DynMessage::decode_single_grpc_body(body);
+                panic!("expected body: {expected_body:#?}\n\nactual body: {actual_body:#?}");
+            }
 
             std::future::ready(Ok(self.response.clone().map(|body| body.into())))
         }
     }
 
     static_assertions::assert_impl_all!(&'_ RequestValidator: GrpcService);
+
+    /// A protoscope-like helper type for decoding arbitrary protobuf messages.
+    ///
+    /// Always succeeds as long as the input is not malformed. Only intended for debugging.
+    #[derive(Default)]
+    pub(crate) struct DynMessage {
+        fields: Vec<(u32, DynField)>,
+    }
+
+    /// See [`DynMessage`].
+    enum DynField {
+        Varint(usize),
+        U32(u32),
+        U64(u64),
+        Bytes(bytes::Bytes),
+        Nested(DynMessage),
+    }
+
+    impl DynMessage {
+        /// Given a gRPC HTTP body, decode a single request message from it.
+        fn decode_single_grpc_body(
+            body: impl bytes::Buf + Send + 'static,
+        ) -> Result<Self, tonic::Status> {
+            let decoder = tonic_prost::ProstDecoder::<DynMessage>::default();
+            let mut streaming = tonic::codec::Streaming::new_request(
+                decoder,
+                http_body_util::Full::new(body),
+                None,
+                None,
+            );
+            streaming
+                .message()
+                .now_or_never()
+                .expect("ready")?
+                .ok_or_else(|| tonic::Status::data_loss("missing body"))
+        }
+    }
+
+    impl prost::Message for DynMessage {
+        // This requirement is hidden in prost::Message and thus should be considered unstable,
+        // which is why we only use this for debugging. The implementation is based on reading the
+        // source for prost-derive.
+        fn merge_field(
+            &mut self,
+            tag: u32,
+            wire_type: prost::encoding::wire_type::WireType,
+            mut buf: &mut impl bytes::Buf,
+            _ctx: prost::encoding::DecodeContext,
+        ) -> Result<(), prost::DecodeError>
+        where
+            Self: Sized,
+        {
+            use prost::encoding::wire_type::WireType;
+            let value = match wire_type {
+                WireType::Varint => DynField::Varint(prost::decode_length_delimiter(buf)?),
+                WireType::ThirtyTwoBit => DynField::U32(
+                    buf.try_get_u32_le()
+                        .map_err(|_| prost::DecodeError::new("eof"))?,
+                ),
+                WireType::SixtyFourBit => DynField::U64(
+                    buf.try_get_u64_le()
+                        .map_err(|_| prost::DecodeError::new("eof"))?,
+                ),
+                WireType::LengthDelimited => {
+                    let len = prost::decode_length_delimiter(&mut buf)?;
+                    if len > buf.remaining() {
+                        return Err(prost::DecodeError::new("eof"));
+                    }
+                    let bytes = buf.copy_to_bytes(len);
+                    if let Ok(inner) = DynMessage::decode(bytes.clone()) {
+                        DynField::Nested(inner)
+                    } else {
+                        DynField::Bytes(bytes)
+                    }
+                }
+                WireType::StartGroup | WireType::EndGroup => {
+                    return Err(prost::DecodeError::new("groups unsupported"));
+                }
+            };
+            self.fields.push((tag, value));
+            Ok(())
+        }
+
+        fn clear(&mut self) {
+            self.fields.clear();
+        }
+
+        fn encode_raw(&self, _buf: &mut impl bytes::BufMut)
+        where
+            Self: Sized,
+        {
+            unimplemented!("for decoding to debug only")
+        }
+
+        fn encoded_len(&self) -> usize {
+            unimplemented!("for decoding to debug only")
+        }
+    }
+
+    impl std::fmt::Debug for DynMessage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut out = f.debug_struct("DynMessage");
+            for (tag, value) in &self.fields {
+                out.field(&tag.to_string(), &value);
+            }
+            out.finish()
+        }
+    }
+
+    impl std::fmt::Debug for DynField {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // Use protoscope-like syntax.
+            match self {
+                Self::Varint(arg) => write!(f, "{arg}"),
+                Self::U32(arg) => write!(f, "{arg}u32"),
+                Self::U64(arg) => write!(f, "{arg}u64"),
+                Self::Bytes(arg) => {
+                    if arg.is_ascii() {
+                        write!(f, "\"{}\"", arg.escape_ascii())
+                    } else {
+                        write!(f, "`{}`", hex::encode(arg))
+                    }
+                }
+                Self::Nested(arg) => arg.fmt(f),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use std::convert::Infallible;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
     use assert_matches::assert_matches;
+    use futures_util::FutureExt;
+    use hyper::rt::ReadBufCursor;
+    use libsignal_net::infra::http_client::Http2Client;
     use test_case::test_case;
     use tonic::metadata::MetadataValue;
 
@@ -594,5 +788,69 @@ mod test {
         assert!(description.contains("fooField"));
         assert!(description.contains("barField"));
         assert!(!description.contains("POISON"));
+    }
+
+    #[test]
+    fn test_transport_errors() {
+        static_assertions::assert_type_eq_all!(
+            Http2TransportError,
+            <Http2Client<tonic::body::Body> as tower_service::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error,
+        );
+        let hyper_err = {
+            // We want to return a hyper error, but one does not simply construct a hyper::Error
+            // There's no public API to do so! Instead, we come up with a situation that always
+            // fails.
+            struct Io;
+            impl hyper::rt::Read for Io {
+                fn poll_read(
+                    self: Pin<&mut Self>,
+                    _cx: &mut Context<'_>,
+                    _buf: ReadBufCursor<'_>,
+                ) -> Poll<Result<(), std::io::Error>> {
+                    Poll::Ready(Err(std::io::Error::other("error")))
+                }
+            }
+            impl hyper::rt::Write for Io {
+                fn poll_write(
+                    self: Pin<&mut Self>,
+                    _cx: &mut Context<'_>,
+                    _buf: &[u8],
+                ) -> Poll<Result<usize, std::io::Error>> {
+                    Poll::Ready(Err(std::io::Error::other("error")))
+                }
+
+                fn poll_flush(
+                    self: Pin<&mut Self>,
+                    _cx: &mut Context<'_>,
+                ) -> Poll<Result<(), std::io::Error>> {
+                    Poll::Ready(Err(std::io::Error::other("error")))
+                }
+
+                fn poll_shutdown(
+                    self: Pin<&mut Self>,
+                    _cx: &mut Context<'_>,
+                ) -> Poll<Result<(), std::io::Error>> {
+                    Poll::Ready(Err(std::io::Error::other("error")))
+                }
+            }
+            match hyper::client::conn::http1::handshake::<_, String>(Io)
+                .now_or_never()
+                .expect("Future should return immediately")
+            {
+                Err(e) => e,
+                Ok((_sender, conn)) => conn
+                    .now_or_never()
+                    .expect("future should return immediately")
+                    .expect_err("the connection shouldn't succeed"),
+            }
+        };
+        assert_matches!(
+            RequestError::<Infallible>::from(tonic::Status::from_error(Box::new(
+                Http2TransportError(hyper_err)
+            ))),
+            RequestError::Disconnected(DisconnectedError::Transport { log_safe: _ })
+        );
     }
 }
