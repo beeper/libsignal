@@ -1,10 +1,10 @@
 name: Build
 
 on:
-  workflow_dispatch:
+  # workflow_dispatch:
   push:
-    tags:
-    - '*'
+    # tags:
+    # - '*'
 
 defaults:
   run:
@@ -23,44 +23,44 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - target: aarch64-apple-ios
-          runs-on: macos-latest
-        - target: aarch64-apple-ios-sim
-          runs-on: macos-latest
-        - target: x86_64-apple-ios
-          runs-on: macos-latest
+        # - target: aarch64-apple-ios
+        #   runs-on: macos-latest
+        # - target: aarch64-apple-ios-sim
+        #   runs-on: macos-latest
+        # - target: x86_64-apple-ios
+        #   runs-on: macos-latest
 
-        - target: x86_64-apple-darwin
-          runs-on: macos-latest
-        - target: aarch64-apple-darwin
-          runs-on: macos-latest
-        - target: x86_64-unknown-linux-gnu
-          runs-on: ubuntu-latest
-        - target: aarch64-unknown-linux-gnu
-          runs-on: ubuntu-arm64
+        # - target: x86_64-apple-darwin
+        #   runs-on: macos-latest
+        # - target: aarch64-apple-darwin
+        #   runs-on: macos-latest
+        # - target: x86_64-unknown-linux-gnu
+        #   runs-on: ubuntu-latest
+        # - target: aarch64-unknown-linux-gnu
+        #   runs-on: ubuntu-arm64
         - target: x86_64-pc-windows-gnu
           runs-on: windows-2022
-        - target: aarch64-pc-windows-gnullvm
-          runs-on: windows-11-arm
+        # - target: aarch64-pc-windows-gnullvm
+        #   runs-on: windows-11-arm
 
-        - target: aarch64-linux-android
-          android-prefix: aarch64-linux-android
-          android-env: aarch64_linux_android
-          runs-on: ubuntu-latest
-        - target: armv7-linux-androideabi
-          android-prefix: armv7a-linux-androideabi  # same as target, but has "a" after v7
-          android-env: armv7_linux_androideabi  # same as target, but with underscores
-          runs-on: ubuntu-latest
-        - target: i686-linux-android
-          android-prefix: i686-linux-android
-          android-env: i686_linux_android
-          runs-on: ubuntu-latest
-        - target: x86_64-linux-android
-          android-prefix: x86_64-linux-android
-          android-env: x86_64_linux_android
-          runs-on: ubuntu-latest
+        # - target: aarch64-linux-android
+        #   android-prefix: aarch64-linux-android
+        #   android-env: aarch64_linux_android
+        #   runs-on: ubuntu-latest
+        # - target: armv7-linux-androideabi
+        #   android-prefix: armv7a-linux-androideabi  # same as target, but has "a" after v7
+        #   android-env: armv7_linux_androideabi  # same as target, but with underscores
+        #   runs-on: ubuntu-latest
+        # - target: i686-linux-android
+        #   android-prefix: i686-linux-android
+        #   android-env: i686_linux_android
+        #   runs-on: ubuntu-latest
+        # - target: x86_64-linux-android
+        #   android-prefix: x86_64-linux-android
+        #   android-env: x86_64_linux_android
+        #   runs-on: ubuntu-latest
+
     name: libsignal-ffi (${{ matrix.target }})
-
     steps:
     - name: Clone repository
       uses: actions/checkout@v4
@@ -103,6 +103,12 @@ jobs:
       with:
         msystem: 'CLANGARM64'
         location: C:\.\
+
+    - name: Install MinGW-w64
+      if: matrix.target == 'x86_64-pc-windows-gnu'
+      uses: egor-tensin/setup-mingw@41b837e47d7f85214629d255b9c4bc3fcbe9fd63 # v3.0
+      with:
+        platform: x64
 
     - name: build libsignal
       run: |
@@ -149,6 +155,11 @@ jobs:
           export RUSTFLAGS="-A dead_code -A mismatched_lifetime_syntaxes -A unfulfilled_lint_expectations"
         elif [ "${{ runner.os }}" = "Windows" ]; then
           rustup set default-host ${{ matrix.target }}
+
+          export PATH=/c/ProgramData/mingw64/mingw64/bin:$PATH
+          export CMAKE_TOOLCHAIN_FILE="$(pwd)/boring-sys-win-x64.cmake"
+
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=x86_64-pc-windows-gnu"
         fi
 
         rustup target add ${{ matrix.target }}
