@@ -1,10 +1,10 @@
 name: Build
 
 on:
-  # workflow_dispatch:
+  workflow_dispatch:
   push:
-    # tags:
-    # - '*'
+    tags:
+    - '*'
 
 defaults:
   run:
@@ -23,42 +23,42 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # - target: aarch64-apple-ios
-        #   runs-on: macos-latest
-        # - target: aarch64-apple-ios-sim
-        #   runs-on: macos-latest
-        # - target: x86_64-apple-ios
-        #   runs-on: macos-latest
+        - target: aarch64-apple-ios
+          runs-on: macos-latest
+        - target: aarch64-apple-ios-sim
+          runs-on: macos-latest
+        - target: x86_64-apple-ios
+          runs-on: macos-latest
 
-        # - target: x86_64-apple-darwin
-        #   runs-on: macos-latest
-        # - target: aarch64-apple-darwin
-        #   runs-on: macos-latest
-        # - target: x86_64-unknown-linux-gnu
-        #   runs-on: ubuntu-latest
-        # - target: aarch64-unknown-linux-gnu
-        #   runs-on: ubuntu-arm64
+        - target: x86_64-apple-darwin
+          runs-on: macos-latest
+        - target: aarch64-apple-darwin
+          runs-on: macos-latest
+        - target: x86_64-unknown-linux-gnu
+          runs-on: ubuntu-latest
+        - target: aarch64-unknown-linux-gnu
+          runs-on: ubuntu-arm64
         - target: x86_64-pc-windows-gnu
           runs-on: windows-2022
-        # - target: aarch64-pc-windows-gnullvm
-        #   runs-on: windows-11-arm
+        - target: aarch64-pc-windows-gnullvm
+          runs-on: windows-11-arm
 
-        # - target: aarch64-linux-android
-        #   android-prefix: aarch64-linux-android
-        #   android-env: aarch64_linux_android
-        #   runs-on: ubuntu-latest
-        # - target: armv7-linux-androideabi
-        #   android-prefix: armv7a-linux-androideabi  # same as target, but has "a" after v7
-        #   android-env: armv7_linux_androideabi  # same as target, but with underscores
-        #   runs-on: ubuntu-latest
-        # - target: i686-linux-android
-        #   android-prefix: i686-linux-android
-        #   android-env: i686_linux_android
-        #   runs-on: ubuntu-latest
-        # - target: x86_64-linux-android
-        #   android-prefix: x86_64-linux-android
-        #   android-env: x86_64_linux_android
-        #   runs-on: ubuntu-latest
+        - target: aarch64-linux-android
+          android-prefix: aarch64-linux-android
+          android-env: aarch64_linux_android
+          runs-on: ubuntu-latest
+        - target: armv7-linux-androideabi
+          android-prefix: armv7a-linux-androideabi  # same as target, but has "a" after v7
+          android-env: armv7_linux_androideabi  # same as target, but with underscores
+          runs-on: ubuntu-latest
+        - target: i686-linux-android
+          android-prefix: i686-linux-android
+          android-env: i686_linux_android
+          runs-on: ubuntu-latest
+        - target: x86_64-linux-android
+          android-prefix: x86_64-linux-android
+          android-env: x86_64_linux_android
+          runs-on: ubuntu-latest
 
     name: libsignal-ffi (${{ matrix.target }})
     steps:
