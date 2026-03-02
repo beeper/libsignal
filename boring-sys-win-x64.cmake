@@ -1,0 +1,6 @@
+set (CMAKE_SYSTEM_NAME Windows)
+set (CMAKE_C_COMPILER "C:\\ProgramData\\mingw64\\mingw64\\bin\\gcc.exe")
+set (CMAKE_C_FLAGS "-ffunction-sections -fdata-sections -Wl,--gc-sections")
+set (CMAKE_CXX_COMPILER "C:\\ProgramData\\mingw64\\mingw64\\bin\\g++.exe")
+set (CMAKE_CXX_FLAGS "-ffunction-sections -fdata-sections -Wl,--gc-sections")
+set (CMAKE_ASM_FLAGS "-ffunction-sections -fdata-sections -Wl,--gc-sections")
