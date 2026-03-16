@@ -78,27 +78,12 @@ export type IdentityKeyStore = {
   _getIdentity: (name: ProtocolAddress) => Promise<PublicKey | null>;
 };
 
-export type SessionStore = {
-  _saveSession: (addr: ProtocolAddress, record: SessionRecord) => Promise<void>;
-  _getSession: (addr: ProtocolAddress) => Promise<SessionRecord | null>;
-};
-
 // TODO: Resolve the different names here.
 export type PreKeyStore = BridgePreKeyStore;
 export type SignedPreKeyStore = BridgeSignedPreKeyStore;
 export type KyberPreKeyStore = BridgeKyberPreKeyStore;
-
-export type SenderKeyStore = {
-  _saveSenderKey: (
-    sender: ProtocolAddress,
-    distributionId: Uuid,
-    record: SenderKeyRecord
-  ) => Promise<void>;
-  _getSenderKey: (
-    sender: ProtocolAddress,
-    distributionId: Uuid
-  ) => Promise<SenderKeyRecord | null>;
-};
+export type SessionStore = BridgeSessionStore;
+export type SenderKeyStore = BridgeSenderKeyStore;
 
 export type InputStream = {
   _read: (amount: number) => Promise<Uint8Array>;
@@ -145,17 +130,10 @@ export type MessageBackupValidationOutcome = {
   unknownFieldMessages: Array<string>;
 };
 
-export type BackupJsonFrameError = {
-  message: string;
-  unknownFields: string[];
-};
-
-export type BackupJsonFrameResult = {
-  line?: string;
-  error?: BackupJsonFrameError;
-};
-
-export type JsonFrameExportResult = BackupJsonFrameResult;
+export type JsonFrameExportResult = [
+  line: string | null,
+  errorMessage: string | null
+];
 
 export type AccountEntropyPool = string;
 
@@ -1861,7 +1839,7 @@ export interface RegisterAccountResponse { readonly __type: unique symbol; }
 export interface RegistrationAccountAttributes { readonly __type: unique symbol; }
 export interface BackupStoreResponse { readonly __type: unique symbol; }
 export interface BackupRestoreResponse { readonly __type: unique symbol; }
-export const NetRemoteConfigKeys = ['chatRequestConnectionCheckTimeoutMillis', 'disableNagleAlgorithm', 'useH2ForUnauthChat', 'grpc.AccountsAnonymousLookupUsernameHash', 'grpc.AccountsAnonymousLookupUsernameLink', 'grpc.AccountsAnonymousCheckAccountExistence', ] as const;
+export const NetRemoteConfigKeys = ['chatRequestConnectionCheckTimeoutMillis', 'useH2ForUnauthChat', 'useH2ForAuthChat', 'grpc.AccountsAnonymousLookupUsernameHash', 'grpc.AccountsAnonymousLookupUsernameLink', 'grpc.AccountsAnonymousCheckAccountExistence', 'grpc.MessagesAnonymousSendMultiRecipientMessage', ] as const;
 export interface TokioAsyncContext { readonly __type: unique symbol; }
 export interface ConnectionManager { readonly __type: unique symbol; }
 export interface ConnectionProxyConfig { readonly __type: unique symbol; }
@@ -1878,6 +1856,14 @@ export /*trait*/ type BridgeKyberPreKeyStore = {
   loadKyberPreKey: (id: number) => Promise<KyberPreKeyRecord | null>;
   storeKyberPreKey: (id: number, record: KyberPreKeyRecord) => Promise<void>;
   markKyberPreKeyUsed: (id: number, ecPrekeyId: number, baseKey: PublicKey) => Promise<void>;
+};
+export /*trait*/ type BridgeSessionStore = {
+  loadSession: (address: ProtocolAddress) => Promise<SessionRecord | null>;
+  storeSession: (address: ProtocolAddress, record: SessionRecord) => Promise<void>;
+};
+export /*trait*/ type BridgeSenderKeyStore = {
+  loadSenderKey: (sender: ProtocolAddress, distributionId: Uuid) => Promise<SenderKeyRecord | null>;
+  storeSenderKey: (sender: ProtocolAddress, distributionId: Uuid, record: SenderKeyRecord) => Promise<void>;
 };
 export interface CiphertextMessage { readonly __type: unique symbol; }
 export interface DecryptionErrorMessage { readonly __type: unique symbol; }

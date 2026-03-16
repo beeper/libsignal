@@ -105,16 +105,17 @@ pub enum RemoteConfigKey {
     /// How long to wait for a response to a chat request before checking whether the connection is
     /// still active.
     ChatRequestConnectionCheckTimeoutMilliseconds => "chatRequestConnectionCheckTimeoutMillis",
-    /// Whether to disable the Nagle algorithm (sets TCP_NODELAY).
-    DisableNagleAlgorithm => "disableNagleAlgorithm",
-    /// If set, unauth chat connections (only!) will connect over H2.
+    /// If set, unauth chat connections will connect over H2.
     UseH2ForUnauthChat => "useH2ForUnauthChat",
+    /// If set, auth chat connections will connect over H2.
+    UseH2ForAuthChat => "useH2ForAuthChat",
 
     // Typed API keys, based on gRPC request names.
     // These should all start with "grpc."
     AccountsAnonymousLookupUsernameHash => "grpc.AccountsAnonymousLookupUsernameHash",
     AccountsAnonymousLookupUsernameLink => "grpc.AccountsAnonymousLookupUsernameLink",
     AccountsAnonymousCheckAccountExistence => "grpc.AccountsAnonymousCheckAccountExistence",
+    MessagesAnonymousSendMultiRecipientMessage => "grpc.MessagesAnonymousSendMultiRecipientMessage",
 }
 }
 
@@ -242,6 +243,7 @@ mod tests {
         let all_known_grpc_keys: HashSet<&str> = std::iter::empty()
             .chain(services::AccountsAnonymous::iter().map(|x| x.into()))
             .chain(services::KeysAnonymous::iter().map(|x| x.into()))
+            .chain(services::MessagesAnonymous::iter().map(|x| x.into()))
             .collect();
 
         for key in super::RemoteConfigKey::KEYS

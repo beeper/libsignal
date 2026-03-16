@@ -135,6 +135,7 @@ message AccountData {
     CallsUseLessDataSetting callsUseLessDataSetting = 29;  // If unset, treat the same as "Unknown" case
     bool allowSealedSenderFromAnyone = 30;
     bool allowAutomaticKeyVerification = 31;
+    bool hasSeenAdminDeleteEducationDialog = 32;
   }
 
   message SubscriberData {
@@ -372,6 +373,7 @@ message Group {
     AccessRequired attributes = 1;
     AccessRequired members = 2;
     AccessRequired addFromInviteLink = 3;
+    AccessRequired memberLabel = 4;
   }
 }
 
@@ -1082,6 +1084,7 @@ message GroupChangeChatUpdate {
       GroupV2MigrationDroppedMembersUpdate groupV2MigrationDroppedMembersUpdate = 32;
       GroupSequenceOfRequestsAndCancelsUpdate groupSequenceOfRequestsAndCancelsUpdate = 33;
       GroupExpirationTimerUpdate groupExpirationTimerUpdate = 34;
+      GroupMemberLabelAccessLevelChangeUpdate groupMemberLabelAccessLevelChangeUpdate = 35;
     }
   }
 
@@ -1124,6 +1127,11 @@ enum GroupV2AccessLevel {
 }
 
 message GroupMembershipAccessLevelChangeUpdate {
+  optional bytes updaterAci = 1;
+  GroupV2AccessLevel accessLevel = 2;
+}
+
+message GroupMemberLabelAccessLevelChangeUpdate {
   optional bytes updaterAci = 1;
   GroupV2AccessLevel accessLevel = 2;
 }
@@ -1308,6 +1316,12 @@ message StickerPack {
 
 message ChatStyle {
   message Gradient {
+    // Color ordering:
+    //   0   degrees: bottom-to-top
+    //   90  degrees: left-to-right
+    //   180 degrees: top-to-bottom
+    //   270 degrees: right-to-left
+
     uint32 angle = 1; // degrees
     repeated fixed32 colors = 2; // 0xAARRGGBB
     repeated float positions = 3; // percent from 0 to 1

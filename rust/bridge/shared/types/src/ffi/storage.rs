@@ -5,21 +5,19 @@
 
 use async_trait::async_trait;
 use libsignal_bridge_macros::bridge_callbacks;
-use uuid::Uuid;
 
 use super::*;
 use crate::ffi;
 use crate::protocol::storage::{
-    FfiBridgeKyberPreKeyStoreStruct, FfiBridgePreKeyStoreStruct, FfiBridgeSignedPreKeyStoreStruct,
+    FfiBridgeKyberPreKeyStoreStruct, FfiBridgePreKeyStoreStruct, FfiBridgeSenderKeyStoreStruct,
+    FfiBridgeSessionStoreStruct, FfiBridgeSignedPreKeyStoreStruct,
 };
 use crate::support::{BridgedCallbacks, ResultLike, WithContext};
 
 /// A bridge-friendly version of [`IdentityKeyStore`].
 #[bridge_callbacks(jni = false, node = false)]
 pub trait BridgeIdentityKeyStore {
-    // We ask for just the private key because IdentityKeyPair isn't a single bridge_handle; it's a
-    // pair of objects. This is easier to bridge.
-    fn get_local_identity_private_key(&self) -> Result<PrivateKey, SignalProtocolError>;
+    fn get_local_identity_key_pair(&self) -> Result<(PrivateKey, PublicKey), SignalProtocolError>;
     fn get_local_registration_id(&self) -> Result<u32, SignalProtocolError>;
     fn get_identity_key(
         &self,
@@ -53,8 +51,7 @@ pub enum FfiDirection {
 #[async_trait(?Send)]
 impl<T: BridgeIdentityKeyStore> IdentityKeyStore for BridgedCallbacks<T> {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, SignalProtocolError> {
-        let priv_key = self.0.get_local_identity_private_key()?;
-        let pub_key = priv_key.public_key()?;
+        let (priv_key, pub_key) = self.0.get_local_identity_key_pair()?;
         Ok(IdentityKeyPair::new(IdentityKey::new(pub_key), priv_key))
     }
 
@@ -107,80 +104,5 @@ impl<T: BridgeIdentityKeyStore> IdentityKeyStore for BridgedCallbacks<T> {
 pub type FfiPreKeyStoreStruct = FfiBridgePreKeyStoreStruct;
 pub type FfiSignedPreKeyStoreStruct = FfiBridgeSignedPreKeyStoreStruct;
 pub type FfiKyberPreKeyStoreStruct = FfiBridgeKyberPreKeyStoreStruct;
-
-/// A bridge-friendly version of [`SessionStore`].
-#[bridge_callbacks(jni = false, node = false)]
-pub trait BridgeSessionStore {
-    fn load_session(
-        &self,
-        address: ProtocolAddress,
-    ) -> Result<Option<SessionRecord>, SignalProtocolError>;
-    fn store_session(
-        &self,
-        address: ProtocolAddress,
-        record: SessionRecord,
-    ) -> Result<(), SignalProtocolError>;
-}
-
-// TODO: This alias is because of the ffi_arg_type macro expecting all bridging structs to use a
-// particular naming scheme; eventually we should be able to remove it.
-pub type FfiSessionStoreStruct = FfiBridgeSessionStoreStruct;
-
-#[async_trait(?Send)]
-impl<T: BridgeSessionStore> SessionStore for BridgedCallbacks<T> {
-    async fn load_session(
-        &self,
-        address: &ProtocolAddress,
-    ) -> Result<Option<SessionRecord>, SignalProtocolError> {
-        self.0.load_session(address.clone())
-    }
-
-    async fn store_session(
-        &mut self,
-        address: &ProtocolAddress,
-        record: &SessionRecord,
-    ) -> Result<(), SignalProtocolError> {
-        self.0.store_session(address.clone(), record.clone())
-    }
-}
-
-/// A bridge-friendly version of [`SenderKeyStore`].
-#[bridge_callbacks(jni = false, node = false)]
-pub trait BridgeSenderKeyStore {
-    fn load_sender_key(
-        &self,
-        sender: ProtocolAddress,
-        distribution_id: Uuid,
-    ) -> Result<Option<SenderKeyRecord>, SignalProtocolError>;
-    fn store_sender_key(
-        &self,
-        sender: ProtocolAddress,
-        distribution_id: Uuid,
-        record: SenderKeyRecord,
-    ) -> Result<(), SignalProtocolError>;
-}
-
-// TODO: This alias is because of the ffi_arg_type macro expecting all bridging structs to use a
-// particular naming scheme; eventually we should be able to remove it.
 pub type FfiSenderKeyStoreStruct = FfiBridgeSenderKeyStoreStruct;
-
-#[async_trait(?Send)]
-impl<T: BridgeSenderKeyStore> SenderKeyStore for BridgedCallbacks<T> {
-    async fn store_sender_key(
-        &mut self,
-        sender: &ProtocolAddress,
-        distribution_id: Uuid,
-        record: &SenderKeyRecord,
-    ) -> Result<(), SignalProtocolError> {
-        self.0
-            .store_sender_key(sender.clone(), distribution_id, record.clone())
-    }
-
-    async fn load_sender_key(
-        &mut self,
-        sender: &ProtocolAddress,
-        distribution_id: Uuid,
-    ) -> Result<Option<SenderKeyRecord>, SignalProtocolError> {
-        self.0.load_sender_key(sender.clone(), distribution_id)
-    }
-}
+pub type FfiSessionStoreStruct = FfiBridgeSessionStoreStruct;

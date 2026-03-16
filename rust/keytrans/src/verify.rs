@@ -38,6 +38,13 @@ const ALLOWED_AUDITOR_TIMESTAMP_RANGE: &TimestampRange = &TimestampRange {
 };
 const ENTRIES_MAX_BEHIND: u64 = 10_000_000;
 
+/// Upper bound on `tree_size` accepted from the server.
+///
+/// Tree math in [`crate::implicit`] and [`crate::log`] performs arithmetic
+/// like `2*(n-1)+1` that would overflow for `n > 2^63`. Bounding `tree_size`
+/// at `2^62` keeps all such arithmetic safely within `u64`.
+const MAX_TREE_SIZE: u64 = 1u64 << 62;
+
 #[derive(Clone, Debug, displaydoc::Display)]
 pub enum Error {
     /// Required field '{0}' not found
@@ -466,6 +473,19 @@ fn verify_search_internal(
     };
     let search_proof = get_proto_field(&search, "search")?;
 
+    // Validate server-controlled tree parameters before any tree math, which
+    // would otherwise panic on out-of-range values.
+    if tree_size == 0 || tree_size > MAX_TREE_SIZE {
+        return Err(Error::VerificationFailed(
+            "tree_size out of range".to_string(),
+        ));
+    }
+    if search_proof.pos >= tree_size {
+        return Err(Error::VerificationFailed(
+            "search proof pos must be less than tree_size".to_string(),
+        ));
+    }
+
     let guide = ProofGuide::new(version, search_proof.pos, tree_size);
 
     let mut i = 0;
@@ -600,6 +620,14 @@ pub fn verify_monitor<'a>(
     let full_tree_head = get_proto_field(&res.tree_head, "tree_head")?;
     let tree_head = get_proto_field(&full_tree_head.tree_head, "tree_head")?;
     let tree_size = tree_head.tree_size;
+
+    // Validate server-controlled tree_size before any tree math, which would
+    // otherwise panic on out-of-range values.
+    if tree_size == 0 || tree_size > MAX_TREE_SIZE {
+        return Err(Error::VerificationFailed(
+            "tree_size out of range".to_string(),
+        ));
+    }
 
     let MonitorContext {
         last_tree_head,
@@ -778,6 +806,7 @@ impl MonitoringDataWrapper {
                 pos: zero_pos,
                 ptrs: HashMap::from([(ver_pos, version)]),
                 owned,
+                search_key: vec![],
             });
         }
     }
@@ -1095,6 +1124,7 @@ mod test {
             // See test_stored_account_data in rust/net/chat/src/api/keytrans.rs
             ptrs: HashMap::from_iter([(16777215, 2)]),
             owned: true,
+            search_key: vec![],
         }));
         // These values were obtained by running the integration test in
         // rust/net/chat/src/api/keytrans.rs and extracting positions and versions
@@ -1174,6 +1204,7 @@ mod test {
             pos: 10, // The search key is introduced here
             ptrs: HashMap::from([(10, 1)]),
             owned: true,
+            search_key: vec![],
         }));
 
         let steps = proof_steps([(11, 1), (15, 2)]);
@@ -1191,6 +1222,7 @@ mod test {
             pos: 10, // The search key is introduced here
             ptrs: HashMap::from([(10, 1)]),
             owned: true,
+            search_key: vec![],
         }));
         // later position contains a smaller version
         let steps = proof_steps([(11, 0)]);
@@ -1206,6 +1238,7 @@ mod test {
             pos: 10, // The search key is introduced here
             ptrs: HashMap::from([(10, 1)]),
             owned: true,
+            search_key: vec![],
         }));
 
         let steps = HashMap::from_iter([
@@ -1225,6 +1258,7 @@ mod test {
             pos: 10, // The search key is introduced here
             ptrs: HashMap::from([(10, 1), (11, 2)]),
             owned: true,
+            search_key: vec![],
         }));
         let steps = proof_steps([(11, 3)]);
         let result = wrapper.update(16, &steps);

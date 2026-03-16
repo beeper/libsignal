@@ -5,10 +5,13 @@
 
 use async_trait::async_trait;
 use libsignal_bridge_macros::bridge_callbacks;
+use libsignal_core::ProtocolAddress;
 use libsignal_protocol::{
     KyberPreKeyId, KyberPreKeyRecord, KyberPreKeyStore, PreKeyId, PreKeyRecord, PreKeyStore,
-    PublicKey, SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
+    PublicKey, SenderKeyRecord, SenderKeyStore, SessionRecord, SessionStore, SignalProtocolError,
+    SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
+use uuid::Uuid;
 
 use crate::support::{BridgedCallbacks, ResultLike, WithContext};
 use crate::*;
@@ -137,5 +140,77 @@ impl<T: BridgeKyberPreKeyStore> KyberPreKeyStore for BridgedCallbacks<T> {
             *base_key,
         )
         .await
+    }
+}
+
+/// A bridge-friendly version of [`SessionStore`].
+#[bridge_callbacks(jni = "org.signal.libsignal.protocol.state.internal.SessionStore")]
+pub(crate) trait BridgeSessionStore {
+    async fn load_session(
+        &self,
+        address: ProtocolAddress,
+    ) -> Result<Option<SessionRecord>, SignalProtocolError>;
+    async fn store_session(
+        &self,
+        address: ProtocolAddress,
+        record: SessionRecord,
+    ) -> Result<(), SignalProtocolError>;
+}
+
+#[async_trait(?Send)]
+impl<T: BridgeSessionStore> SessionStore for BridgedCallbacks<T> {
+    async fn load_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<SessionRecord>, SignalProtocolError> {
+        self.0.load_session(address.clone()).await
+    }
+
+    async fn store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: &SessionRecord,
+    ) -> Result<(), SignalProtocolError> {
+        self.0.store_session(address.clone(), record.clone()).await
+    }
+}
+
+/// A bridge-friendly version of [`SenderKeyStore`].
+#[bridge_callbacks(jni = "org.signal.libsignal.protocol.state.internal.SenderKeyStore")]
+trait BridgeSenderKeyStore {
+    async fn load_sender_key(
+        &self,
+        sender: ProtocolAddress,
+        distribution_id: Uuid,
+    ) -> Result<Option<SenderKeyRecord>, SignalProtocolError>;
+    async fn store_sender_key(
+        &self,
+        sender: ProtocolAddress,
+        distribution_id: Uuid,
+        record: SenderKeyRecord,
+    ) -> Result<(), SignalProtocolError>;
+}
+
+#[async_trait(?Send)]
+impl<T: BridgeSenderKeyStore> SenderKeyStore for BridgedCallbacks<T> {
+    async fn store_sender_key(
+        &mut self,
+        sender: &ProtocolAddress,
+        distribution_id: Uuid,
+        record: &SenderKeyRecord,
+    ) -> Result<(), SignalProtocolError> {
+        self.0
+            .store_sender_key(sender.clone(), distribution_id, record.clone())
+            .await
+    }
+
+    async fn load_sender_key(
+        &mut self,
+        sender: &ProtocolAddress,
+        distribution_id: Uuid,
+    ) -> Result<Option<SenderKeyRecord>, SignalProtocolError> {
+        self.0
+            .load_sender_key(sender.clone(), distribution_id)
+            .await
     }
 }

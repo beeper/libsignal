@@ -35,7 +35,7 @@ use libsignal_net::infra::route::{
     RouteProviderExt, TcpRoute, TlsRoute, UnresolvedHttpsServiceRoute,
 };
 use libsignal_net::infra::tcp_ssl::InvalidProxyConfig;
-use libsignal_net::infra::{EnableDomainFronting, EnforceMinimumTls};
+use libsignal_net::infra::{EnableDomainFronting, EnforceMinimumTls, OverrideNagleAlgorithm};
 use libsignal_net_chat::api::Unauth;
 use libsignal_protocol::Timestamp;
 use static_assertions::assert_impl_all;
@@ -526,15 +526,13 @@ fn make_route_provider(
         .try_into()
         .map_err(|InvalidProxyConfig| ConnectError::InvalidConnectionConfiguration)?;
 
-    let override_nagle_algorithm = connection_manager.tcp_nagle_override();
-
     let chat_connect =
         choose_chat_connection_config(env, chat_headers, &connection_manager.remote_config);
 
     let inner = chat_connect.route_provider_with_options(
         enable_domain_fronting,
         enforce_minimum_tls,
-        override_nagle_algorithm,
+        OverrideNagleAlgorithm::OverrideToOff,
     );
     Ok(DirectOrProxyProvider {
         inner,
@@ -550,23 +548,26 @@ fn choose_chat_connection_config<'a>(
     // At this time, in order to try the experimental H2 configuration:
     let default_config = &env.chat_domain_config.connect;
 
-    // - We must specifically be making an unauthenticated connection.
-    match chat_headers {
-        None | Some(chat::ChatHeaders::Auth(_)) => {
-            return default_config;
-        }
-        Some(chat::ChatHeaders::Unauth(_)) => {}
-    }
-
-    // - We must be opted in to the experiment.
-    {
-        let guard = remote_config.lock().expect("not poisoned");
-        if !guard.is_enabled(RemoteConfigKey::UseH2ForUnauthChat) {
-            return default_config;
-        }
+    if !should_use_h2(chat_headers, remote_config) {
+        return default_config;
     }
 
     &env.experimental_chat_h2_domain_config.connect
+}
+
+fn should_use_h2(
+    chat_headers: Option<&chat::ChatHeaders>,
+    remote_config: &Mutex<RemoteConfig>,
+) -> bool {
+    // We must be opted in to H2 for this connection type.
+    let required_flag = match chat_headers {
+        Some(chat::ChatHeaders::Unauth(_)) => RemoteConfigKey::UseH2ForUnauthChat,
+        // Preconnect calls `make_route_provider(..., None)`, so `None` should follow auth behavior.
+        None | Some(chat::ChatHeaders::Auth(_)) => RemoteConfigKey::UseH2ForAuthChat,
+    };
+
+    let guard = remote_config.lock().expect("not poisoned");
+    guard.is_enabled(required_flag)
 }
 
 pub struct HttpRequest {

@@ -12,7 +12,6 @@ use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::slice;
 
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
-use libsignal_message_backup::json::exporter::FrameExportResult as JsonFrameExportResult;
 use neon::prelude::*;
 use neon::types::JsBigInt;
 use paste::paste;
@@ -25,7 +24,8 @@ use crate::net::chat::{
     ChatListener, NodeChatListener, NodeProvisioningListener, ProvisioningListener,
 };
 use crate::protocol::storage::{
-    NodeBridgeKyberPreKeyStore, NodeBridgePreKeyStore, NodeBridgeSignedPreKeyStore,
+    NodeBridgeKyberPreKeyStore, NodeBridgePreKeyStore, NodeBridgeSenderKeyStore,
+    NodeBridgeSessionStore, NodeBridgeSignedPreKeyStore,
 };
 use crate::support::{
     Array, AsType, BridgedCallbacks, FixedLengthBincodeSerializable, Serialized, extend_lifetime,
@@ -432,6 +432,28 @@ impl CallbackResultTypeInfo for KyberPreKeyRecord {
     }
 }
 
+impl CallbackResultTypeInfo for SessionRecord {
+    type ResultType = DefaultJsBox<JsBoxContentsFor<SessionRecord>>;
+
+    fn convert_from_callback(
+        _cx: &mut FunctionContext,
+        foreign: Handle<Self::ResultType>,
+    ) -> NeonResult<Self> {
+        Ok(foreign.as_inner().borrow().clone())
+    }
+}
+
+impl CallbackResultTypeInfo for SenderKeyRecord {
+    type ResultType = DefaultJsBox<JsBoxContentsFor<SenderKeyRecord>>;
+
+    fn convert_from_callback(
+        _cx: &mut FunctionContext,
+        foreign: Handle<Self::ResultType>,
+    ) -> NeonResult<Self> {
+        Ok(foreign.as_inner().0.clone())
+    }
+}
+
 impl SimpleArgTypeInfo for AccountEntropyPool {
     type ArgType = <String as SimpleArgTypeInfo>::ArgType;
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
@@ -828,8 +850,8 @@ macro_rules! bridge_trait {
 
 bridge_trait!(IdentityKeyStore);
 // bridge_trait!(PreKeyStore);
-bridge_trait!(SenderKeyStore);
-bridge_trait!(SessionStore);
+// bridge_trait!(SenderKeyStore);
+// bridge_trait!(SessionStore);
 // bridge_trait!(SignedPreKeyStore);
 // bridge_trait!(KyberPreKeyStore);
 bridge_trait!(InputStream);
@@ -872,6 +894,36 @@ impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn KyberPreKeyStore {
         foreign: Handle<Self::ArgType>,
     ) -> NeonResult<Self::StoredType> {
         Ok(BridgedCallbacks(NodeBridgeKyberPreKeyStore::new(
+            cx, foreign,
+        )?))
+    }
+    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
+        stored
+    }
+}
+
+impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn SessionStore {
+    type ArgType = JsObject;
+    type StoredType = BridgedCallbacks<NodeBridgeSessionStore>;
+    fn save_async_arg(
+        cx: &mut FunctionContext,
+        foreign: Handle<Self::ArgType>,
+    ) -> NeonResult<Self::StoredType> {
+        Ok(BridgedCallbacks(NodeBridgeSessionStore::new(cx, foreign)?))
+    }
+    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
+        stored
+    }
+}
+
+impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn SenderKeyStore {
+    type ArgType = JsObject;
+    type StoredType = BridgedCallbacks<NodeBridgeSenderKeyStore>;
+    fn save_async_arg(
+        cx: &mut FunctionContext,
+        foreign: Handle<Self::ArgType>,
+    ) -> NeonResult<Self::StoredType> {
+        Ok(BridgedCallbacks(NodeBridgeSenderKeyStore::new(
             cx, foreign,
         )?))
     }
@@ -1203,6 +1255,13 @@ impl<'a, A: ResultTypeInfo<'a>, B: ResultTypeInfo<'a>> ResultTypeInfo<'a> for (A
     }
 }
 
+impl<'a, A: ResultTypeInfo<'a>, B: ResultTypeInfo<'a>> ResultTypeInfo<'a> for Vec<(A, B)> {
+    type ResultType = JsArray;
+    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
+        make_array(cx, self)
+    }
+}
+
 impl<'a> ResultTypeInfo<'a> for MessageBackupValidationOutcome {
     type ResultType = JsObject;
 
@@ -1219,39 +1278,6 @@ impl<'a> ResultTypeInfo<'a> for MessageBackupValidationOutcome {
         obj.set(cx, "unknownFieldMessages", unknown_field_messages)?;
 
         Ok(obj)
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for JsonFrameExportResult {
-    type ResultType = JsObject;
-
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        let JsonFrameExportResult {
-            line,
-            validation_error,
-        } = self;
-
-        let js_result = JsObject::new(cx);
-
-        if let Some(line) = line {
-            let line_value = cx.string(&line);
-            js_result.set(cx, "line", line_value)?;
-        }
-
-        if let Some(error) = validation_error {
-            let message = cx.string(error.to_string());
-            js_result.set(cx, "errorMessage", message)?;
-        }
-
-        Ok(js_result)
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for Box<[JsonFrameExportResult]> {
-    type ResultType = JsArray;
-
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        make_array(cx, self.into_vec())
     }
 }
 

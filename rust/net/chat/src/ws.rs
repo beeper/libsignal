@@ -6,6 +6,7 @@
 //! The `ws` module and its submodules implement a chat server based on REST-like requests over a
 //! websocket, as implemented in [`libsignal_net::chat`].
 
+mod backups;
 mod keys;
 mod keytrans;
 mod messages;
@@ -17,8 +18,7 @@ mod usernames;
 use std::future::Future;
 use std::time::Duration;
 
-use base64::Engine as _;
-use base64::prelude::BASE64_STANDARD;
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use http::StatusCode;
 use libsignal_net::chat;
 use libsignal_net::chat::{Request, Response, SendError};
@@ -376,6 +376,16 @@ where
         | serde_json::error::Category::Io
         | serde_json::error::Category::Eof => ResponseError::InvalidJson,
     })
+}
+
+fn expect_empty_body(response: &chat::Response, label: &'static str) {
+    if !response.body.as_deref().unwrap_or_default().is_empty() {
+        log::warn!(
+            "ignoring body for {} result from {}",
+            response.status.as_u16(),
+            label
+        );
+    }
 }
 
 #[cfg(test)]

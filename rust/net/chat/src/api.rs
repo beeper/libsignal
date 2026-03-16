@@ -11,6 +11,7 @@ use std::convert::Infallible;
 use libsignal_net::infra::errors::LogSafeDisplay;
 use ref_cast::RefCast as _;
 
+pub mod backups;
 pub mod keys;
 pub mod keytrans;
 pub mod messages;
@@ -85,6 +86,27 @@ impl<E, D> From<Infallible> for RequestError<E, D> {
     }
 }
 
+impl<E, D> RequestError<E, D> {
+    /// Substitutes one `Other` error type for another.
+    ///
+    /// This is a *flat* map because the transformation is allowed to return a different
+    /// `RequestError` case (usually `Unexpected`).
+    pub fn flat_map_other<E2>(
+        self,
+        f: impl FnOnce(E) -> RequestError<E2, D>,
+    ) -> RequestError<E2, D> {
+        match self {
+            RequestError::Timeout => RequestError::Timeout,
+            RequestError::Disconnected(d) => RequestError::Disconnected(d),
+            RequestError::RetryLater(retry_later) => RequestError::RetryLater(retry_later),
+            RequestError::Challenge(challenge) => RequestError::Challenge(challenge),
+            RequestError::ServerSideError => RequestError::ServerSideError,
+            RequestError::Unexpected { log_safe } => RequestError::Unexpected { log_safe },
+            RequestError::Other(e) => f(e),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 #[cfg_attr(test, derive(Clone))]
 #[ignore_extra_doc_attributes]
@@ -126,6 +148,15 @@ pub enum ChallengeOption {
     Captcha,
 }
 
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct UploadForm {
+    pub cdn: u32,
+    pub key: String,
+    pub headers: Vec<(String, String)>,
+    pub signed_upload_url: String,
+}
+
 /// A convenience trait covering all Chat APIs.
 ///
 /// This should be extended to include any new submodules' traits.
@@ -136,18 +167,30 @@ pub enum ChallengeOption {
 /// Any concrete type will only impl this trait in one way; anywhere that needs to use
 /// UnauthenticatedChatApi generically should accept an arbitrary `T` here.
 pub trait UnauthenticatedChatApi<T>:
-    keys::UnauthenticatedChatApi<T>
+    backups::UnauthenticatedChatApi<T>
+    + keys::UnauthenticatedChatApi<T>
     + keytrans::UnauthenticatedChatApi
-    + messages::UnauthenticatedChatApi
+    + messages::UnauthenticatedChatApi<T>
     + profiles::UnauthenticatedChatApi
     + usernames::UnauthenticatedChatApi<T>
 {
 }
 impl<T, U> UnauthenticatedChatApi<T> for U where
-    U: keys::UnauthenticatedChatApi<T>
+    U: backups::UnauthenticatedChatApi<T>
+        + keys::UnauthenticatedChatApi<T>
         + keytrans::UnauthenticatedChatApi
-        + messages::UnauthenticatedChatApi
+        + messages::UnauthenticatedChatApi<T>
         + profiles::UnauthenticatedChatApi
         + usernames::UnauthenticatedChatApi<T>
 {
+}
+
+#[cfg(test)]
+pub(crate) mod testutil {
+    use rand::SeedableRng as _;
+
+    /// A standard RNG used for exact-match tests that (normally) depend on randomness.
+    pub(crate) fn fixed_seed_test_rng() -> impl rand::CryptoRng + Send {
+        rand_chacha::ChaCha20Rng::seed_from_u64(0)
+    }
 }
