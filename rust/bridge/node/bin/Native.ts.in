@@ -5,7 +5,7 @@
 
 // WARNING: this file was automatically generated
 
-export type Uuid = Uint8Array;
+export type Uuid = Uint8Array<ArrayBuffer>;
 
 /// A Native.Timestamp may be measured in seconds or in milliseconds;
 /// what's important is that it's an integer less than Number.MAX_SAFE_INTEGER.
@@ -28,7 +28,7 @@ export type ChatResponse = {
   status: number;
   message: string | undefined;
   headers: ReadonlyArray<[string, string]>;
-  body: Uint8Array | undefined;
+  body: Uint8Array<ArrayBuffer> | undefined;
 };
 
 export type ChatServiceDebugInfo = {
@@ -63,22 +63,8 @@ export enum IdentityChange {
   ReplacedExisting = 1,
 }
 
-export type IdentityKeyStore = {
-  _getIdentityKey: () => Promise<PrivateKey>;
-  _getLocalRegistrationId: () => Promise<number>;
-  _saveIdentity: (
-    name: ProtocolAddress,
-    key: PublicKey
-  ) => Promise<IdentityChange>;
-  _isTrustedIdentity: (
-    name: ProtocolAddress,
-    key: PublicKey,
-    sending: boolean
-  ) => Promise<boolean>;
-  _getIdentity: (name: ProtocolAddress) => Promise<PublicKey | null>;
-};
-
 // TODO: Resolve the different names here.
+export type IdentityKeyStore = BridgeIdentityKeyStore;
 export type PreKeyStore = BridgePreKeyStore;
 export type SignedPreKeyStore = BridgeSignedPreKeyStore;
 export type KyberPreKeyStore = BridgeKyberPreKeyStore;
@@ -86,11 +72,11 @@ export type SessionStore = BridgeSessionStore;
 export type SenderKeyStore = BridgeSenderKeyStore;
 
 export type InputStream = {
-  _read: (amount: number) => Promise<Uint8Array>;
+  _read: (amount: number) => Promise<Uint8Array<ArrayBuffer>>;
   _skip: (amount: number) => Promise<void>;
 };
 
-export type SyncInputStream = Uint8Array;
+export type SyncInputStream = Uint8Array<ArrayBuffer>;
 
 export type ChallengeOption = 'pushChallenge' | 'captcha';
 
@@ -117,8 +103,8 @@ export type CheckSvr2CredentialsResponse = Map<
 
 export type SignedPublicPreKey = {
   keyId: number;
-  publicKey: Uint8Array;
-  signature: Uint8Array;
+  publicKey: Uint8Array<ArrayBuffer>;
+  signature: Uint8Array<ArrayBuffer>;
 };
 
 export type Wrapper<T> = Readonly<{
@@ -135,6 +121,11 @@ export type JsonFrameExportResult = [
   errorMessage: string | null
 ];
 
+export type PreKeysResponse = {
+  identityKey: PublicKey;
+  preKeyBundles: PreKeyBundle[];
+};
+
 export type AccountEntropyPool = string;
 
 export type CancellablePromise<T> = Promise<T> & {
@@ -142,7 +133,7 @@ export type CancellablePromise<T> = Promise<T> & {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export type Serialized<T> = Uint8Array;
+export type Serialized<T> = Uint8Array<ArrayBuffer>;
 
 type ConnectChatBridge = Wrapper<ConnectionManager>;
 type TestingFutureCancellationGuard = Wrapper<TestingFutureCancellationCounter>;

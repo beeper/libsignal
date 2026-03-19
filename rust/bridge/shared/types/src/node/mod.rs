@@ -44,11 +44,8 @@ mod io;
 pub use io::*;
 
 mod chat;
-mod storage;
 
-pub use storage::*;
-
-use crate::support::WithContext;
+use crate::support::{BridgedCallbacks, WithContext};
 
 /// A function pointer referring to a Neon-based Node entry point.
 #[doc(hidden)]
@@ -109,7 +106,7 @@ impl RootAndChannel {
             + Send
             + 'static,
         T: CallbackResultTypeInfo + Send + 'static,
-        E: From<WithContext<String>> + Send,
+        E: From<WithContext<ThrownException>> + Send,
     {
         /// Generates a closure to convert the promise's result type back to Rust.
         ///
@@ -122,7 +119,7 @@ impl RootAndChannel {
         ) -> impl for<'a> FnOnce(&mut FunctionContext<'a>, JsPromiseResult<'a>) -> Result<T, E>
         where
             T: CallbackResultTypeInfo,
-            E: From<WithContext<String>>,
+            E: From<WithContext<ThrownException>>,
         {
             move |cx, result| {
                 result
@@ -133,12 +130,9 @@ impl RootAndChannel {
                         })
                     })
                     .map_err(|error| {
-                        let description = error.to_string(cx).map(|s| s.value(cx)).unwrap_or_else(
-                            |_: neon::result::Throw| "<unknown JavaScript error>".into(),
-                        );
                         WithContext {
                             operation: name,
-                            inner: description,
+                            inner: ThrownException::from_value(cx, error),
                         }
                         .into()
                     })
@@ -193,5 +187,11 @@ impl Finalize for RootAndChannel {
             root,
         } = self;
         root.finalize(cx);
+    }
+}
+
+impl<T: Finalize> Finalize for BridgedCallbacks<T> {
+    fn finalize<'a, C: Context<'a>>(self, cx: &mut C) {
+        self.0.finalize(cx);
     }
 }

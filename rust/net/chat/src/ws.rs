@@ -29,7 +29,7 @@ use serde_with::serde_as;
 
 use crate::api::{
     AllowRateLimitChallenges, ChallengeOption, DisconnectedError, RateLimitChallenge, RequestError,
-    UserBasedAuthorization,
+    UploadForm, UserBasedAuthorization,
 };
 use crate::grpc::GrpcServiceProvider;
 use crate::logging::DebugAsStrOrBytes;
@@ -56,6 +56,24 @@ impl AsHttpHeader for UserBasedAuthorization {
         }
     }
 }
+
+/// A "remote" serde implementation to avoid putting serde traits on the public [`UploadForm`].
+///
+/// Use [`GetUploadFormResponse`] to receive [`UploadForm`]s using this implementation.
+#[serde_as]
+#[derive(serde::Deserialize)]
+#[serde(remote = "UploadForm")]
+struct UploadFormSerde {
+    cdn: u32,
+    key: String,
+    #[serde_as(as = "serde_with::Map<_, _>")]
+    headers: Vec<(String, String)>,
+    #[serde(rename = "signedUploadLocation")]
+    signed_upload_url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct GetUploadFormResponse(#[serde(with = "UploadFormSerde")] UploadForm);
 
 /// Marker type for use in [`crate::api`] traits.
 pub enum OverWs {}
@@ -438,6 +456,44 @@ mod testutil {
             request: chat::Request,
         ) -> impl Future<Output = Result<chat::Response, chat::SendError>> + Send {
             pretty_assertions::assert_eq!(self.expected, request);
+            std::future::ready(Ok(self.response.clone()))
+        }
+    }
+
+    pub(crate) struct JsonRequestValidator {
+        pub expected: chat::Request,
+        pub body: serde_json::Value,
+        pub response: chat::Response,
+    }
+
+    impl WsConnection for JsonRequestValidator {
+        fn send(
+            &self,
+            _log_tag: &'static str,
+            _log_safe_path: &str,
+            request: chat::Request,
+        ) -> impl Future<Output = Result<chat::Response, chat::SendError>> + Send {
+            let chat::Request {
+                method,
+                path,
+                headers,
+                body: body_from_expected_request,
+            } = &self.expected;
+
+            assert!(
+                body_from_expected_request.is_none(),
+                "expected.body should be None; the body is instead compared against the provided serde_json::Value"
+            );
+
+            pretty_assertions::assert_eq!(method, request.method);
+            pretty_assertions::assert_eq!(*path, request.path);
+            pretty_assertions::assert_eq!(*headers, request.headers);
+
+            let request_body: serde_json::Value =
+                serde_json::from_slice(&request.body.unwrap_or_default())
+                    .expect("body should be JSON");
+            pretty_assertions::assert_eq!(self.body, request_body);
+
             std::future::ready(Ok(self.response.clone()))
         }
     }

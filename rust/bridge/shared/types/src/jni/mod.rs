@@ -133,6 +133,17 @@ impl<'a, A, B> From<JavaPair<'a, A, B>> for JObject<'a> {
     }
 }
 
+impl<'a, A, B> TryFrom<JValueOwned<'a>> for JavaPair<'a, A, B> {
+    type Error = BridgeLayerError;
+
+    fn try_from(value: JValueOwned<'a>) -> Result<Self, Self::Error> {
+        let type_name = value.type_name();
+        Ok(Self::from(value.l().map_err(|_| {
+            BridgeLayerError::UnexpectedJniResultType("method", type_name)
+        })?))
+    }
+}
+
 impl JniError for BridgeLayerError {
     fn to_throwable_impl<'a>(
         &self,
@@ -1095,6 +1106,27 @@ impl JniError for libsignal_net_chat::api::messages::MultiRecipientSendFailure {
     }
 }
 
+impl JniError for libsignal_net_chat::api::keys::GetPreKeysFailure {
+    fn to_throwable_impl<'a>(
+        &self,
+        env: &mut JNIEnv<'a>,
+    ) -> Result<JThrowable<'a>, BridgeLayerError> {
+        let message = self.to_string();
+        match self {
+            Self::Unauthorized => make_single_message_throwable(
+                env,
+                &message,
+                ClassName("org.signal.libsignal.net.RequestUnauthorizedException"),
+            ),
+            Self::NotFound => make_single_message_throwable(
+                env,
+                &message,
+                ClassName("org.signal.libsignal.net.ServiceIdNotFoundException"),
+            ),
+        }
+    }
+}
+
 /// Translates errors into Java exceptions.
 ///
 /// Exceptions thrown in callbacks will be rethrown; all other errors will be mapped to an
@@ -1387,7 +1419,7 @@ macro_rules! jni_bridge_handle_destroy {
                         ::std::sync::Arc::from_raw(
                             <$typ as $crate::jni::BridgeHandle>::native_handle_cast(handle)
                                 .expect("valid")
-                                .as_mut(),
+                                .as_ptr(),
                         )
                     };
                     drop(handle);

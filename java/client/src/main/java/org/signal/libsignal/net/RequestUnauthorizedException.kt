@@ -5,6 +5,7 @@
 
 package org.signal.libsignal.net
 
+import org.signal.libsignal.internal.CalledFromNative
 import java.io.IOException
 
 /**
@@ -15,6 +16,9 @@ import java.io.IOException
  */
 public class RequestUnauthorizedException :
   IOException,
-  MultiRecipientSendFailure {
-  public constructor(message: String) : super(message) {}
+  MultiRecipientSendFailure,
+  GetPreKeysError {
+  @CalledFromNative
+  public constructor(message: String) : super(message) {
+  }
 }

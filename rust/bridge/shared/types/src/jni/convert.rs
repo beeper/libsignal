@@ -14,19 +14,21 @@ use jni::sys::{JNI_FALSE, JNI_TRUE, jbyte};
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
 use libsignal_core::try_scoped;
 use libsignal_net::cdsi::LookupResponseEntry;
+use libsignal_net_chat::api::keys::DeviceSpecifier;
 use libsignal_protocol::*;
 use paste::paste;
+use zkgroup::groups::GroupSendFullToken;
 
 use super::*;
 use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
 use crate::net::chat::{
-    ChatListener, JniChatListener, JniProvisioningListener, ProvisioningListener,
+    ChatListener, JniChatListener, JniProvisioningListener, PreKeysResponse, ProvisioningListener,
 };
 use crate::net::registration::{ConnectChatBridge, RegistrationPushToken};
 use crate::protocol::storage::{
-    JniBridgeKyberPreKeyStore, JniBridgePreKeyStore, JniBridgeSenderKeyStore,
-    JniBridgeSessionStore, JniBridgeSignedPreKeyStore,
+    JniBridgeIdentityKeyStore, JniBridgeKyberPreKeyStore, JniBridgePreKeyStore,
+    JniBridgeSenderKeyStore, JniBridgeSessionStore, JniBridgeSignedPreKeyStore,
 };
 use crate::support::{
     Array, AsType, BridgedCallbacks, FixedLengthBincodeSerializable, Serialized, extend_lifetime,
@@ -267,6 +269,28 @@ impl SimpleArgTypeInfo<'_> for crate::zkgroup::Timestamp {
     }
 }
 
+/// [`DeviceSpecifier::AllDevices`] is encoded as `-1`
+impl SimpleArgTypeInfo<'_> for DeviceSpecifier {
+    type ArgType = jint;
+
+    fn convert_from(
+        _env: &mut JNIEnv<'_>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        if *foreign == -1 {
+            Ok(Self::AllDevices)
+        } else {
+            u8::try_from(*foreign)
+                .ok()
+                .and_then(|id| DeviceId::new(id).ok())
+                .map(DeviceSpecifier::Specific)
+                .ok_or_else(|| {
+                    BridgeLayerError::IntegerOverflow("Illegal DeviceSpecifier value".to_string())
+                })
+        }
+    }
+}
+
 /// Supports all valid byte values `0..=255`.
 impl SimpleArgTypeInfo<'_> for u8 {
     type ArgType = jint;
@@ -386,6 +410,21 @@ impl<'a> SimpleArgTypeInfo<'a>
                 })?;
             Ok(Self::Group(token))
         }
+    }
+}
+
+impl<'a> SimpleArgTypeInfo<'a> for GroupSendFullToken {
+    type ArgType = JByteArray<'a>;
+    fn convert_from(
+        env: &mut JNIEnv<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        let mut elements_guard = <&[u8]>::borrow(env, foreign)?;
+        let bytes = <&[u8]>::load_from(&mut elements_guard);
+        let token = zkgroup::deserialize(bytes).map_err(|_: ZkGroupDeserializationFailure| {
+            BridgeLayerError::BadArgument("bad GroupSendFullToken".into())
+        })?;
+        Ok(token)
     }
 }
 
@@ -656,7 +695,7 @@ macro_rules! bridge_trait {
     };
 }
 
-bridge_trait!(IdentityKeyStore);
+// bridge_trait!(IdentityKeyStore);
 // bridge_trait!(PreKeyStore);
 // bridge_trait!(SenderKeyStore);
 // bridge_trait!(SessionStore);
@@ -664,6 +703,24 @@ bridge_trait!(IdentityKeyStore);
 // bridge_trait!(KyberPreKeyStore);
 bridge_trait!(InputStream);
 bridge_trait!(SyncInputStream);
+
+impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
+    for &'storage mut dyn IdentityKeyStore
+{
+    type ArgType = JObject<'context>;
+    type StoredType = BridgedCallbacks<JniBridgeIdentityKeyStore>;
+    fn borrow(
+        env: &mut JNIEnv<'context>,
+        store: &'param Self::ArgType,
+    ) -> Result<Self::StoredType, BridgeLayerError> {
+        Ok(BridgedCallbacks(JniBridgeIdentityKeyStore::new(
+            env, store,
+        )?))
+    }
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        stored
+    }
+}
 
 impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
     for &'storage mut dyn PreKeyStore
@@ -746,6 +803,68 @@ impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param,
     }
     fn load_from(stored: &'storage mut Self::StoredType) -> Self {
         stored
+    }
+}
+
+impl<'a> CallbackResultTypeInfo<'a> for PublicKey {
+    type ResultType = JObject<'a>;
+    const JNI_RESULT_SIGNATURE: &'static str =
+        jni_signature!(org.signal.libsignal.internal.NativeHandleGuard::Owner);
+
+    fn convert_from_callback(
+        env: &mut JNIEnv<'a>,
+        foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError> {
+        <Option<PublicKey>>::convert_from_callback(env, foreign)?
+            .ok_or(BridgeLayerError::NullPointer(Some("PublicKey")))
+    }
+}
+
+impl<'a> CallbackResultTypeInfo<'a> for Option<PublicKey> {
+    type ResultType = JObject<'a>;
+    const JNI_RESULT_SIGNATURE: &'static str =
+        jni_signature!(org.signal.libsignal.internal.NativeHandleGuard::Owner);
+
+    fn convert_from_callback(
+        env: &mut JNIEnv<'a>,
+        foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError> {
+        if foreign.is_null() {
+            Ok(None)
+        } else {
+            let handle: jlong = call_method_checked(
+                env,
+                foreign,
+                "unsafeNativeHandleWithoutGuard",
+                jni_args!(() -> long),
+            )?;
+            let object: &PublicKey = unsafe { BridgeHandle::native_handle_cast(handle)?.as_ref() };
+            Ok(Some(*object))
+        }
+    }
+}
+
+impl<'a> CallbackResultTypeInfo<'a> for PrivateKey {
+    type ResultType = JObject<'a>;
+    const JNI_RESULT_SIGNATURE: &'static str =
+        jni_signature!(org.signal.libsignal.internal.NativeHandleGuard::Owner);
+
+    fn convert_from_callback(
+        env: &mut JNIEnv<'a>,
+        foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError> {
+        if foreign.is_null() {
+            Err(BridgeLayerError::NullPointer(Some("PrivateKey")))
+        } else {
+            let handle: jlong = call_method_checked(
+                env,
+                foreign,
+                "unsafeNativeHandleWithoutGuard",
+                jni_args!(() -> long),
+            )?;
+            let object: &PrivateKey = unsafe { BridgeHandle::native_handle_cast(handle)?.as_ref() };
+            Ok(*object)
+        }
     }
 }
 
@@ -1041,6 +1160,7 @@ impl CallbackResultTypeInfo<'_> for () {
 
 impl ResultTypeInfo<'_> for bool {
     type ResultType = jboolean;
+    const JNI_SIGNATURE: &'static str = jni_signature!(boolean);
     fn convert_into(self, _env: &mut JNIEnv) -> Result<Self::ResultType, BridgeLayerError> {
         Ok(if self { JNI_TRUE } else { JNI_FALSE })
     }
@@ -1049,6 +1169,7 @@ impl ResultTypeInfo<'_> for bool {
 /// Supports all valid byte values `0..=255`.
 impl ResultTypeInfo<'_> for u8 {
     type ResultType = jint;
+    const JNI_SIGNATURE: &'static str = jni_signature!(int);
     fn convert_into(self, _env: &mut JNIEnv) -> Result<Self::ResultType, BridgeLayerError> {
         Ok(self as jint)
     }
@@ -1201,6 +1322,24 @@ impl<'a> ResultTypeInfo<'a> for Option<Vec<u8>> {
     type ResultType = JByteArray<'a>;
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
         self.as_deref().convert_into(env)
+    }
+}
+
+impl<'a, const LEN: usize> SimpleArgTypeInfo<'a> for [u8; LEN] {
+    type ArgType = JByteArray<'a>;
+
+    fn convert_from(
+        env: &mut JNIEnv<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        let elements = unsafe { env.get_array_elements(foreign, ReleaseMode::NoCopyBack) }
+            .check_exceptions(env, "<&[u8; LEN]>::borrow")?;
+        <&[u8; LEN]>::try_from(zerocopy::IntoBytes::as_bytes(&elements[..]))
+            .map_err(|_| BridgeLayerError::IncorrectArrayLength {
+                expected: LEN,
+                actual: elements.len(),
+            })
+            .copied()
     }
 }
 
@@ -1492,6 +1631,37 @@ impl<'a, A: ResultTypeInfo<'a>, B: ResultTypeInfo<'a>> ResultTypeInfo<'a> for (A
             jni_args!((a => java.lang.Object, b => java.lang.Object) -> void),
         )?
         .into())
+    }
+}
+
+impl<'a, A: CallbackResultTypeInfo<'a>, B: CallbackResultTypeInfo<'a>> CallbackResultTypeInfo<'a>
+    for (A, B)
+where
+    A::ResultType: From<JObject<'a>>,
+    B::ResultType: From<JObject<'a>>,
+{
+    type ResultType = JavaPair<'a, A::ResultType, B::ResultType>;
+    const JNI_RESULT_SIGNATURE: &'static str = jni_signature!(kotlin.Pair);
+    fn convert_from_callback(
+        env: &mut JNIEnv<'a>,
+        foreign: Self::ResultType,
+    ) -> Result<Self, BridgeLayerError> {
+        let first = call_method_checked(
+            env,
+            &foreign.pair_object,
+            "getFirst",
+            jni_args!(() -> java.lang.Object),
+        )?;
+        let second = call_method_checked(
+            env,
+            &foreign.pair_object,
+            "getSecond",
+            jni_args!(() -> java.lang.Object),
+        )?;
+        Ok((
+            A::convert_from_callback(env, first.into())?,
+            B::convert_from_callback(env, second.into())?,
+        ))
     }
 }
 
@@ -2144,7 +2314,7 @@ impl<'a> ResultTypeInfo<'a>
                 libsignal_net_chat::api::registration::Svr2CredentialsResult::Invalid => "INVALID",
             };
             let v = env.get_static_field(&response_class, name, jni_signature!(org.signal.libsignal.net.RegistrationService::Svr2CredentialsResult))
-            .and_then(|v| v.l())
+                .and_then(|v| v.l())
                 .check_exceptions(env, "Svr2CredentialsResult")?;
             jmap.put(env, &k, &v).check_exceptions(env, "put")?;
         }
@@ -2164,17 +2334,61 @@ impl<'a> ResultTypeInfo<'a> for libsignal_net::chat::server_requests::Disconnect
     }
 }
 
-/// Converts each element of `it` to a Java object, storing the result in an array.
-fn make_object_array<'a, It>(
+impl<'a> ResultTypeInfo<'a> for PreKeysResponse {
+    type ResultType = JObject<'a>;
+
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        let ik = self.identity_key.into_public_key().convert_into(env)?;
+        let ik = new_instance(
+            env,
+            ClassName("org.signal.libsignal.protocol.ecc.ECPublicKey"),
+            jni_args!((
+                ik => long
+            ) -> void),
+        )?;
+        let element_class = find_class(
+            env,
+            ClassName("org.signal.libsignal.protocol.state.PreKeyBundle"),
+        )
+        .check_exceptions(env, "PreKeysResponse::convert_into")?;
+        let pre_key_bundles = make_object_array_mapped(
+            env,
+            &element_class,
+            self.pre_key_bundles.into_iter(),
+            |env, bundle| {
+                let handle = bundle.convert_into(env)?;
+                new_object(
+                    env,
+                    &element_class,
+                    jni_args!((
+                        handle => long
+                    ) -> void),
+                )
+                .check_exceptions(env, "PreKeysResponse::convert_into")
+            },
+        )?;
+        new_instance(
+            env,
+            ClassName("kotlin.Pair"),
+            jni_args!((
+                ik => java.lang.Object,
+                pre_key_bundles => java.lang.Object,
+            ) -> void),
+        )
+    }
+}
+
+/// Converts each element of `it` to a Java object by invoking `map(env, item)`, storing the result
+/// in an array.
+fn make_object_array_mapped<'a, It, Map>(
     env: &mut JNIEnv<'a>,
-    element_type: JClass<'a>,
+    element_type: &JClass<'a>,
     it: It,
+    mut map: Map,
 ) -> Result<JObjectArray<'a>, BridgeLayerError>
 where
-    It: IntoIterator<
-            Item: ResultTypeInfo<'a, ResultType: Into<JObject<'a>>>,
-            IntoIter: ExactSizeIterator,
-        >,
+    It: IntoIterator<IntoIter: ExactSizeIterator>,
+    Map: FnMut(&mut JNIEnv<'a>, It::Item) -> Result<JObject<'a>, BridgeLayerError>,
 {
     let it = it.into_iter();
     let len = it.len();
@@ -2192,7 +2406,7 @@ where
         .check_exceptions(env, "make_object_array")?;
 
     for (index, next) in it.enumerate() {
-        let value = AutoLocal::new(next.convert_into(env)?.into(), env);
+        let value = AutoLocal::new(map(env, next)?, env);
         env.set_object_array_element(
             &array,
             index.try_into().expect("max size validated above"),
@@ -2202,6 +2416,23 @@ where
     }
 
     Ok(array)
+}
+
+/// Converts each element of `it` to a Java object, storing the result in an array.
+fn make_object_array<'a, It>(
+    env: &mut JNIEnv<'a>,
+    element_type: JClass<'a>,
+    it: It,
+) -> Result<JObjectArray<'a>, BridgeLayerError>
+where
+    It: IntoIterator<
+            Item: ResultTypeInfo<'a, ResultType: Into<JObject<'a>>>,
+            IntoIter: ExactSizeIterator,
+        >,
+{
+    make_object_array_mapped(env, &element_type, it, |env, x| {
+        Ok(x.convert_into(env)?.into())
+    })
 }
 
 impl<'a> ResultTypeInfo<'a> for Box<[String]> {
@@ -2436,6 +2667,9 @@ macro_rules! jni_arg_type {
     (&[u8; $len:expr]) => {
         ::jni::objects::JByteArray<'local>
     };
+    ([u8; $len:expr]) => {
+        ::jni::objects::JByteArray<'local>
+    };
     (Box<[u8]>) => {
         ::jni::objects::JByteArray<'local>
     };
@@ -2487,6 +2721,9 @@ macro_rules! jni_arg_type {
     (Option<E164>) => {
         $crate::jni::Nullable<::jni::objects::JString<'local>>
     };
+    (GroupSendFullToken) => {
+        ::jni::objects::JByteArray<'local>
+    };
     (jni::CiphertextMessageRef) => {
         $crate::jni::JavaCiphertextMessage<'local>
     };
@@ -2518,6 +2755,9 @@ macro_rules! jni_arg_type {
         $crate::jni::JObject<'local>
     };
     (TestingFutureCancellationGuard) => { ::jni::sys::jlong };
+    (DeviceSpecifier) => {
+        ::jni::sys::jint
+    };
 
     (Ignored<$typ:ty>) => (::jni::objects::JObject<'local>);
 
@@ -2526,6 +2766,9 @@ macro_rules! jni_arg_type {
     (Result<$typ:tt<$($args:tt),+> $(, $ignored:ty)?>) => (jni_arg_type!($typ<$($args),+>));
     (Option<$typ:ty>) => ($crate::jni::Nullable<jni_arg_type!($typ)>);
     (()) => (());
+    (($a:tt, $b:tt)) => {
+        $crate::jni::JavaPair<'local, $crate::jni_arg_type!($a), $crate::jni_arg_type!($b)>
+    };
     ($typ:ty) => (::jni::objects::JObject<'local>);
 }
 
@@ -2674,6 +2917,9 @@ macro_rules! jni_result_type {
         ::jni::objects::JObjectArray<'local>
     };
     (CheckSvr2CredentialsResponse) => {
+        ::jni::objects::JObject<'local>
+    };
+    (PreKeysResponse) => {
         ::jni::objects::JObject<'local>
     };
     (Serialized<$typ:ident>) => {

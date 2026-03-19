@@ -3,6 +3,7 @@
 members = [
     "rust/attest",
     "rust/crypto",
+    "rust/debug",
     "rust/device-transfer",
     "rust/keytrans",
     "rust/media",
@@ -37,7 +38,7 @@ default-members = [
 resolver = "2" # so that our dev-dependency features don't leak into products
 
 [workspace.package]
-version = "0.88.3"
+version = "0.89.1"
 authors = ["Signal Messenger LLC"]
 license = "AGPL-3.0-only"
 rust-version = "1.88"
@@ -60,6 +61,7 @@ device-transfer = { path = "rust/device-transfer" }
 libsignal-account-keys = { path = "rust/account-keys" }
 libsignal-cli-utils = { path = "rust/cli-utils" }
 libsignal-core = { path = "rust/core" }
+libsignal-debug = { path = "rust/debug" }
 libsignal-keytrans = { path = "rust/keytrans" }
 libsignal-message-backup = { path = "rust/message-backup" }
 libsignal-net = { path = "rust/net" }
