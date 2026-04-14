@@ -207,6 +207,8 @@ internal object Native {
   @JvmStatic
   public external fun AuthenticatedChatConnection_disconnect(asyncRuntime: ObjectHandle, chat: ObjectHandle): CompletableFuture<Void?>
   @JvmStatic
+  public external fun AuthenticatedChatConnection_get_upload_form(asyncRuntime: ObjectHandle, chat: ObjectHandle, uploadLength: Long): CompletableFuture<Object>
+  @JvmStatic
   public external fun AuthenticatedChatConnection_init_listener(chat: ObjectHandle, listener: BridgeChatListener): Unit
   @JvmStatic
   public external fun AuthenticatedChatConnection_preconnect(asyncRuntime: ObjectHandle, connectionManager: ObjectHandle): CompletableFuture<Void?>
@@ -617,13 +619,11 @@ internal object Native {
   @JvmStatic
   public external fun KeyTransparency_AciSearchKey(aci: ByteArray): ByteArray
   @JvmStatic
+  public external fun KeyTransparency_Check(asyncRuntime: ObjectHandle, environment: Int, chatConnection: ObjectHandle, aci: ByteArray, aciIdentityKey: ObjectHandle, e164: String?, unidentifiedAccessKey: ByteArray?, usernameHash: ByteArray?, accountData: ByteArray?, lastDistinguishedTreeHead: ByteArray, isSelfCheck: Boolean, isE164Discoverable: Boolean): CompletableFuture<ByteArray>
+  @JvmStatic
   public external fun KeyTransparency_Distinguished(asyncRuntime: ObjectHandle, environment: Int, chatConnection: ObjectHandle, lastDistinguishedTreeHead: ByteArray?): CompletableFuture<ByteArray>
   @JvmStatic
   public external fun KeyTransparency_E164SearchKey(e164: String): ByteArray
-  @JvmStatic
-  public external fun KeyTransparency_Monitor(asyncRuntime: ObjectHandle, environment: Int, chatConnection: ObjectHandle, aci: ByteArray, aciIdentityKey: ObjectHandle, e164: String?, unidentifiedAccessKey: ByteArray?, usernameHash: ByteArray?, accountData: ByteArray?, lastDistinguishedTreeHead: ByteArray, isSelfMonitor: Boolean): CompletableFuture<ByteArray>
-  @JvmStatic
-  public external fun KeyTransparency_Search(asyncRuntime: ObjectHandle, environment: Int, chatConnection: ObjectHandle, aci: ByteArray, aciIdentityKey: ObjectHandle, e164: String?, unidentifiedAccessKey: ByteArray?, usernameHash: ByteArray?, accountData: ByteArray?, lastDistinguishedTreeHead: ByteArray): CompletableFuture<ByteArray>
   @JvmStatic
   public external fun KeyTransparency_UsernameHashSearchKey(hash: ByteArray): ByteArray
 
@@ -1180,11 +1180,11 @@ internal object Native {
   public external fun SessionBuilder_ProcessPreKeyBundle(bundle: ObjectHandle, protocolAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Long): Unit
 
   @JvmStatic @Throws(Exception::class)
-  public external fun SessionCipher_DecryptPreKeySignalMessage(message: ObjectHandle, protocolAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, prekeyStore: PreKeyStore, signedPrekeyStore: SignedPreKeyStore, kyberPrekeyStore: KyberPreKeyStore): ByteArray
+  public external fun SessionCipher_DecryptPreKeySignalMessage(message: ObjectHandle, protocolAddress: ObjectHandle, localAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, prekeyStore: PreKeyStore, signedPrekeyStore: SignedPreKeyStore, kyberPrekeyStore: KyberPreKeyStore): ByteArray
   @JvmStatic @Throws(Exception::class)
   public external fun SessionCipher_DecryptSignalMessage(message: ObjectHandle, protocolAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore): ByteArray
   @JvmStatic @Throws(Exception::class)
-  public external fun SessionCipher_EncryptMessage(ptext: ByteArray, protocolAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Long): CiphertextMessage
+  public external fun SessionCipher_EncryptMessage(ptext: ByteArray, protocolAddress: ObjectHandle, localAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Long): CiphertextMessage
 
   @JvmStatic @Throws(Exception::class)
   public external fun SessionRecord_ArchiveCurrentState(sessionRecord: ObjectHandle): Unit
@@ -1280,13 +1280,19 @@ internal object Native {
   @JvmStatic
   public external fun UnauthenticatedChatConnection_account_exists(asyncRuntime: ObjectHandle, chat: ObjectHandle, account: ByteArray): CompletableFuture<Boolean>
   @JvmStatic
+  public external fun UnauthenticatedChatConnection_backup_get_media_upload_form(asyncRuntime: ObjectHandle, chat: ObjectHandle, credential: ByteArray, serverKeys: ByteArray, signingKey: ObjectHandle, uploadSize: Long, rng: Long): CompletableFuture<Object>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_backup_get_upload_form(asyncRuntime: ObjectHandle, chat: ObjectHandle, credential: ByteArray, serverKeys: ByteArray, signingKey: ObjectHandle, uploadSize: Long, rng: Long): CompletableFuture<Object>
+  @JvmStatic
   public external fun UnauthenticatedChatConnection_connect(asyncRuntime: ObjectHandle, connectionManager: ObjectHandle, languages: Array<Object>): CompletableFuture<ObjectHandle>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_disconnect(asyncRuntime: ObjectHandle, chat: ObjectHandle): CompletableFuture<Void?>
   @JvmStatic
-  public external fun UnauthenticatedChatConnection_get_pre_keys_access_group_auth(asyncRuntime: ObjectHandle, chat: ObjectHandle, auth: ByteArray, target: ByteArray, device: Int): CompletableFuture<Object>
-  @JvmStatic
   public external fun UnauthenticatedChatConnection_get_pre_keys_access_key_auth(asyncRuntime: ObjectHandle, chat: ObjectHandle, auth: ByteArray, target: ByteArray, device: Int): CompletableFuture<Object>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_get_pre_keys_group_auth(asyncRuntime: ObjectHandle, chat: ObjectHandle, auth: ByteArray, target: ByteArray, device: Int): CompletableFuture<Object>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_get_pre_keys_unrestricted_auth(asyncRuntime: ObjectHandle, chat: ObjectHandle, target: ByteArray, device: Int): CompletableFuture<Object>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_info(chat: ObjectHandle): ObjectHandle
   @JvmStatic

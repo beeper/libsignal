@@ -14,12 +14,14 @@ use jni::sys::{JNI_FALSE, JNI_TRUE, jbyte};
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
 use libsignal_core::try_scoped;
 use libsignal_net::cdsi::LookupResponseEntry;
+use libsignal_net_chat::api::UploadForm;
 use libsignal_net_chat::api::keys::DeviceSpecifier;
 use libsignal_protocol::*;
 use paste::paste;
 use zkgroup::groups::GroupSendFullToken;
 
 use super::*;
+use crate::crypto::RandomNumberGenerator;
 use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
 use crate::net::chat::{
@@ -253,6 +255,16 @@ impl SimpleArgTypeInfo<'_> for crate::protocol::Timestamp {
     }
 }
 
+impl SimpleArgTypeInfo<'_> for RandomNumberGenerator {
+    type ArgType = jlong;
+    fn convert_from(
+        _env: &mut JNIEnv<'_>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        Ok((*foreign).into())
+    }
+}
+
 /// Supports values `0..=Long.MAX_VALUE`.
 ///
 /// Negative `long` values are *not* reinterpreted as large `u64` values.
@@ -413,20 +425,27 @@ impl<'a> SimpleArgTypeInfo<'a>
     }
 }
 
-impl<'a> SimpleArgTypeInfo<'a> for GroupSendFullToken {
-    type ArgType = JByteArray<'a>;
-    fn convert_from(
-        env: &mut JNIEnv<'a>,
-        foreign: &Self::ArgType,
-    ) -> Result<Self, BridgeLayerError> {
-        let mut elements_guard = <&[u8]>::borrow(env, foreign)?;
-        let bytes = <&[u8]>::load_from(&mut elements_guard);
-        let token = zkgroup::deserialize(bytes).map_err(|_: ZkGroupDeserializationFailure| {
-            BridgeLayerError::BadArgument("bad GroupSendFullToken".into())
-        })?;
-        Ok(token)
-    }
+macro_rules! zkgroup_serialize_type {
+    ($($ty:ty),*$(,)?) => {$(
+        impl<'a> SimpleArgTypeInfo<'a> for $ty {
+            type ArgType = JByteArray<'a>;
+            fn convert_from(
+                env: &mut JNIEnv<'a>,
+                foreign: &Self::ArgType,
+            ) -> Result<Self, BridgeLayerError> {
+                let mut elements_guard = <&[u8]>::borrow(env, foreign)?;
+                let bytes = <&[u8]>::load_from(&mut elements_guard);
+                let token = zkgroup::deserialize(bytes).map_err(|_: ZkGroupDeserializationFailure| {
+                    BridgeLayerError::BadArgument(concat!("bad ", stringify!($ty)).into())
+                })?;
+                Ok(token)
+            }
+        }
+    )*};
 }
+zkgroup_serialize_type!(GroupSendFullToken);
+zkgroup_serialize_type!(zkgroup::backups::BackupAuthCredential);
+zkgroup_serialize_type!(zkgroup::generic_server_params::GenericServerPublicParams);
 
 impl<'a> SimpleArgTypeInfo<'a> for Box<[u8]> {
     type ArgType = JByteArray<'a>;
@@ -1618,6 +1637,41 @@ impl<T: BridgeHandle> ResultTypeInfo<'_> for Option<T> {
     }
 }
 
+impl<'a> ResultTypeInfo<'a> for UploadForm {
+    type ResultType = JObject<'a>;
+    fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        let UploadForm {
+            cdn,
+            key,
+            headers,
+            signed_upload_url,
+        } = self;
+        let cdn: jint = cdn as jint;
+        let key = env
+            .new_string(key)
+            .check_exceptions(env, "UploadForm::convert_into")?;
+        let signed_upload_url = env
+            .new_string(signed_upload_url)
+            .check_exceptions(env, "UploadForm::convert_into")?;
+        let headers = headers.convert_into(env)?;
+        let class = find_class(env, ClassName("org.signal.libsignal.net.UploadForm"))
+            .check_exceptions(env, "UploadForm::convert_into")?;
+        call_static_method_checked(
+            env,
+            &class,
+            "fromNative",
+            jni_args!(
+                (
+                    cdn => int,
+                    key => java.lang.String,
+                    headers => [java.lang.Object],
+                    signed_upload_url => java.lang.String,
+                ) -> org.signal.libsignal.net.UploadForm
+            ),
+        )
+    }
+}
+
 impl<'a, A: ResultTypeInfo<'a>, B: ResultTypeInfo<'a>> ResultTypeInfo<'a> for (A, B) {
     type ResultType = JavaPair<'a, A::ResultType, B::ResultType>;
     fn convert_into(self, env: &mut JNIEnv<'a>) -> Result<Self::ResultType, BridgeLayerError> {
@@ -2351,11 +2405,8 @@ impl<'a> ResultTypeInfo<'a> for PreKeysResponse {
             ClassName("org.signal.libsignal.protocol.state.PreKeyBundle"),
         )
         .check_exceptions(env, "PreKeysResponse::convert_into")?;
-        let pre_key_bundles = make_object_array_mapped(
-            env,
-            &element_class,
-            self.pre_key_bundles.into_iter(),
-            |env, bundle| {
+        let pre_key_bundles =
+            make_object_array_mapped(env, &element_class, self.pre_key_bundles, |env, bundle| {
                 let handle = bundle.convert_into(env)?;
                 new_object(
                     env,
@@ -2365,8 +2416,7 @@ impl<'a> ResultTypeInfo<'a> for PreKeysResponse {
                     ) -> void),
                 )
                 .check_exceptions(env, "PreKeysResponse::convert_into")
-            },
-        )?;
+            })?;
         new_instance(
             env,
             ClassName("kotlin.Pair"),
@@ -2706,10 +2756,19 @@ macro_rules! jni_arg_type {
     (ServiceIdSequence<'_>) => {
         ::jni::objects::JByteArray<'local>
     };
+    (::zkgroup::backups::BackupAuthCredential) => {
+        ::jni::objects::JByteArray<'local>
+    };
+    (::zkgroup::generic_server_params::GenericServerPublicParams) => {
+        ::jni::objects::JByteArray<'local>
+    };
     (Vec<&[u8]>) => {
         jni::JavaByteBufferArray<'local>
     };
     (Timestamp) => {
+        ::jni::sys::jlong
+    };
+    (RandomNumberGenerator) => {
         ::jni::sys::jlong
     };
     (Uuid) => {
@@ -2930,6 +2989,9 @@ macro_rules! jni_result_type {
     };
     (Vec<JsonFrameExportResult>) => {
         ::jni::objects::JObjectArray<'local>
+    };
+    (UploadForm) => {
+        ::jni::objects::JObject<'local>
     };
     ( $handle:ty ) => {
         $crate::jni::ObjectHandle

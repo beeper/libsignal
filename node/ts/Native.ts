@@ -70,11 +70,7 @@ export type SignedPreKeyStore = BridgeSignedPreKeyStore;
 export type KyberPreKeyStore = BridgeKyberPreKeyStore;
 export type SessionStore = BridgeSessionStore;
 export type SenderKeyStore = BridgeSenderKeyStore;
-
-export type InputStream = {
-  _read: (amount: number) => Promise<Uint8Array<ArrayBuffer>>;
-  _skip: (amount: number) => Promise<void>;
-};
+export type InputStream = BridgeInputStream;
 
 export type SyncInputStream = Uint8Array<ArrayBuffer>;
 
@@ -126,7 +122,16 @@ export type PreKeysResponse = {
   preKeyBundles: PreKeyBundle[];
 };
 
+export type UploadForm = {
+  cdn: number;
+  key: string;
+  headers: [string, string][];
+  signedUploadUrl: string;
+};
+
 export type AccountEntropyPool = string;
+
+export type RandomNumberGenerator = number;
 
 export type CancellablePromise<T> = Promise<T> & {
   _cancellationToken: bigint;
@@ -145,6 +150,9 @@ type NativeFunctions = {
   initLogger: (maxLevel: LogLevel, callback: (level: LogLevel, target: string, file: string | null, line: number | null, message: string) => void) => void
   SealedSenderMultiRecipientMessage_Parse: (buffer: Uint8Array<ArrayBuffer>) => SealedSenderMultiRecipientMessage;
   MinidumpToJSONString: (buffer: Uint8Array<ArrayBuffer>) => string;
+  uuid_to_string: (uuid: Uuid) => string;
+  uuid_from_string: (string: string) => Uuid | null;
+  uuid_new_v4: () => Uuid;
   Aes256GcmSiv_New: (key: Uint8Array<ArrayBuffer>) => Aes256GcmSiv;
   Aes256GcmSiv_Encrypt: (aesGcmSivObj: Wrapper<Aes256GcmSiv>, ptext: Uint8Array<ArrayBuffer>, nonce: Uint8Array<ArrayBuffer>, associatedData: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
   Aes256GcmSiv_Decrypt: (aesGcmSiv: Wrapper<Aes256GcmSiv>, ctext: Uint8Array<ArrayBuffer>, nonce: Uint8Array<ArrayBuffer>, associatedData: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
@@ -306,9 +314,9 @@ type NativeFunctions = {
   SealedSenderDecryptionResult_GetDeviceId: (obj: Wrapper<SealedSenderDecryptionResult>) => number;
   SealedSenderDecryptionResult_Message: (obj: Wrapper<SealedSenderDecryptionResult>) => Uint8Array<ArrayBuffer>;
   SessionBuilder_ProcessPreKeyBundle: (bundle: Wrapper<PreKeyBundle>, protocolAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Timestamp) => Promise<void>;
-  SessionCipher_EncryptMessage: (ptext: Uint8Array<ArrayBuffer>, protocolAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Timestamp) => Promise<CiphertextMessage>;
+  SessionCipher_EncryptMessage: (ptext: Uint8Array<ArrayBuffer>, protocolAddress: Wrapper<ProtocolAddress>, localAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Timestamp) => Promise<CiphertextMessage>;
   SessionCipher_DecryptSignalMessage: (message: Wrapper<SignalMessage>, protocolAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
-  SessionCipher_DecryptPreKeySignalMessage: (message: Wrapper<PreKeySignalMessage>, protocolAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, prekeyStore: PreKeyStore, signedPrekeyStore: SignedPreKeyStore, kyberPrekeyStore: KyberPreKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
+  SessionCipher_DecryptPreKeySignalMessage: (message: Wrapper<PreKeySignalMessage>, protocolAddress: Wrapper<ProtocolAddress>, localAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, prekeyStore: PreKeyStore, signedPrekeyStore: SignedPreKeyStore, kyberPrekeyStore: KyberPreKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
   SealedSender_Encrypt: (destination: Wrapper<ProtocolAddress>, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
   SealedSender_MultiRecipientEncrypt: (recipients: Wrapper<ProtocolAddress>[], recipientSessions: Wrapper<SessionRecord>[], excludedRecipients: Uint8Array<ArrayBuffer>, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
   SealedSender_MultiRecipientMessageForSingleRecipient: (encodedMultiRecipientMessage: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
@@ -494,13 +502,16 @@ type NativeFunctions = {
   ProvisioningChatConnection_info: (chat: Wrapper<ProvisioningChatConnection>) => ChatConnectionInfo;
   ProvisioningChatConnection_disconnect: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<ProvisioningChatConnection>) => CancellablePromise<void>;
   UnauthenticatedChatConnection_get_pre_keys_access_key_auth: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, auth: Uint8Array<ArrayBuffer>, target: Uint8Array<ArrayBuffer>, device: number) => CancellablePromise<PreKeysResponse>;
-  UnauthenticatedChatConnection_get_pre_keys_access_group_auth: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, auth: Uint8Array<ArrayBuffer>, target: Uint8Array<ArrayBuffer>, device: number) => CancellablePromise<PreKeysResponse>;
+  UnauthenticatedChatConnection_get_pre_keys_group_auth: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, auth: Uint8Array<ArrayBuffer>, target: Uint8Array<ArrayBuffer>, device: number) => CancellablePromise<PreKeysResponse>;
+  UnauthenticatedChatConnection_get_pre_keys_unrestricted_auth: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, target: Uint8Array<ArrayBuffer>, device: number) => CancellablePromise<PreKeysResponse>;
   UnauthenticatedChatConnection_account_exists: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, account: Uint8Array<ArrayBuffer>) => CancellablePromise<boolean>;
+  AuthenticatedChatConnection_get_upload_form: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<AuthenticatedChatConnection>, uploadLength: bigint) => CancellablePromise<UploadForm>;
+  UnauthenticatedChatConnection_backup_get_upload_form: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, credential: Uint8Array<ArrayBuffer>, serverKeys: Uint8Array<ArrayBuffer>, signingKey: Wrapper<PrivateKey>, uploadSize: bigint, rng: RandomNumberGenerator) => CancellablePromise<UploadForm>;
+  UnauthenticatedChatConnection_backup_get_media_upload_form: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, credential: Uint8Array<ArrayBuffer>, serverKeys: Uint8Array<ArrayBuffer>, signingKey: Wrapper<PrivateKey>, uploadSize: bigint, rng: RandomNumberGenerator) => CancellablePromise<UploadForm>;
   KeyTransparency_AciSearchKey: (aci: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
   KeyTransparency_E164SearchKey: (e164: string) => Uint8Array<ArrayBuffer>;
   KeyTransparency_UsernameHashSearchKey: (hash: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
-  KeyTransparency_Search: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array<ArrayBuffer>, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array<ArrayBuffer> | null, usernameHash: Uint8Array<ArrayBuffer> | null, accountData: Uint8Array<ArrayBuffer> | null, lastDistinguishedTreeHead: Uint8Array<ArrayBuffer>) => CancellablePromise<Uint8Array<ArrayBuffer>>;
-  KeyTransparency_Monitor: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array<ArrayBuffer>, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array<ArrayBuffer> | null, usernameHash: Uint8Array<ArrayBuffer> | null, accountData: Uint8Array<ArrayBuffer> | null, lastDistinguishedTreeHead: Uint8Array<ArrayBuffer>, isSelfMonitor: boolean) => CancellablePromise<Uint8Array<ArrayBuffer>>;
+  KeyTransparency_Check: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array<ArrayBuffer>, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array<ArrayBuffer> | null, usernameHash: Uint8Array<ArrayBuffer> | null, accountData: Uint8Array<ArrayBuffer> | null, lastDistinguishedTreeHead: Uint8Array<ArrayBuffer>, isSelfCheck: boolean, isE164Discoverable: boolean) => CancellablePromise<Uint8Array<ArrayBuffer>>;
   KeyTransparency_Distinguished: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, lastDistinguishedTreeHead: Uint8Array<ArrayBuffer> | null) => CancellablePromise<Uint8Array<ArrayBuffer>>;
   RegistrationService_CreateSession: (asyncRuntime: Wrapper<TokioAsyncContext>, createSession: RegistrationCreateSessionRequest, connectChat: ConnectChatBridge) => CancellablePromise<RegistrationService>;
   RegistrationService_ResumeSession: (asyncRuntime: Wrapper<TokioAsyncContext>, sessionId: string, number: string, connectChat: ConnectChatBridge) => CancellablePromise<RegistrationService>;
@@ -638,6 +649,7 @@ type NativeFunctions = {
   TESTING_RoundTripU64: (input: bigint) => bigint;
   TESTING_ConvertOptionalUuid: (present: boolean) => Uuid | null;
   TESTING_InputStreamReadIntoZeroLengthSlice: (capsAlphabetInput: InputStream) => Promise<Uint8Array<ArrayBuffer>>;
+  TESTING_EnableDeterministicRngForTesting: () => void;
   ComparableBackup_ReadUnencrypted: (stream: InputStream, len: bigint, purpose: number) => Promise<ComparableBackup>;
   ComparableBackup_GetComparableString: (backup: Wrapper<ComparableBackup>) => string;
   ComparableBackup_GetUnknownFields: (backup: Wrapper<ComparableBackup>) => string[];
@@ -680,7 +692,7 @@ type NativeFunctions = {
   TESTING_CdsiLookupResponseConvert: (asyncRuntime: Wrapper<TokioAsyncContext>) => CancellablePromise<LookupResponse>;
   TESTING_CdsiLookupErrorConvert: (errorDescription: string) => void;
   TESTING_ServerMessageAck_Create: () => ServerMessageAck;
-  TESTING_ConnectionManager_newLocalOverride: (userAgent: string, chatPort: number, cdsiPort: number, svr2Port: number, svrBPort: number, rootCertificateDer: Uint8Array<ArrayBuffer>) => ConnectionManager;
+  TESTING_ConnectionManager_newLocalOverride: (userAgent: string, chatPort: number, cdsiPort: number, svr2Port: number, svrBPort: number, rootCertificateDer: Uint8Array<ArrayBuffer>, httpVersion: number) => ConnectionManager;
   TESTING_ConnectionManager_isUsingProxy: (manager: Wrapper<ConnectionManager>) => number;
   TESTING_CreateOTP: (username: string, secret: Uint8Array<ArrayBuffer>) => string;
   TESTING_CreateOTPFromBase64: (username: string, secret: string) => string;
@@ -699,6 +711,9 @@ const { registerErrors,
   initLogger,
   SealedSenderMultiRecipientMessage_Parse,
   MinidumpToJSONString,
+  uuid_to_string,
+  uuid_from_string,
+  uuid_new_v4,
   Aes256GcmSiv_New,
   Aes256GcmSiv_Encrypt,
   Aes256GcmSiv_Decrypt,
@@ -1048,13 +1063,16 @@ const { registerErrors,
   ProvisioningChatConnection_info,
   ProvisioningChatConnection_disconnect,
   UnauthenticatedChatConnection_get_pre_keys_access_key_auth,
-  UnauthenticatedChatConnection_get_pre_keys_access_group_auth,
+  UnauthenticatedChatConnection_get_pre_keys_group_auth,
+  UnauthenticatedChatConnection_get_pre_keys_unrestricted_auth,
   UnauthenticatedChatConnection_account_exists,
+  AuthenticatedChatConnection_get_upload_form,
+  UnauthenticatedChatConnection_backup_get_upload_form,
+  UnauthenticatedChatConnection_backup_get_media_upload_form,
   KeyTransparency_AciSearchKey,
   KeyTransparency_E164SearchKey,
   KeyTransparency_UsernameHashSearchKey,
-  KeyTransparency_Search,
-  KeyTransparency_Monitor,
+  KeyTransparency_Check,
   KeyTransparency_Distinguished,
   RegistrationService_CreateSession,
   RegistrationService_ResumeSession,
@@ -1192,6 +1210,7 @@ const { registerErrors,
   TESTING_RoundTripU64,
   TESTING_ConvertOptionalUuid,
   TESTING_InputStreamReadIntoZeroLengthSlice,
+  TESTING_EnableDeterministicRngForTesting,
   ComparableBackup_ReadUnencrypted,
   ComparableBackup_GetComparableString,
   ComparableBackup_GetUnknownFields,
@@ -1255,6 +1274,9 @@ export { registerErrors,
   initLogger,
   SealedSenderMultiRecipientMessage_Parse,
   MinidumpToJSONString,
+  uuid_to_string,
+  uuid_from_string,
+  uuid_new_v4,
   Aes256GcmSiv_New,
   Aes256GcmSiv_Encrypt,
   Aes256GcmSiv_Decrypt,
@@ -1604,13 +1626,16 @@ export { registerErrors,
   ProvisioningChatConnection_info,
   ProvisioningChatConnection_disconnect,
   UnauthenticatedChatConnection_get_pre_keys_access_key_auth,
-  UnauthenticatedChatConnection_get_pre_keys_access_group_auth,
+  UnauthenticatedChatConnection_get_pre_keys_group_auth,
+  UnauthenticatedChatConnection_get_pre_keys_unrestricted_auth,
   UnauthenticatedChatConnection_account_exists,
+  AuthenticatedChatConnection_get_upload_form,
+  UnauthenticatedChatConnection_backup_get_upload_form,
+  UnauthenticatedChatConnection_backup_get_media_upload_form,
   KeyTransparency_AciSearchKey,
   KeyTransparency_E164SearchKey,
   KeyTransparency_UsernameHashSearchKey,
-  KeyTransparency_Search,
-  KeyTransparency_Monitor,
+  KeyTransparency_Check,
   KeyTransparency_Distinguished,
   RegistrationService_CreateSession,
   RegistrationService_ResumeSession,
@@ -1748,6 +1773,7 @@ export { registerErrors,
   TESTING_RoundTripU64,
   TESTING_ConvertOptionalUuid,
   TESTING_InputStreamReadIntoZeroLengthSlice,
+  TESTING_EnableDeterministicRngForTesting,
   ComparableBackup_ReadUnencrypted,
   ComparableBackup_GetComparableString,
   ComparableBackup_GetUnknownFields,
@@ -1807,6 +1833,10 @@ export { registerErrors,
 
 /* eslint-disable comma-dangle */
 export const enum LogLevel { Error = 1, Warn, Info, Debug, Trace }
+export /*trait*/ type BridgeInputStream = {
+  read: (amount: number) => Promise<Uint8Array<ArrayBuffer>>;
+  skip: (amount: bigint) => Promise<void>;
+};
 export interface BridgedStringMap { readonly __type: unique symbol; }
 export interface Aes256GcmSiv { readonly __type: unique symbol; }
 export interface HsmEnclaveClient { readonly __type: unique symbol; }
@@ -1836,7 +1866,7 @@ export interface RegisterAccountResponse { readonly __type: unique symbol; }
 export interface RegistrationAccountAttributes { readonly __type: unique symbol; }
 export interface BackupStoreResponse { readonly __type: unique symbol; }
 export interface BackupRestoreResponse { readonly __type: unique symbol; }
-export const NetRemoteConfigKeys = ['chatRequestConnectionCheckTimeoutMillis', 'useH2ForUnauthChat', 'useH2ForAuthChat', 'grpc.AccountsAnonymousLookupUsernameHash', 'grpc.AccountsAnonymousLookupUsernameLink.2', 'grpc.AccountsAnonymousCheckAccountExistence.2', 'grpc.MessagesAnonymousSendMultiRecipientMessage.2', ] as const;
+export const NetRemoteConfigKeys = ['chatRequestConnectionCheckTimeoutMillis', 'useH2ForUnauthChat', 'useH2ForAuthChat', 'grpc.AccountsAnonymousLookupUsernameHash', 'grpc.AccountsAnonymousLookupUsernameLink.2', 'grpc.AccountsAnonymousCheckAccountExistence.2', 'grpc.MessagesAnonymousSendMultiRecipientMessage.2', 'grpc.AttachmentsGetUploadForm', ] as const;
 export interface TokioAsyncContext { readonly __type: unique symbol; }
 export interface ConnectionManager { readonly __type: unique symbol; }
 export interface ConnectionProxyConfig { readonly __type: unique symbol; }

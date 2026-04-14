@@ -1084,9 +1084,9 @@ dependencies = [
 
 [[package]]
 name = "derive-where"
-version = "1.6.0"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef941ded77d15ca19b40374869ac6000af1c9f2a4c0f3d4c70926287e6364a8f"
+checksum = "d08b3a0bcc0d079199cd476b2cae8435016ec11d1c0986c6901c5ac223041534"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1785,12 +1785,12 @@ dependencies = [
 
 [[package]]
 name = "hpke-rs"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "762ad77634765543485d098af3d352b2ffca88370b4eb3c329a088a3c708832a"
+checksum = "b6ad6a58eb3e0ee30be8bfc7a9770ae98adcfa1d9bc820a5847732ce84f70837"
 dependencies = [
  "hpke-rs-crypto",
- "libcrux-sha3 0.0.6",
+ "libcrux-sha3",
  "log",
  "rand_core 0.9.3",
  "subtle",
@@ -1799,9 +1799,9 @@ dependencies = [
 
 [[package]]
 name = "hpke-rs-crypto"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46a198e2bf992951574b61616f1a27521adf032c8db1db06f4cec423c32cf99d"
+checksum = "0a73a99d9008010d73289f41335a3f6e14fb8c04eaf60e9111b450463b1bbc7f"
 dependencies = [
  "rand_core 0.9.3",
  "zeroize",
@@ -2199,16 +2199,6 @@ dependencies = [
 
 [[package]]
 name = "libcrux-intrinsics"
-version = "0.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0aa4779454e853d1de200cd12f19a8185aac47d99a5ec404cea3295c943d48f1"
-dependencies = [
- "core-models",
- "hax-lib",
-]
-
-[[package]]
-name = "libcrux-intrinsics"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1b5db005ff8001e026b73a6842ee81bbef8ec5ff0e1915a67ae65fd2a9fafa5"
@@ -2229,16 +2219,16 @@ dependencies = [
 
 [[package]]
 name = "libcrux-ml-kem"
-version = "0.0.7"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aca7de713c6dddcf7aaf76e8ef9dc0097c8d7ce23a8eadf04c8761734714e184"
+checksum = "a14ab3e477de9df6ee1273a114018ff62c4996ca9220070c4e5cb1743f94a67d"
 dependencies = [
  "hax-lib",
- "libcrux-intrinsics 0.0.6",
+ "libcrux-intrinsics",
  "libcrux-platform",
  "libcrux-secrets",
- "libcrux-sha3 0.0.7",
- "libcrux-traits 0.0.6",
+ "libcrux-sha3",
+ "libcrux-traits",
 ]
 
 [[package]]
@@ -2267,41 +2257,19 @@ checksum = "e9d253473f259fc74a280c43f29c464f7e374abdf28b4942234dc707f529d4b7"
 dependencies = [
  "libcrux-hacl-rs",
  "libcrux-macros",
- "libcrux-traits 0.0.6",
+ "libcrux-traits",
 ]
 
 [[package]]
 name = "libcrux-sha3"
-version = "0.0.6"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3dabce2795479bd7294f853f7966a678cadf7a26d3d29f61cf15f5123e7ba4f"
+checksum = "b1ae0b7d0e1cc4793a609fd0ff2ca3b3a3fabae523770c619a3d4bc86417b0d7"
 dependencies = [
  "hax-lib",
- "libcrux-intrinsics 0.0.5",
+ "libcrux-intrinsics",
  "libcrux-platform",
- "libcrux-traits 0.0.5",
-]
-
-[[package]]
-name = "libcrux-sha3"
-version = "0.0.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c50f6e04a184511b782c5cc1eb6a227c6d36f2c935e93d698655a93a99696b5"
-dependencies = [
- "hax-lib",
- "libcrux-intrinsics 0.0.6",
- "libcrux-platform",
- "libcrux-traits 0.0.6",
-]
-
-[[package]]
-name = "libcrux-traits"
-version = "0.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "695ff2fb97627e4d57315a2fdfbfe50df1c80c6ef7d91ba34216169bd6f41c00"
-dependencies = [
- "libcrux-secrets",
- "rand 0.9.2",
+ "libcrux-traits",
 ]
 
 [[package]]
@@ -2446,6 +2414,7 @@ dependencies = [
  "strum",
  "tokio",
  "uuid",
+ "zkgroup",
 ]
 
 [[package]]
@@ -2487,6 +2456,7 @@ dependencies = [
  "partial-default",
  "paste",
  "rand 0.9.2",
+ "rand_chacha",
  "rayon",
  "serde",
  "sha2",
@@ -2546,14 +2516,14 @@ dependencies = [
 
 [[package]]
 name = "libsignal-debug"
-version = "0.89.1"
+version = "0.92.1"
 dependencies = [
  "cfg-if",
 ]
 
 [[package]]
 name = "libsignal-ffi"
-version = "0.89.1"
+version = "0.92.1"
 dependencies = [
  "cpufeatures",
  "hex",
@@ -2574,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni"
-version = "0.89.1"
+version = "0.92.1"
 dependencies = [
  "libsignal-debug",
  "libsignal-jni-impl",
@@ -2582,7 +2552,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni-impl"
-version = "0.89.1"
+version = "0.92.1"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -2599,7 +2569,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni-testing"
-version = "0.89.1"
+version = "0.92.1"
 dependencies = [
  "jni",
  "libsignal-bridge-testing",
@@ -2914,18 +2884,23 @@ dependencies = [
 
 [[package]]
 name = "libsignal-node"
-version = "0.89.1"
+version = "0.92.1"
 dependencies = [
  "futures",
  "libsignal-bridge",
+ "libsignal-bridge-macros",
  "libsignal-bridge-testing",
  "libsignal-protocol",
+ "linkme",
  "log",
  "log-panics",
  "minidump",
  "minidump-processor",
  "minidump-unwind",
  "neon",
+ "paste",
+ "rand 0.9.2",
+ "uuid",
 ]
 
 [[package]]
@@ -4358,9 +4333,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.8"
+version = "0.103.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ffdfa2f5286e2247234e03f680868ac2815974dc39e00ea15adc445d0aafe52"
+checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4824,8 +4799,8 @@ dependencies = [
 
 [[package]]
 name = "spqr"
-version = "1.5.0"
-source = "git+https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.5.0#63d9b93634bf543845376eb57b8a33ef29337aa8"
+version = "1.5.1"
+source = "git+https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.5.1#f2589fef855c10f39d72634dab3d14654dd410bf"
 dependencies = [
  "cpufeatures",
  "curve25519-dalek",

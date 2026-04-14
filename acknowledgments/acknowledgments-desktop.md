@@ -2,7 +2,7 @@
 
 libsignal makes use of the following open source projects.
 
-## spqr 1.5.0, partial-default-derive 0.1.0, partial-default 0.1.0
+## spqr 1.5.1, partial-default-derive 0.1.0, partial-default 0.1.0
 
 ```
                     GNU AFFERO GENERAL PUBLIC LICENSE
@@ -2434,7 +2434,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ```
 
-## libcrux-hacl-rs 0.0.4, libcrux-hmac 0.0.6, libcrux-intrinsics 0.0.5, libcrux-intrinsics 0.0.6, libcrux-macros 0.0.3, libcrux-ml-kem 0.0.7, libcrux-platform 0.0.3, libcrux-secrets 0.0.5, libcrux-sha2 0.0.6, libcrux-sha3 0.0.6, libcrux-sha3 0.0.7, libcrux-traits 0.0.5, libcrux-traits 0.0.6
+## libcrux-hacl-rs 0.0.4, libcrux-hmac 0.0.6, libcrux-intrinsics 0.0.6, libcrux-macros 0.0.3, libcrux-ml-kem 0.0.8, libcrux-platform 0.0.3, libcrux-secrets 0.0.5, libcrux-sha2 0.0.6, libcrux-sha3 0.0.8, libcrux-traits 0.0.6
 
 ```
                                  Apache License
@@ -3184,7 +3184,7 @@ THIS SOFTWARE.
 
 ```
 
-## rustls-webpki 0.103.8
+## rustls-webpki 0.103.10
 
 ```
 Except as otherwise noted, this project is licensed under the following
@@ -6798,7 +6798,7 @@ SOFTWARE.
 
 ```
 
-## derive-where 1.6.0
+## derive-where 1.6.1
 
 ```
 MIT License
@@ -7618,7 +7618,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## hpke-rs-crypto 0.6.0, hpke-rs 0.6.0
+## hpke-rs-crypto 0.6.1, hpke-rs 0.6.1
 
 ```
 Mozilla Public License Version 2.0

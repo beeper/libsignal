@@ -46,6 +46,13 @@ impl AsHttpHeader for UserBasedAuthorization {
                 ACCESS_KEY_HEADER_NAME,
                 BASE64_STANDARD.encode(key).parse().expect("valid"),
             ),
+            UserBasedAuthorization::UnrestrictedUnauthenticatedAccess => (
+                ACCESS_KEY_HEADER_NAME,
+                BASE64_STANDARD
+                    .encode([0; zkgroup::ACCESS_KEY_LEN])
+                    .parse()
+                    .expect("valid"),
+            ),
             UserBasedAuthorization::Group(token) => (
                 GROUP_SEND_TOKEN_HEADER_NAME,
                 BASE64_STANDARD
@@ -90,10 +97,12 @@ pub trait WsConnection: Sync {
     fn grpc_service_to_use_instead(
         &self,
         message: &'static str,
-    ) -> impl Future<Output = Option<impl crate::grpc::GrpcServiceProvider>> + Send {
+    ) -> Option<impl crate::grpc::GrpcServiceProvider> {
         let _ = message;
-        std::future::ready(None::<Http2Client<chat::GrpcBody>>)
+        None::<Http2Client<chat::GrpcBody>>
     }
+
+    fn self_aci(&self) -> Option<libsignal_core::Aci>;
 }
 
 impl<T: WsConnection> WsConnection for &T {
@@ -109,8 +118,12 @@ impl<T: WsConnection> WsConnection for &T {
     fn grpc_service_to_use_instead(
         &self,
         message: &'static str,
-    ) -> impl Future<Output = Option<impl GrpcServiceProvider>> + Send {
+    ) -> Option<impl GrpcServiceProvider> {
         <T as WsConnection>::grpc_service_to_use_instead(self, message)
+    }
+
+    fn self_aci(&self) -> Option<libsignal_core::Aci> {
+        <T as WsConnection>::self_aci(self)
     }
 }
 
@@ -160,17 +173,19 @@ impl WsConnection for chat::ChatConnection {
     fn grpc_service_to_use_instead(
         &self,
         message: &'static str,
-    ) -> impl Future<Output = Option<impl crate::grpc::GrpcServiceProvider>> + Send {
-        use futures_util::future::Either;
-
+    ) -> Option<impl crate::grpc::GrpcServiceProvider> {
         match self
             .grpc_overrides()
             .get(message)
             .unwrap_or(&chat::GrpcOverride::UseWs)
         {
-            chat::GrpcOverride::UseGrpc => Either::Left(self.shared_h2_connection()),
-            chat::GrpcOverride::UseWs => Either::Right(std::future::ready(None)),
+            chat::GrpcOverride::UseGrpc => self.shared_h2_connection(),
+            chat::GrpcOverride::UseWs => None,
         }
+    }
+
+    fn self_aci(&self) -> Option<libsignal_core::Aci> {
+        self.self_aci()
     }
 }
 
@@ -285,7 +300,11 @@ impl ResponseError {
                         if let Ok(ChallengeBody { token, options }) =
                             parse_json_from_body(&response)
                         {
-                            return RequestError::Challenge(RateLimitChallenge { token, options });
+                            return RequestError::Challenge(RateLimitChallenge {
+                                token,
+                                options,
+                                retry_later: extract_retry_later(headers),
+                            });
                         }
                     }
                     if status.as_u16() == 422 {
@@ -409,6 +428,7 @@ fn expect_empty_body(response: &chat::Response, label: &'static str) {
 #[cfg(test)]
 mod testutil {
     use super::*;
+    use crate::api::testutil::TEST_SELF_ACI;
 
     pub(crate) fn json(status: u16, body: impl AsRef<[u8]>) -> chat::Response {
         chat::Response {
@@ -443,6 +463,18 @@ mod testutil {
         }
     }
 
+    pub(crate) fn with_headers(
+        headers: &[(http::HeaderName, &'static str)],
+        mut response: chat::Response,
+    ) -> chat::Response {
+        response.headers.extend(
+            headers
+                .iter()
+                .map(|(k, v)| (k.clone(), http::HeaderValue::from_static(v))),
+        );
+        response
+    }
+
     pub(crate) struct RequestValidator {
         pub expected: chat::Request,
         pub response: chat::Response,
@@ -457,6 +489,10 @@ mod testutil {
         ) -> impl Future<Output = Result<chat::Response, chat::SendError>> + Send {
             pretty_assertions::assert_eq!(self.expected, request);
             std::future::ready(Ok(self.response.clone()))
+        }
+
+        fn self_aci(&self) -> Option<libsignal_core::Aci> {
+            Some(TEST_SELF_ACI)
         }
     }
 
@@ -496,6 +532,10 @@ mod testutil {
 
             std::future::ready(Ok(self.response.clone()))
         }
+
+        fn self_aci(&self) -> Option<libsignal_core::Aci> {
+            Some(TEST_SELF_ACI)
+        }
     }
 
     pub(crate) struct ProduceResponse(pub chat::Response);
@@ -508,6 +548,10 @@ mod testutil {
             _request: chat::Request,
         ) -> impl Future<Output = Result<chat::Response, chat::SendError>> + Send {
             std::future::ready(Ok(self.0.clone()))
+        }
+
+        fn self_aci(&self) -> Option<libsignal_core::Aci> {
+            Some(TEST_SELF_ACI)
         }
     }
 }
@@ -535,7 +579,12 @@ mod test {
     #[test_case(json(428, "{}") => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("428"))]
     #[test_case(json(
         428, r#"{"token": "zzz", "options": ["captcha"]}"#
-    ) => matches Err(RequestError::Challenge(RateLimitChallenge { token, options })) if token == "zzz" && options == vec![ChallengeOption::Captcha])]
+    ) => matches Err(RequestError::Challenge(RateLimitChallenge { token, options, retry_later: None })) if token == "zzz" && options == vec![ChallengeOption::Captcha])]
+    #[test_case(with_headers(&[(http::header::RETRY_AFTER, "42")], json(
+        428, r#"{"token": "zzz", "options": ["captcha"]}"#
+    )) => matches Err(RequestError::Challenge(RateLimitChallenge { token, options, retry_later: Some(
+        RetryLater { retry_after_seconds: 42 }
+    ) })) if token == "zzz" && options == vec![ChallengeOption::Captcha])]
     #[test_case(empty(422) => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("server validation"))]
     #[test_case(empty(419) => matches Err(RequestError::Unexpected { log_safe: m }) if m.contains("419"))]
     fn try_parse_empty(

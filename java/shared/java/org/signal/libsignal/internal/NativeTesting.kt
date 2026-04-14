@@ -102,6 +102,8 @@ public object NativeTesting {
   @JvmStatic
   public external fun TESTING_CreateOTPFromBase64(username: String, secret: String): String
   @JvmStatic
+  public external fun TESTING_EnableDeterministicRngForTesting(): Unit
+  @JvmStatic
   public external fun TESTING_ErrorOnBorrowAsync(input: Object): Unit
   @JvmStatic
   public external fun TESTING_ErrorOnBorrowIo(asyncRuntime: ObjectHandle, input: Object): CompletableFuture<Void?>
@@ -237,6 +239,8 @@ public object NativeTesting {
   public external fun TESTING_RoundTripU64(input: Long): Long
   @JvmStatic
   public external fun TESTING_RoundTripU8(input: Int): Int
+  @JvmStatic
+  public external fun TESTING_ServerPublicParams_CreateExpiringProfileKeyCredentialPresentationVersionedDeterministic(serverPublicParams: ObjectHandle, randomness: ByteArray, groupSecretParams: ByteArray, profileKeyCredential: ByteArray, newVersion: Boolean): ByteArray
   @JvmStatic
   public external fun TESTING_SignedPublicPreKey_CheckBridgesCorrectly(sourcePublicKey: ObjectHandle, signedPreKey: SignedPublicPreKey<*>): Unit
   @JvmStatic

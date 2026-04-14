@@ -44,7 +44,7 @@ use crate::env::{
 use crate::infra::ws::TextOrBinary;
 use crate::infra::ws::connection::{MessageEvent, NextEventError, TungsteniteSendError};
 
-/// Chat service avilable via a connected websocket.
+/// Chat service available via a connected websocket.
 ///
 /// This is backed by a [`tokio`] task that handles the actual interaction with
 /// the remote. Outgoing requests can be sent to the task via a [`mpsc::Sender`]
@@ -60,6 +60,9 @@ pub struct Chat {
     /// points. If it were a regular [`std::sync::Mutex`] the futures produced by methods
     /// on `Chat` would not be `Send`.
     state: TokioMutex<TaskState>,
+
+    /// If the connection is running over H2, additional requests can be sent via this client.
+    shared_h2_connection: Option<Http2Client<GrpcBody>>,
 }
 
 /// Instantiation-time configuration for a [`Chat`] instance.
@@ -246,18 +249,8 @@ impl Chat {
         listener(ListenerEvent::ReceivedAlerts(alerts))
     }
 
-    pub async fn shared_h2_connection(&self) -> Option<Http2Client<GrpcBody>> {
-        let state = self.state.lock().await;
-        match &*state {
-            TaskState::MaybeStillRunning {
-                request_tx: _,
-                response_tx: _,
-                task: _,
-                shared_h2_connection,
-            } => shared_h2_connection.clone(),
-            TaskState::SignaledToEnd(_) => None,
-            TaskState::Finished(_) => None,
-        }
+    pub fn shared_h2_connection(&self) -> Option<Http2Client<GrpcBody>> {
+        self.shared_h2_connection.clone()
     }
 
     /// Sends a request to the server and waits for the response.
@@ -265,7 +258,10 @@ impl Chat {
     /// If the request can't be sent or the response isn't received, this
     /// returns an error.
     pub async fn send(&self, request: Request) -> Result<Response, SendError> {
-        let Self { state } = self;
+        let Self {
+            state,
+            shared_h2_connection: _,
+        } = self;
 
         let Request {
             method,
@@ -296,30 +292,27 @@ impl Chat {
     /// receiving requests and responses.
     pub async fn disconnect(&self) {
         let mut guard = self.state.lock().await;
+
         // Take the existing state and leave a cheap-to-construct temporary
         // state there.
         let state = std::mem::replace(
             &mut *guard,
             TaskState::Finished(Ok(FinishReason::LocalDisconnect)),
         );
-
-        let new_state = match state {
+        *guard = match state {
             TaskState::MaybeStillRunning {
                 request_tx,
                 response_tx,
                 task,
-                shared_h2_connection,
             } => {
                 // Signal to the task, if it's still running, that it should
                 // quit. Do this by hanging up on it, at which point it will
                 // exit.
                 drop((request_tx, response_tx));
-                drop(shared_h2_connection);
                 TaskState::SignaledToEnd(task)
             }
             state @ (TaskState::SignaledToEnd(_) | TaskState::Finished(_)) => state,
         };
-        *guard = new_state
     }
 
     /// Returns `true` if the websocket is known to be connected.
@@ -336,7 +329,6 @@ impl Chat {
                 request_tx: _,
                 response_tx: _,
                 task,
-                shared_h2_connection: _,
             } => {
                 if !task.is_finished() {
                     return true;
@@ -418,16 +410,17 @@ impl Chat {
             connection,
             listener,
             response_tx.downgrade(),
+            shared_h2_connection.clone(),
         ));
         let state = TaskState::MaybeStillRunning {
             request_tx,
             response_tx,
             task,
-            shared_h2_connection,
         };
 
         Self {
             state: TokioMutex::new(state),
+            shared_h2_connection,
         }
     }
 }
@@ -461,7 +454,6 @@ enum TaskState {
         request_tx: mpsc::Sender<OutgoingRequest>,
         response_tx: mpsc::UnboundedSender<OutgoingResponse>,
         task: JoinHandle<Result<FinishReason, TaskErrorState>>,
-        shared_h2_connection: Option<Http2Client<GrpcBody>>,
     },
     /// The task has been signalled to end and should be terminating soon, but
     /// not necessarily immediately.
@@ -711,6 +703,7 @@ async fn spawned_task_body<
     connection: ConnectionImpl<I, GCI>,
     listener: EventListener,
     weak_response_tx: mpsc::WeakUnboundedSender<OutgoingResponse>,
+    shared_h2_connection: Option<Http2Client<GrpcBody>>,
 ) -> Result<FinishReason, TaskErrorState> {
     pin_mut!(connection);
     let tokio_rt = tokio::runtime::Handle::current();
@@ -723,6 +716,10 @@ async fn spawned_task_body<
         log::error!("[{log_tag}] chat handler task exited abnormally");
         listener_state.send_event_blocking(ListenerEvent::Finished(Err(FinishError::Unknown)));
     });
+
+    let cancel_h2_connection_on_exit =
+        shared_h2_connection.map(|h2| scopeguard::guard(h2, |h2| h2.disconnect_all()));
+
     let result = loop {
         let (id, incoming_request) = match connection.as_mut().handle_one_event().await {
             Outcome::Continue(None) => continue,
@@ -750,7 +747,8 @@ async fn spawned_task_body<
     let task_result = result.as_ref().map_err(Into::into).copied();
 
     // The loop is finishing. Make sure to tell the listener after disarming the
-    // scope guard.
+    // scope guard and performing other cleanup.
+    drop(cancel_h2_connection_on_exit);
     let mut listener = scopeguard::ScopeGuard::into_inner(listener_state);
     listener
         .send_event(
@@ -797,7 +795,6 @@ async fn send_request(
                 request_tx,
                 response_tx: _,
                 task: _,
-                shared_h2_connection: _,
             } => request_tx.clone(),
             TaskState::SignaledToEnd(_) => {
                 return Err(SendError::Disconnected(DisconnectedReason::SocketClosed {
@@ -854,11 +851,14 @@ async fn wait_for_task_to_finish(state: &mut TaskState) -> &Result<FinishReason,
             task,
             request_tx: _,
             response_tx: _,
-            shared_h2_connection: _,
         } => {
             // The send can only fail if the task has ended since it owns the
-            // other end of the channel.
-            assert!(task.is_finished());
+            // other end of the channel. However, the task might still be exiting.
+            if !task.is_finished() {
+                log::warn!(
+                    "waiting on live websocket task to exit (it should be in the process of shutting down)"
+                );
+            }
             task
         }
         TaskState::SignaledToEnd(task) => {
@@ -867,6 +867,7 @@ async fn wait_for_task_to_finish(state: &mut TaskState) -> &Result<FinishReason,
             // That's not an error, but it means the task is exiting
             // soon. We can wait for that and then use the error status
             // if there is one.
+            log::info!("waiting on live websocket task to exit (it has been signalled to end)");
             task
         }
         TaskState::Finished(finish_state) => return finish_state,

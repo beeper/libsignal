@@ -61,6 +61,8 @@ pub use futures::*;
 
 mod io;
 pub use io::*;
+use libsignal_net_chat::api::backups::GetUploadFormFailure;
+use libsignal_net_chat::api::messages::UploadTooLarge;
 
 mod storage;
 pub use storage::*;
@@ -194,6 +196,39 @@ impl JniError for IllegalArgumentError {
             env,
             &self.0,
             ClassName("java.lang.IllegalArgumentException"),
+        )
+    }
+}
+
+impl JniError for GetUploadFormFailure {
+    fn to_throwable_impl<'a>(
+        &self,
+        env: &mut JNIEnv<'a>,
+    ) -> Result<JThrowable<'a>, BridgeLayerError> {
+        make_single_message_throwable(
+            env,
+            &self.to_string(),
+            match self {
+                GetUploadFormFailure::Unauthorized => {
+                    ClassName("org.signal.libsignal.net.RequestUnauthorizedException")
+                }
+                GetUploadFormFailure::UploadTooLarge => {
+                    ClassName("org.signal.libsignal.net.UploadTooLargeException")
+                }
+            },
+        )
+    }
+}
+
+impl JniError for UploadTooLarge {
+    fn to_throwable_impl<'a>(
+        &self,
+        env: &mut JNIEnv<'a>,
+    ) -> Result<JThrowable<'a>, BridgeLayerError> {
+        make_single_message_throwable(
+            env,
+            &self.to_string(),
+            ClassName("org.signal.libsignal.net.UploadTooLargeException"),
         )
     }
 }
@@ -958,7 +993,7 @@ impl JniError for SvrbError {
             ),
             SvrbError::RateLimited(inner) => inner.to_throwable_impl(env),
             SvrbError::PreviousBackupDataInvalid
-            | SvrbError::MetadataInvalid
+            | SvrbError::MetadataInvalid(_)
             | SvrbError::DecryptionError(_) => make_single_message_throwable(
                 env,
                 &self.to_string(),
@@ -1031,18 +1066,32 @@ impl JniError for RateLimitChallenge {
         &self,
         env: &mut JNIEnv<'a>,
     ) -> Result<JThrowable<'a>, BridgeLayerError> {
-        let Self { token, options } = self;
+        let Self {
+            token,
+            options,
+            retry_later,
+        } = self;
         let (message, token) =
             try_scoped(|| Ok((env.new_string(self.to_string())?, env.new_string(token)?)))
                 .check_exceptions(env, "RateLimitChallenge")?;
         let options = options.as_slice().convert_into(env)?;
+        let retry_later = retry_later
+            .as_ref()
+            .map(
+                |RetryLater {
+                     retry_after_seconds,
+                 }| i64::from(*retry_after_seconds),
+            )
+            .unwrap_or(-1);
         new_instance(
             env,
             ClassName("org.signal.libsignal.net.RateLimitChallengeException"),
             jni_args!((
                 message => java.lang.String,
                 token => java.lang.String,
-                options => [org.signal.libsignal.net.ChallengeOption]) -> void),
+                options => [org.signal.libsignal.net.ChallengeOption],
+                retry_later => long,
+            ) -> void),
         )
         .map(Into::into)
     }

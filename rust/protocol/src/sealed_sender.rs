@@ -894,8 +894,20 @@ pub async fn sealed_sender_encrypt<R: Rng + CryptoRng>(
     now: SystemTime,
     rng: &mut R,
 ) -> Result<Vec<u8>> {
-    let message =
-        message_encrypt(ptext, destination, session_store, identity_store, now, rng).await?;
+    let sender_address = ProtocolAddress::new(
+        sender_cert.sender_uuid()?.to_owned(),
+        sender_cert.sender_device_id()?,
+    );
+    let message = message_encrypt(
+        ptext,
+        destination,
+        &sender_address,
+        session_store,
+        identity_store,
+        now,
+        rng,
+    )
+    .await?;
     let usmc = UnidentifiedSenderMessageContent::new(
         message.message_type(),
         sender_cert.clone(),
@@ -2027,6 +2039,7 @@ pub async fn sealed_sender_decrypt(
         usmc.sender()?.sender_uuid()?.to_string(),
         usmc.sender()?.sender_device_id()?,
     );
+    let local_address = ProtocolAddress::new(local_uuid, local_device_id);
 
     let message = match usmc.msg_type()? {
         CiphertextMessageType::Whisper => {
@@ -2045,6 +2058,7 @@ pub async fn sealed_sender_decrypt(
             session_cipher::message_decrypt_prekey(
                 &ctext,
                 &remote_address,
+                &local_address,
                 session_store,
                 identity_store,
                 pre_key_store,

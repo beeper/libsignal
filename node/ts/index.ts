@@ -5,8 +5,6 @@
 
 import { Buffer } from 'node:buffer';
 
-import * as uuid from 'uuid';
-
 import * as Errors from './Errors.js';
 export * from './Errors.js';
 
@@ -20,8 +18,7 @@ import {
   SignedPreKeyRecord,
 } from './ProtocolTypes.js';
 export * from './ProtocolTypes.js';
-import { parseUuid, Uuid } from './uuid.js';
-export * from './uuid.js';
+import * as uuid from './uuid.js';
 
 export * as usernames from './usernames.js';
 
@@ -35,6 +32,8 @@ export * as WebpSanitizer from './WebpSanitizer.js';
 import * as Native from './Native.js';
 
 Native.registerErrors(Errors);
+
+export type Uuid = uuid.Uuid;
 
 // These enums must be kept in sync with their Rust counterparts.
 
@@ -742,7 +741,7 @@ export class SenderKeyDistributionMessage {
   ): Promise<SenderKeyDistributionMessage> {
     const handle = await Native.SenderKeyDistributionMessage_Create(
       sender,
-      parseUuid(distributionId),
+      uuid.parse(distributionId),
       bridgeSenderKeyStore(store)
     );
     return new SenderKeyDistributionMessage(handle);
@@ -759,7 +758,7 @@ export class SenderKeyDistributionMessage {
     return new SenderKeyDistributionMessage(
       Native.SenderKeyDistributionMessage_New(
         messageVersion,
-        parseUuid(distributionId),
+        uuid.parse(distributionId),
         chainId,
         iteration,
         chainKey,
@@ -829,7 +828,7 @@ export class SenderKeyMessage {
     return new SenderKeyMessage(
       Native.SenderKeyMessage_New(
         messageVersion,
-        parseUuid(distributionId),
+        uuid.parse(distributionId),
         chainId,
         iteration,
         ciphertext,
@@ -1015,7 +1014,7 @@ export async function groupEncrypt(
   return CiphertextMessage._fromNativeHandle(
     await Native.GroupCipher_EncryptMessage(
       sender,
-      parseUuid(distributionId),
+      uuid.parse(distributionId),
       message,
       bridgeSenderKeyStore(store)
     )
@@ -1292,6 +1291,7 @@ export function processPreKeyBundle(
 export async function signalEncrypt(
   message: Uint8Array<ArrayBuffer>,
   address: ProtocolAddress,
+  localAddress: ProtocolAddress,
   sessionStore: SessionStore,
   identityStore: IdentityKeyStore,
   now: Date = new Date()
@@ -1300,6 +1300,7 @@ export async function signalEncrypt(
     await Native.SessionCipher_EncryptMessage(
       message,
       address,
+      localAddress,
       bridgeSessionStore(sessionStore),
       bridgeIdentityKeyStore(identityStore),
       now.getTime()
@@ -1390,6 +1391,7 @@ function bridgeKyberPreKeyStore(
 export function signalDecryptPreKey(
   message: PreKeySignalMessage,
   address: ProtocolAddress,
+  localAddress: ProtocolAddress,
   sessionStore: SessionStore,
   identityStore: IdentityKeyStore,
   prekeyStore: PreKeyStore,
@@ -1399,6 +1401,7 @@ export function signalDecryptPreKey(
   return Native.SessionCipher_DecryptPreKeySignalMessage(
     message,
     address,
+    localAddress,
     bridgeSessionStore(sessionStore),
     bridgeIdentityKeyStore(identityStore),
     bridgePreKeyStore(prekeyStore),
@@ -1414,9 +1417,14 @@ export async function sealedSenderEncryptMessage(
   sessionStore: SessionStore,
   identityStore: IdentityKeyStore
 ): Promise<Uint8Array<ArrayBuffer>> {
+  const localAddress = ProtocolAddress.new(
+    senderCert.senderUuid(),
+    senderCert.senderDeviceId()
+  );
   const ciphertext = await signalEncrypt(
     message,
     address,
+    localAddress,
     sessionStore,
     identityStore
   );

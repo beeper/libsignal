@@ -224,6 +224,7 @@ it('DecryptionErrorMessage', async () => {
   const bCiphertext = await SignalClient.signalEncrypt(
     Buffer.from('reply', 'utf8'),
     aAddress,
+    bAddress,
     bSess,
     bKeys
   );
@@ -740,6 +741,7 @@ for (const testCase of sessionVersionTestCases) {
       const aCiphertext = await SignalClient.signalEncrypt(
         aMessage,
         bAddress,
+        aAddress,
         aliceStores.session,
         aliceStores.identity
       );
@@ -756,6 +758,7 @@ for (const testCase of sessionVersionTestCases) {
       const bDPlaintext = await SignalClient.signalDecryptPreKey(
         aCiphertextR,
         aAddress,
+        bAddress,
         bobStores.session,
         bobStores.identity,
         bobStores.prekey,
@@ -772,6 +775,7 @@ for (const testCase of sessionVersionTestCases) {
       const bCiphertext = await SignalClient.signalEncrypt(
         bMessage,
         aAddress,
+        bAddress,
         bobStores.session,
         bobStores.identity
       );
@@ -836,6 +840,7 @@ for (const testCase of sessionVersionTestCases) {
       const aCiphertext = await SignalClient.signalEncrypt(
         aMessage,
         bAddress,
+        aAddress,
         aliceStores.session,
         aliceStores.identity
       );
@@ -852,6 +857,7 @@ for (const testCase of sessionVersionTestCases) {
       const bDPlaintext = await SignalClient.signalDecryptPreKey(
         aCiphertextR,
         aAddress,
+        bAddress,
         bobStores.session,
         bobStores.identity,
         bobStores.prekey,
@@ -864,6 +870,7 @@ for (const testCase of sessionVersionTestCases) {
         await SignalClient.signalDecryptPreKey(
           aCiphertextR,
           aAddress,
+          bAddress,
           bobStores.session,
           bobStores.identity,
           bobStores.prekey,
@@ -889,6 +896,7 @@ for (const testCase of sessionVersionTestCases) {
       const bCiphertext = await SignalClient.signalEncrypt(
         bMessage,
         aAddress,
+        bAddress,
         bobStores.session,
         bobStores.identity
       );
@@ -934,6 +942,7 @@ for (const testCase of sessionVersionTestCases) {
       const aliceStores = new TestStores();
       const bobStores = new TestStores();
 
+      const aAddress = SignalClient.ProtocolAddress.new('+14151111111', 1);
       const bAddress = SignalClient.ProtocolAddress.new('+19192222222', 1);
 
       const bPreKeyBundle = await testCase.makeBundle(bAddress, bobStores);
@@ -954,6 +963,7 @@ for (const testCase of sessionVersionTestCases) {
       const aCiphertext = await SignalClient.signalEncrypt(
         aMessage,
         bAddress,
+        aAddress,
         aliceStores.session,
         aliceStores.identity,
         new Date('2020-01-01')
@@ -972,6 +982,7 @@ for (const testCase of sessionVersionTestCases) {
         SignalClient.signalEncrypt(
           aMessage,
           bAddress,
+          aAddress,
           aliceStores.session,
           aliceStores.identity,
           new Date('2023-01-01')
@@ -1004,6 +1015,7 @@ for (const testCase of sessionVersionTestCases) {
       const aCiphertext = await SignalClient.signalEncrypt(
         aMessage,
         bAddress,
+        aAddress,
         aliceStores.session,
         aliceStores.identity
       );
@@ -1020,6 +1032,7 @@ for (const testCase of sessionVersionTestCases) {
       void (await SignalClient.signalDecryptPreKey(
         aCiphertextR,
         aAddress,
+        bAddress,
         bobStores.session,
         bobStores.identity,
         bobStores.prekey,
@@ -1031,6 +1044,7 @@ for (const testCase of sessionVersionTestCases) {
         SignalClient.signalDecryptPreKey(
           aCiphertextR,
           mAddress,
+          bAddress,
           bobStores.session,
           bobStores.identity,
           bobStores.prekey,

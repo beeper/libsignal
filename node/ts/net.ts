@@ -24,6 +24,8 @@ import { SvrB } from './net/SvrB.js';
 import { BridgedStringMap, newNativeHandle } from './internal.js';
 export * from './net/CDSI.js';
 export * from './net/Chat.js';
+export * from './net/chat/AuthMessagesService.js';
+export * from './net/chat/UnauthBackupsService.js';
 export * from './net/chat/UnauthKeysService.js';
 export * from './net/chat/UnauthMessagesService.js';
 export * from './net/chat/UnauthProfilesService.js';
@@ -110,6 +112,7 @@ export type NetConstructorOptions = Readonly<
       TESTING_localServer_svr2Port: number;
       TESTING_localServer_svrBPort: number;
       TESTING_localServer_rootCertificateDer: Uint8Array<ArrayBuffer>;
+      TESTING_localServer_httpVersion?: 1 | 2;
     }
 >;
 
@@ -163,7 +166,8 @@ export class Net {
           options.TESTING_localServer_cdsiPort,
           options.TESTING_localServer_svr2Port,
           options.TESTING_localServer_svrBPort,
-          options.TESTING_localServer_rootCertificateDer
+          options.TESTING_localServer_rootCertificateDer,
+          options.TESTING_localServer_httpVersion ?? 1
         )
       );
     } else {

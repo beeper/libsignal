@@ -12,6 +12,7 @@ use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::slice;
 
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
+use libsignal_net_chat::api::UploadForm;
 use libsignal_net_chat::api::keys::DeviceSpecifier;
 use neon::prelude::*;
 use neon::types::JsBigInt;
@@ -20,6 +21,7 @@ use zkgroup::ZkGroupDeserializationFailure;
 use zkgroup::groups::GroupSendFullToken;
 
 use super::*;
+use crate::crypto::RandomNumberGenerator;
 use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
 use crate::net::chat::{
@@ -304,6 +306,7 @@ fn can_convert_js_number_to_int(value: f64, valid_range: RangeInclusive<f64>) ->
 // 2**53 - 1, the maximum "safe" integer representable in an f64.
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/MAX_SAFE_INTEGER
 pub(super) const MAX_SAFE_JS_INTEGER: f64 = 9007199254740991.0;
+pub(super) const MIN_SAFE_JS_INTEGER: f64 = -9007199254740991.0;
 
 /// Converts non-negative numbers up to [`Number.MAX_SAFE_INTEGER`][].
 ///
@@ -317,6 +320,18 @@ impl SimpleArgTypeInfo for crate::protocol::Timestamp {
         }
         #[expect(clippy::cast_possible_truncation)]
         Ok(Self::from_epoch_millis(value as u64))
+    }
+}
+
+impl SimpleArgTypeInfo for RandomNumberGenerator {
+    type ArgType = JsNumber;
+    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+        let value = foreign.value(cx);
+        if !can_convert_js_number_to_int(value, MIN_SAFE_JS_INTEGER..=MAX_SAFE_JS_INTEGER) {
+            return cx.throw_range_error(format!("cannot convert {value} to RNG seed (u64)"));
+        }
+        #[expect(clippy::cast_possible_truncation)]
+        Ok(Self::from(value as i64))
     }
 }
 
@@ -541,17 +556,24 @@ impl SimpleArgTypeInfo for libsignal_net_chat::api::messages::MultiRecipientSend
     }
 }
 
-impl SimpleArgTypeInfo for GroupSendFullToken {
-    type ArgType = JsUint8Array;
+macro_rules! zkgroup_serialize_type {
+    ($($ty:ty),*$(,)?) => {$(
+        impl SimpleArgTypeInfo for $ty {
+            type ArgType = JsUint8Array;
 
-    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
-        let elements = foreign.downcast_or_throw::<JsUint8Array, _>(cx)?;
-        let bytes = elements.as_slice(cx);
-        zkgroup::deserialize(bytes).or_else(|_: ZkGroupDeserializationFailure| {
-            cx.throw_type_error("bad GroupSendFullToken")
-        })
-    }
+            fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
+                let elements = foreign.downcast_or_throw::<JsUint8Array, _>(cx)?;
+                let bytes = elements.as_slice(cx);
+                zkgroup::deserialize(bytes).or_else(|_: ZkGroupDeserializationFailure| {
+                    cx.throw_type_error(concat!("bad ", stringify!($ty)))
+                })
+            }
+        }
+    )*};
 }
+zkgroup_serialize_type!(GroupSendFullToken);
+zkgroup_serialize_type!(zkgroup::backups::BackupAuthCredential);
+zkgroup_serialize_type!(zkgroup::generic_server_params::GenericServerPublicParams);
 
 // Used for callback results.
 impl SimpleArgTypeInfo for () {
@@ -899,124 +921,35 @@ impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context> for Vec<&'sto
 }
 
 macro_rules! bridge_trait {
-    ($name:ident) => {
+    ($name:ident, $load:expr) => {
         paste! {
             impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn $name {
                 type ArgType = JsObject;
-                type StoredType = [<Node $name>];
+                type StoredType = BridgedCallbacks<[<NodeBridge $name>]>;
                 fn save_async_arg(
                     cx: &mut FunctionContext,
                     foreign: Handle<Self::ArgType>,
                 ) -> NeonResult<Self::StoredType> {
-                    Ok(Self::StoredType::new(cx, foreign))
+                    Ok(BridgedCallbacks([<NodeBridge $name>]::new(cx, foreign)?))
                 }
                 fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-                    stored
+                    ($load)(stored)
                 }
             }
         }
     };
+    ($name:ident) => {
+        bridge_trait!($name, std::convert::identity);
+    };
 }
 
-// bridge_trait!(IdentityKeyStore);
-// bridge_trait!(PreKeyStore);
-// bridge_trait!(SenderKeyStore);
-// bridge_trait!(SessionStore);
-// bridge_trait!(SignedPreKeyStore);
-// bridge_trait!(KyberPreKeyStore);
-bridge_trait!(InputStream);
-
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn IdentityKeyStore {
-    type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgeIdentityKeyStore>;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgeIdentityKeyStore::new(
-            cx, foreign,
-        )?))
-    }
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn PreKeyStore {
-    type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgePreKeyStore>;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgePreKeyStore::new(cx, foreign)?))
-    }
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn SignedPreKeyStore {
-    type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgeSignedPreKeyStore>;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgeSignedPreKeyStore::new(
-            cx, foreign,
-        )?))
-    }
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn KyberPreKeyStore {
-    type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgeKyberPreKeyStore>;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgeKyberPreKeyStore::new(
-            cx, foreign,
-        )?))
-    }
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn SessionStore {
-    type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgeSessionStore>;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgeSessionStore::new(cx, foreign)?))
-    }
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn SenderKeyStore {
-    type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgeSenderKeyStore>;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgeSenderKeyStore::new(
-            cx, foreign,
-        )?))
-    }
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
+bridge_trait!(IdentityKeyStore);
+bridge_trait!(PreKeyStore);
+bridge_trait!(SenderKeyStore);
+bridge_trait!(SessionStore);
+bridge_trait!(SignedPreKeyStore);
+bridge_trait!(KyberPreKeyStore);
+bridge_trait!(InputStream, |x: &'a mut Self::StoredType| &mut x.0);
 
 impl SimpleArgTypeInfo for Box<dyn ChatListener> {
     type ArgType = JsObject;
@@ -1305,6 +1238,40 @@ impl<'storage, const LEN: usize> AsyncArgTypeInfo<'storage> for &'storage [u8; L
     }
     fn load_async_arg(stored: &'storage mut Self::StoredType) -> Self {
         (&**stored).try_into().expect("checked length already")
+    }
+}
+
+impl<'a> ResultTypeInfo<'a> for UploadForm {
+    type ResultType = JsObject;
+    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
+        let UploadForm {
+            cdn,
+            key,
+            headers,
+            signed_upload_url,
+        } = self;
+        let obj = cx.empty_object();
+        let cdn = cx.number(cdn as f64);
+        obj.set(cx, "cdn", cdn)?;
+        let key = cx.string(key);
+        obj.set(cx, "key", key)?;
+        let headers_arr = cx.empty_array();
+        for (i, (k, v)) in headers.iter().enumerate() {
+            let pair = cx.empty_array();
+            let k = cx.string(k);
+            let v = cx.string(v);
+            pair.set(cx, 0, k)?;
+            pair.set(cx, 1, v)?;
+            headers_arr.set(
+                cx,
+                u32::try_from(i).expect("We don't have u32::MAX headers"),
+                pair,
+            )?;
+        }
+        obj.set(cx, "headers", headers_arr)?;
+        let signed_upload_url = cx.string(signed_upload_url);
+        obj.set(cx, "signedUploadUrl", signed_upload_url)?;
+        Ok(obj)
     }
 }
 

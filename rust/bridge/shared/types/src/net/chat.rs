@@ -19,7 +19,6 @@ use http::status::InvalidStatusCode;
 use http::uri::{InvalidUri, PathAndQuery};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use libsignal_bridge_macros::bridge_callbacks;
-use libsignal_net::auth::Auth;
 use libsignal_net::chat::fake::FakeChatRemote;
 use libsignal_net::chat::server_requests::DisconnectCause;
 use libsignal_net::chat::ws::ListenerEvent;
@@ -36,7 +35,7 @@ use libsignal_net::infra::route::{
 };
 use libsignal_net::infra::tcp_ssl::InvalidProxyConfig;
 use libsignal_net::infra::{EnableDomainFronting, EnforceMinimumTls, OverrideNagleAlgorithm};
-use libsignal_net_chat::api::Unauth;
+use libsignal_net_chat::api::{Auth as AuthConn, Unauth};
 use libsignal_protocol::{IdentityKey, PreKeyBundle, Timestamp};
 use static_assertions::assert_impl_all;
 
@@ -146,9 +145,34 @@ impl UnauthenticatedChatConnection {
 }
 
 impl AuthenticatedChatConnection {
+    /// Given an HTTP Auth username of the form "{aci}" or "{aci}.{device_id}", parses and returns
+    /// it.
+    ///
+    /// An absent device ID will be treated as device ID "1", consistent with the server's
+    /// historical treatment of such usernames.
+    ///
+    /// Produces `None` on any other input (this is not a case where we need to know precisely what
+    /// went wrong).
+    pub fn parse_username(
+        username: &str,
+    ) -> Option<(libsignal_core::Aci, libsignal_core::DeviceId)> {
+        const IMPLICIT_PRIMARY_DEVICE_ID_STR: &str = "1";
+        let (aci_part, device_id_part) = username
+            .rsplit_once('.')
+            .unwrap_or((username, IMPLICIT_PRIMARY_DEVICE_ID_STR));
+        let aci = libsignal_core::Aci::parse_from_service_id_string(aci_part)?;
+        let device_id = libsignal_core::DeviceId::new_nonzero(
+            std::num::NonZero::from_str(device_id_part).ok()?,
+        )
+        .ok()?;
+        Some((aci, device_id))
+    }
+
     pub async fn connect(
         connection_manager: &ConnectionManager,
-        auth: Auth,
+        aci: libsignal_core::Aci,
+        device_id: libsignal_core::DeviceId,
+        password: String,
         receive_stories: bool,
         languages: LanguageList,
     ) -> Result<Self, ConnectError> {
@@ -158,7 +182,9 @@ impl AuthenticatedChatConnection {
             CHAT_WEBSOCKET_PATH,
             Some(
                 chat::AuthenticatedChatHeaders {
-                    auth,
+                    aci,
+                    device_id,
+                    password,
                     receive_stories: receive_stories.into(),
                     languages,
                 }
@@ -201,9 +227,34 @@ impl AuthenticatedChatConnection {
 
         log::info!("preconnecting chat");
         connection_resources
-            .preconnect_and_save(route_provider, "preconnect")
+            .preconnect_and_save(
+                connection_manager.env.chat_domain_config.connect.service,
+                route_provider,
+                "preconnect",
+            )
             .await?;
         Ok(())
+    }
+
+    /// Provides access to the inner ChatConnection using the [`Auth`](AuthConn) wrapper of
+    /// libsignal-net-chat.
+    ///
+    /// This callback signature unfortunately requires boxing; there is not yet Rust syntax to say
+    /// "I return an unknown Future that might capture from its arguments" in closure position
+    /// specifically. It's also extra complicated to promise that the result doesn't have to outlive
+    /// &self; unfortunately there doesn't seem to be a simpler way to express this at this time!
+    /// (e.g. `for<'inner where 'outer: 'inner>`)
+    pub async fn as_typed<'outer, F, R>(&'outer self, callback: F) -> R
+    where
+        F: for<'inner> FnOnce(
+            LimitedLifetimeRef<'outer, 'inner, AuthConn<ChatConnection>>,
+        ) -> BoxFuture<'inner, R>,
+    {
+        let guard = self.as_ref().read().await;
+        let MaybeChatConnection::Running(inner) = &*guard else {
+            panic!("listener was not set")
+        };
+        callback(LimitedLifetimeRef::from(<&AuthConn<_>>::from(inner))).await
     }
 }
 
@@ -467,6 +518,7 @@ async fn establish_chat_connection(
 
     ChatConnection::start_connect_with(
         connection_resources,
+        env.chat_domain_config.connect.service,
         route_provider,
         endpoint_path,
         user_agent,
@@ -759,4 +811,32 @@ impl dyn ProvisioningListener {
 pub struct PreKeysResponse {
     pub identity_key: IdentityKey,
     pub pre_key_bundles: Vec<PreKeyBundle>,
+}
+
+#[cfg(test)]
+mod test {
+    use test_case::test_case;
+
+    use super::*;
+
+    const TEST_UUID: uuid::Uuid = uuid::uuid!("659aa5f4-a28d-fcc1-1ea1-b997537a3d95");
+
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95" => Some((TEST_UUID.into(), libsignal_core::DeviceId::new(1).expect("valid"))))]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95.1" => Some((TEST_UUID.into(), libsignal_core::DeviceId::new(1).expect("valid"))))]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95.123" => Some((TEST_UUID.into(), libsignal_core::DeviceId::new(123).expect("valid"))))]
+    #[test_case("659AA5F4-A28D-FCC1-1EA1-B997537A3D95.124" => Some((TEST_UUID.into(), libsignal_core::DeviceId::new(124).expect("valid"))))]
+    #[test_case("659aA5f4-A28d-FcC1-1eA1-b997537A3d95.125" => Some((TEST_UUID.into(), libsignal_core::DeviceId::new(125).expect("valid"))))]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d9" => None)]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95." => None)]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95.a" => None)]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95.0" => None)]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95.2.3" => None)]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95.128" => None)]
+    #[test_case("659aa5f4-a28d-fcc1-1ea1-b997537a3d95.9999" => None)]
+    #[test_case(".123" => None)]
+    #[test_case("a.123" => None)]
+    #[test_case("a" => None)]
+    fn test_parse_username(input: &str) -> Option<(libsignal_core::Aci, libsignal_core::DeviceId)> {
+        AuthenticatedChatConnection::parse_username(input)
+    }
 }

@@ -7,8 +7,9 @@
 //! chat-server".
 
 use std::convert::Infallible;
+use std::fmt::Formatter;
 
-use libsignal_net::infra::errors::LogSafeDisplay;
+use libsignal_net::infra::errors::{LogSafeDisplay, RetryLater};
 use ref_cast::RefCast as _;
 
 pub mod backups;
@@ -59,8 +60,9 @@ pub enum AllowRateLimitChallenges {
 ///
 /// For multi-recipient messages, see [messages::MultiRecipientSendAuthorization].
 pub enum UserBasedAuthorization {
-    AccessKey([u8; 16]),
+    AccessKey([u8; zkgroup::ACCESS_KEY_LEN]),
     Group(zkgroup::groups::GroupSendFullToken),
+    UnrestrictedUnauthenticatedAccess,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -120,6 +122,16 @@ impl<E, D> RequestError<E, D> {
     }
 }
 
+impl<D> RequestError<Infallible, D> {
+    /// Replaces [`Infallible`] with an actual `Other` error type (which `self` must not be using).
+    ///
+    /// Unfortunately we can't `impl From<RequestError<Infallible, D>> for RequestError<E, D>`
+    /// because that overlaps when `E = Infallible`. So we need a helper instead.
+    pub fn with_other<E2>(self) -> RequestError<E2, D> {
+        self.flat_map_other(|e| match e {})
+    }
+}
+
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 #[cfg_attr(test, derive(Clone))]
 #[ignore_extra_doc_attributes]
@@ -142,12 +154,25 @@ impl<E> From<DisconnectedError> for RequestError<E> {
     }
 }
 
-#[derive(Debug, thiserror::Error, displaydoc::Display)]
+#[derive(Debug, thiserror::Error)]
 #[cfg_attr(test, derive(Clone))]
-/// retry after completing a rate limit challenge {options:?}
 pub struct RateLimitChallenge {
     pub token: String,
     pub options: Vec<ChallengeOption>,
+    pub retry_later: Option<RetryLater>,
+}
+impl std::fmt::Display for RateLimitChallenge {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "retry after completing a rate limit challenge {:?}",
+            self.options
+        )?;
+        if let Some(retry_later) = &self.retry_later {
+            write!(f, " (or {retry_later})")?;
+        }
+        Ok(())
+    }
 }
 impl LogSafeDisplay for RateLimitChallenge {}
 
@@ -203,6 +228,9 @@ pub(crate) mod testutil {
     use const_str::concat_bytes;
     use data_encoding_macro::base64;
     use rand::SeedableRng as _;
+
+    pub const TEST_SELF_ACI: libsignal_core::Aci =
+        libsignal_core::Aci::from_uuid_bytes(const_str::hex!("659aa5f4a28dfcc11ea1b997537a3d95"));
 
     /// A standard RNG used for exact-match tests that (normally) depend on randomness.
     pub(crate) fn fixed_seed_test_rng() -> impl rand::CryptoRng + Send {

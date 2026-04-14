@@ -11,17 +11,19 @@ mod messages;
 mod profiles;
 mod usernames;
 
+use std::convert::Infallible;
 use std::error::Error;
 use std::future::Future;
 
 use itertools::Itertools;
 use libsignal_net::infra::errors::{LogSafeDisplay, RetryLater};
 use libsignal_net::infra::http_client::{Http2TransportError, Http2TransportErrorKind};
+use libsignal_net_grpc::proto::chat::messages::ChallengeRequired as ChallengeRequiredProto;
 use libsignal_net_grpc::proto::google;
 use prost::Message as _;
 use tonic::codegen::StdError;
 
-use crate::api::{DisconnectedError, RequestError};
+use crate::api::{ChallengeOption, DisconnectedError, RateLimitChallenge, RequestError};
 use crate::logging::{DebugAsStrOrBytes, Redact, RedactHex};
 
 /// Marker type for use in [`crate::api`] traits.
@@ -76,20 +78,22 @@ impl<T: GrpcService + Clone + Sync> GrpcServiceProvider for T {
     }
 }
 
-async fn log_and_send<F, R>(
+async fn log_and_send<F, R, E>(
     log_tag: &'static str,
     log_safe_description: &str,
     operation: impl FnOnce() -> F,
-) -> tonic::Result<R>
+) -> Result<R, RequestError<E>>
 where
     F: Future<Output = tonic::Result<R>>,
 {
     let request_id = rand::random::<u16>();
     log::info!("[{log_tag} {request_id:04x}] {log_safe_description}");
 
-    let result = operation().await;
-    match &result {
-        Ok(_) => log::info!("[{log_tag} {request_id:04x}] {log_safe_description} OK"),
+    match operation().await {
+        Ok(x) => {
+            log::info!("[{log_tag} {request_id:04x}] {log_safe_description} done");
+            Ok(x)
+        }
         Err(status) => {
             // Use the Debug implementation to print the status code's name, which is easier to
             // identify than the human-readable description.
@@ -97,10 +101,7 @@ where
             // it's still Copy. The full check for this is the exhaustive match in
             // into_default_request_error.)
             static_assertions::assert_impl_all!(tonic::Code: Copy);
-            log::warn!(
-                "[{log_tag} {request_id:04x}] {log_safe_description} {:?}",
-                status.code()
-            );
+            let code = status.code();
             log::debug!(
                 "[{log_tag} {request_id:04x}] {:?} {} ({:?}): {:?}",
                 status.code(),
@@ -108,9 +109,15 @@ where
                 status.metadata(),
                 DebugAsStrOrBytes(status.details())
             );
+            let err = RequestError::<Infallible>::from(status);
+            log::warn!(
+                "[{log_tag} {request_id:04x}] {log_safe_description} {:?}: {}",
+                code,
+                err.log_safe_display()
+            );
+            Err(err.with_other())
         }
     }
-    result
 }
 
 impl<E> From<tonic::Status> for RequestError<E> {
@@ -166,7 +173,7 @@ impl<E> From<tonic::Status> for RequestError<E> {
                     }
                     .into();
                 }
-                // TODO: also handle challenges here?
+                // Fall through to the "unexpected" case.
             }
             tonic::Code::Ok => {
                 return RequestError::Unexpected {
@@ -345,6 +352,47 @@ fn matching_details<M: Default + prost::Name>(
         })
 }
 
+impl TryFrom<ChallengeRequiredProto> for RateLimitChallenge {
+    type Error = RequestError<std::convert::Infallible>;
+
+    fn try_from(value: ChallengeRequiredProto) -> Result<Self, Self::Error> {
+        use libsignal_net_grpc::proto::chat::messages::challenge_required;
+
+        let ChallengeRequiredProto {
+            token,
+            challenge_options,
+            retry_after_seconds,
+        } = value;
+
+        Ok(RateLimitChallenge {
+            token,
+            options: challenge_options
+                .into_iter()
+                .map(|raw_option| {
+                    match challenge_required::ChallengeType::try_from(raw_option)
+                        .unwrap_or_default()
+                    {
+                        challenge_required::ChallengeType::Unspecified => {
+                            Err(RequestError::Unexpected {
+                                log_safe: format!(
+                                    "unspecified or unknown challenge option ({raw_option})"
+                                ),
+                            })
+                        }
+                        challenge_required::ChallengeType::Captcha => Ok(ChallengeOption::Captcha),
+                        challenge_required::ChallengeType::PushChallenge => {
+                            Ok(ChallengeOption::PushChallenge)
+                        }
+                    }
+                })
+                .try_collect()?,
+            retry_later: retry_after_seconds.map(|seconds| RetryLater {
+                retry_after_seconds: seconds.try_into().unwrap_or(u32::MAX),
+            }),
+        })
+    }
+}
+
 impl std::fmt::Display for Redact<libsignal_net_grpc::proto::chat::common::ServiceIdentifier> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0.try_as_service_id() {
@@ -366,6 +414,7 @@ pub(crate) mod testutil {
     use tonic::Status;
 
     use super::*;
+    use crate::api::testutil::TEST_SELF_ACI;
     use crate::ws::WsConnection;
 
     pub(crate) fn req(uri: &str, body: impl prost::Message + 'static) -> http::Request<Vec<u8>> {
@@ -382,6 +431,10 @@ pub(crate) mod testutil {
         .to_bytes()
         .into();
 
+        req_typed(uri, body)
+    }
+
+    pub(crate) fn req_typed<T>(uri: &str, body: T) -> http::Request<T> {
         http::Request::builder()
             .method(http::Method::POST)
             .header(
@@ -415,11 +468,15 @@ pub(crate) mod testutil {
         Status::new(code, "").into_http()
     }
 
-    pub(crate) struct GrpcOverrideRequestValidator {
-        pub(crate) validator: RequestValidator,
+    pub(crate) struct GrpcOverrideRequestValidator<V> {
+        pub(crate) validator: V,
         pub(crate) message: &'static str,
     }
-    impl WsConnection for GrpcOverrideRequestValidator {
+    impl<V> WsConnection for GrpcOverrideRequestValidator<V>
+    where
+        V: Send + Sync,
+        for<'a> &'a V: GrpcServiceProvider,
+    {
         async fn send(
             &self,
             _log_tag: &'static str,
@@ -429,12 +486,16 @@ pub(crate) mod testutil {
             panic!("We should be only sending grpc here");
         }
 
-        async fn grpc_service_to_use_instead(
+        fn grpc_service_to_use_instead(
             &self,
             message: &'static str,
         ) -> Option<impl GrpcServiceProvider> {
             assert_eq!(message, self.message);
             Some(&self.validator)
+        }
+
+        fn self_aci(&self) -> Option<libsignal_core::Aci> {
+            Some(TEST_SELF_ACI)
         }
     }
 
@@ -483,6 +544,53 @@ pub(crate) mod testutil {
 
     static_assertions::assert_impl_all!(&'_ RequestValidator: GrpcService);
 
+    /// Like `RequestValidator`, but compares the decoded protobuf of the incoming request instead
+    /// of the serialized bytes.
+    ///
+    /// Prefer `RequestValidator`
+    pub(crate) struct TypedRequestValidator<T> {
+        pub expected: http::Request<T>,
+        pub response: http::Response<Vec<u8>>,
+    }
+
+    impl<T> tower_service::Service<http::Request<tonic::body::Body>> for &'_ TypedRequestValidator<T>
+    where
+        T: MessageExt + PartialEq + std::fmt::Debug,
+    {
+        type Response = http::Response<http_body_util::Full<bytes::Bytes>>;
+
+        type Error = hyper::Error;
+
+        type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+        fn poll_ready(
+            &mut self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, req: http::Request<tonic::body::Body>) -> Self::Future {
+            let (parts, body) = req.into_parts();
+            let body = body
+                .collect()
+                .now_or_never()
+                .expect("non-blocking requests for testing")
+                .expect("can read entire body")
+                .to_bytes();
+            pretty_assertions::assert_eq!(self.expected.uri(), &parts.uri, "uri");
+            pretty_assertions::assert_eq!(self.expected.method(), &parts.method, "method");
+            pretty_assertions::assert_eq!(self.expected.headers(), &parts.headers, "headers");
+
+            let actual_body = T::decode_single_grpc_body(body).unwrap_or_else(|e| {
+                panic!("body is not a valid {}: {}", std::any::type_name::<T>(), e)
+            });
+            pretty_assertions::assert_eq!(self.expected.body(), &actual_body, "body");
+
+            std::future::ready(Ok(self.response.clone().map(|body| body.into())))
+        }
+    }
+
     /// A protoscope-like helper type for decoding arbitrary protobuf messages.
     ///
     /// Always succeeds as long as the input is not malformed. Only intended for debugging.
@@ -500,12 +608,18 @@ pub(crate) mod testutil {
         Nested(DynMessage),
     }
 
-    impl DynMessage {
+    trait MessageExt: Sized {
+        fn decode_single_grpc_body(
+            body: impl bytes::Buf + Send + 'static,
+        ) -> Result<Self, tonic::Status>;
+    }
+
+    impl<T: prost::Message + Default + 'static> MessageExt for T {
         /// Given a gRPC HTTP body, decode a single request message from it.
         fn decode_single_grpc_body(
             body: impl bytes::Buf + Send + 'static,
         ) -> Result<Self, tonic::Status> {
-            let decoder = tonic_prost::ProstDecoder::<DynMessage>::default();
+            let decoder = tonic_prost::ProstDecoder::<Self>::default();
             let mut streaming = tonic::codec::Streaming::new_request(
                 decoder,
                 http_body_util::Full::new(body),
@@ -892,9 +1006,45 @@ mod test {
         };
         assert_matches!(
             RequestError::<Infallible>::from(tonic::Status::from_error(Box::new(
-                Http2TransportError(hyper_err)
+                Http2TransportError::Hyper(hyper_err)
             ))),
             RequestError::Disconnected(DisconnectedError::Transport { log_safe: _ })
         );
+    }
+
+    #[test_case(ChallengeRequiredProto {
+        token: "".into(),
+        challenge_options: vec![],
+        retry_after_seconds: None,
+    } => matches Ok(RateLimitChallenge { token, options, retry_later: None }) if token.is_empty() && options.is_empty())]
+    #[test_case(ChallengeRequiredProto {
+        token: "abc".into(),
+        challenge_options: vec![],
+        retry_after_seconds: None,
+    } => matches Ok(RateLimitChallenge { token, options, retry_later: None }) if token == "abc" && options.is_empty())]
+    #[test_case(ChallengeRequiredProto {
+        token: "abc".into(),
+        challenge_options: vec![],
+        retry_after_seconds: Some(3),
+    } => matches Ok(RateLimitChallenge { token, options, retry_later: Some(RetryLater { retry_after_seconds: 3 }) }) if token == "abc" && options.is_empty())]
+    #[test_case(ChallengeRequiredProto {
+        token: "abc".into(),
+        challenge_options: vec![2, 1],
+        retry_after_seconds: None,
+    } => matches Ok(RateLimitChallenge { token, options, retry_later: None }) if token == "abc" && options == [ChallengeOption::PushChallenge, ChallengeOption::Captcha])]
+    #[test_case(ChallengeRequiredProto {
+        token: "abc".into(),
+        challenge_options: vec![2, 1, 0],
+        retry_after_seconds: None,
+    } => matches Err(RequestError::Unexpected { .. }))]
+    #[test_case(ChallengeRequiredProto {
+        token: "abc".into(),
+        challenge_options: vec![1, 50, 2],
+        retry_after_seconds: None,
+    } => matches Err(RequestError::Unexpected { .. }))]
+    fn test_challenge_required(
+        input: ChallengeRequiredProto,
+    ) -> Result<RateLimitChallenge, RequestError<Infallible>> {
+        RateLimitChallenge::try_from(input)
     }
 }

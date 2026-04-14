@@ -361,6 +361,7 @@ fn SignalMessage_New(
     SignalMessage::new(
         message_version,
         mac_key,
+        None,
         *sender_ratchet_key,
         counter,
         previous_counter,
@@ -1030,6 +1031,7 @@ async fn SessionBuilder_ProcessPreKeyBundle(
 async fn SessionCipher_EncryptMessage(
     ptext: &[u8],
     protocol_address: &ProtocolAddress,
+    local_address: &ProtocolAddress,
     session_store: &mut dyn SessionStore,
     identity_key_store: &mut dyn IdentityKeyStore,
     now: Timestamp,
@@ -1038,6 +1040,7 @@ async fn SessionCipher_EncryptMessage(
     message_encrypt(
         ptext,
         protocol_address,
+        local_address,
         session_store,
         identity_key_store,
         now.into(),
@@ -1068,6 +1071,7 @@ async fn SessionCipher_DecryptSignalMessage(
 async fn SessionCipher_DecryptPreKeySignalMessage(
     message: &PreKeySignalMessage,
     protocol_address: &ProtocolAddress,
+    local_address: &ProtocolAddress,
     session_store: &mut dyn SessionStore,
     identity_key_store: &mut dyn IdentityKeyStore,
     prekey_store: &mut dyn PreKeyStore,
@@ -1078,6 +1082,7 @@ async fn SessionCipher_DecryptPreKeySignalMessage(
     message_decrypt_prekey(
         message,
         protocol_address,
+        local_address,
         session_store,
         identity_key_store,
         prekey_store,

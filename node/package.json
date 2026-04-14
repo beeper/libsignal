@@ -1,6 +1,6 @@
 {
   "name": "@signalapp/libsignal-client",
-  "version": "0.89.1",
+  "version": "0.92.1",
   "repository": "github:signalapp/libsignal",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -34,8 +34,7 @@
   },
   "dependencies": {
     "node-gyp-build": "^4.8.0",
-    "type-fest": "^4.26.0",
-    "uuid": "^11"
+    "type-fest": "^4.26.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",

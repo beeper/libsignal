@@ -24,6 +24,13 @@ export type RequestOptions = {
   abortSignal?: AbortSignal;
 };
 
+export type UploadForm = {
+  cdn: number;
+  key: string;
+  headers: Map<string, string>;
+  signedUploadUrl: URL;
+};
+
 type ConnectionManager = Native.Wrapper<Native.ConnectionManager>;
 
 export class ChatServerMessageAck {
@@ -345,8 +352,8 @@ export class AuthenticatedChatConnection implements ChatConnection {
   }
 
   private constructor(
-    private readonly asyncContext: TokioAsyncContext,
-    private readonly chatService: Native.Wrapper<Native.AuthenticatedChatConnection>,
+    protected readonly asyncContext: TokioAsyncContext,
+    protected readonly chatService: Native.Wrapper<Native.AuthenticatedChatConnection>,
     // Unused except to keep the listener alive since the Rust code only holds a
     // weak reference to the same object.
     private readonly chatListener: Native.ChatListener
