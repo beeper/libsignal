@@ -153,6 +153,7 @@ jobs:
           export CMAKE_TOOLCHAIN_FILE="$(pwd)/boring-sys-win-x64.cmake"
 
           export BINDGEN_EXTRA_CLANG_ARGS="--target=x86_64-pc-windows-gnu"
+          export RUSTFLAGS="-A unused"
         fi
 
         rustup target add ${{ matrix.target }}
