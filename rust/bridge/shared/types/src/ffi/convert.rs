@@ -31,8 +31,8 @@ use crate::net::registration::{
     ConnectChatBridge, RegistrationCreateSessionRequest, RegistrationPushToken,
 };
 use crate::protocol::storage::{
-    FfiBridgeIdentityKeyStoreStruct, FfiBridgeKyberPreKeyStoreStruct, FfiBridgePreKeyStoreStruct,
-    FfiBridgeSenderKeyStoreStruct, FfiBridgeSessionStoreStruct, FfiBridgeSignedPreKeyStoreStruct,
+    FfiIdentityKeyStoreStruct, FfiKyberPreKeyStoreStruct, FfiPreKeyStoreStruct,
+    FfiSenderKeyStoreStruct, FfiSessionStoreStruct, FfiSignedPreKeyStoreStruct,
 };
 use crate::support::{
     AsType, BridgedCallbacks, FixedLengthBincodeSerializable, IllegalArgumentError, Serialized,
@@ -251,6 +251,18 @@ impl<'a> ArgTypeInfo<'a> for Vec<&'a [u8]> {
     }
 }
 
+impl SimpleArgTypeInfo for Vec<Vec<u8>> {
+    type ArgType = BorrowedSliceOf<BorrowedSliceOf<u8>>;
+
+    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+        let slices = unsafe { foreign.as_slice()? };
+        slices
+            .iter()
+            .map(|next| Ok(unsafe { next.as_slice()? }.to_vec()))
+            .collect()
+    }
+}
+
 impl<const LEN: usize> SimpleArgTypeInfo for &mut [u8; LEN] {
     type ArgType = *mut [u8; LEN];
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -460,6 +472,15 @@ impl SimpleArgTypeInfo for Box<[u8]> {
     }
 }
 
+impl SimpleArgTypeInfo for Box<[u32]> {
+    type ArgType = BorrowedSliceOf<u32>;
+
+    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+        let slice = unsafe { foreign.as_slice()? };
+        Ok(slice.into())
+    }
+}
+
 impl<const LEN: usize> SimpleArgTypeInfo for &'_ [u8; LEN] {
     type ArgType = *const [u8; LEN];
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -545,8 +566,8 @@ macro_rules! bridge_trait {
     ($name:ident) => {
         paste! {
             impl<'a> ArgTypeInfo<'a> for &'a mut dyn $name {
-                type ArgType = crate::ffi::ConstPointer< [<FfiBridge $name Struct >] >;
-                type StoredType = BridgedCallbacks<OwnedCallbackStruct< [<FfiBridge $name Struct >] >>;
+                type ArgType = crate::ffi::ConstPointer< [<Ffi $name Struct >] >;
+                type StoredType = BridgedCallbacks<OwnedCallbackStruct< [<Ffi $name Struct >] >>;
                 #[allow(clippy::not_unsafe_ptr_arg_deref)]
                 fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
                     match unsafe { foreign.into_inner().as_ref() } {
@@ -998,7 +1019,9 @@ impl<T: BridgeHandle> SimpleArgTypeInfo for &mut T {
 
 impl<'a, T: BridgeHandle> ArgTypeInfo<'a> for &'a [&'a T] {
     type ArgType = BorrowedSliceOf<ConstPointer<T>>;
-    type StoredType = Self::ArgType;
+    // SAFETY: This `'static` depends entirely on the original argument outliving the uses.
+    // That's the intent for `BorrowedSliceOf`, but it's a subtle requirement for async code!
+    type StoredType = BorrowedSliceOf<&'static T>;
     fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
         // Check preconditions up front.
         let slice_of_pointers = unsafe { foreign.as_slice() }?;
@@ -1008,18 +1031,15 @@ impl<'a, T: BridgeHandle> ArgTypeInfo<'a> for &'a [&'a T] {
             return Err(NullPointerError.into());
         }
 
-        Ok(foreign)
+        let base_ptr_for_slice_of_refs = foreign.base.cast::<&'static T>();
+
+        Ok(BorrowedSliceOf {
+            base: base_ptr_for_slice_of_refs,
+            length: foreign.length,
+        })
     }
-    fn load_from(input: &'a mut Self::ArgType) -> Self {
-        if input.base.is_null() {
-            // Early-exit so that we don't construct a slice with a NULL base later.
-            // Note that we already checked that the length is 0 by using slice_of_pointers above.
-            return &[];
-        }
-
-        let base_ptr_for_slice_of_refs = input.base as *const &T;
-
-        unsafe { std::slice::from_raw_parts(base_ptr_for_slice_of_refs, input.length) }
+    fn load_from(input: &'a mut Self::StoredType) -> Self {
+        unsafe { input.as_slice() }.expect("already checked")
     }
 }
 
@@ -1428,6 +1448,7 @@ macro_rules! ffi_arg_type {
     (&mut [u8]) => (ffi::BorrowedMutableSliceOf<std::ffi::c_uchar>);
     (ServiceIdSequence<'_>) => (ffi::BorrowedSliceOf<std::ffi::c_uchar>);
     (Vec<&[u8]>) => (ffi::BorrowedSliceOf<ffi_arg_type!(&[u8])>);
+    (Vec<Vec<u8> >) => (ffi::BorrowedSliceOf<ffi_arg_type!(&[u8])>);
     (String) => (*const std::ffi::c_char);
     (Option<String>) => (*const std::ffi::c_char);
     (Option<&str>) => (*const std::ffi::c_char);
@@ -1458,6 +1479,7 @@ macro_rules! ffi_arg_type {
     (Box<[String]>) => (ffi::BorrowedBytestringArray);
     (LanguageList) => (ffi::BorrowedBytestringArray);
     (Box<[u8]>) => (ffi::BorrowedSliceOf<std::ffi::c_uchar>);
+    (Box<[u32]>) => (ffi::BorrowedSliceOf<u32>);
     (Box<dyn $typ:ty >) => (ffi::ConstPointer< ::paste::paste!(ffi::[<Ffi $typ Struct>]) >);
     (Option<Box<dyn $typ:ty> >) => (ffi::ConstPointer< ::paste::paste!(ffi::[<Ffi $typ Struct>]) >);
     (Option<Box<[u8]> >) => (ffi::OptionalBorrowedSliceOf<std::ffi::c_uchar>);
@@ -1511,6 +1533,10 @@ macro_rules! ffi_result_type {
     // Like Result, we can't use `:ty` here because we need the resulting tokens to be matched
     // recursively. We can at least match several tokens in the second component though.
     (($a:tt, $($b:tt)+)) => (ffi::PairOf<ffi_result_type!($a), ffi_result_type!($($b)+)>);
+    (($a:tt<$($aargs:tt),+>, $b:tt<$($bargs:tt),+>)) => (ffi::PairOf<
+        ffi_result_type!($a<$($aargs),+>),
+        ffi_result_type!($b<$($bargs),+>)
+    >);
     (Option<($a:tt, $($b:tt)+)>) => (ffi::OptionalPairOf<ffi_result_type!($a), ffi_result_type!($($b)+)>);
 
     (u8) => (u8);

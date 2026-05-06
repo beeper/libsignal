@@ -256,7 +256,7 @@ pub(crate) fn name_from_ident(ident: &Ident) -> String {
 ///
 /// The wrapper will be named "Node{MyTrait}" and will implement the original trait, as well as
 /// `neon::types::Finalize`.
-pub(crate) fn bridge_trait(trait_to_bridge: &ItemTrait) -> Result<TokenStream2> {
+pub(crate) fn bridge_trait(trait_to_bridge: &ItemTrait, js_name: &str) -> Result<TokenStream2> {
     let trait_name = &trait_to_bridge.ident;
     let wrapper_name = format_ident!("Node{}", trait_to_bridge.ident);
 
@@ -269,7 +269,7 @@ pub(crate) fn bridge_trait(trait_to_bridge: &ItemTrait) -> Result<TokenStream2> 
     let callback_ts_decls = callbacks.iter().map(|c| &c.ts_decl);
 
     let ts_declaration_comment = format!(
-        "ts: `export /*trait*/ type {trait_name} = {{\n{}\n}};`",
+        "ts: `export /*trait*/ type {js_name} = {{\n{}\n}};`",
         callback_ts_decls.format("\n")
     );
 
@@ -315,7 +315,6 @@ fn bridge_callback_item(item: &TraitItem) -> Result<Callback> {
     let sig = &item.sig;
     let req_name = &item.sig.ident;
     let js_operation_name = req_name.to_string().to_lower_camel_case();
-    let result_ty = result_type(&sig.output);
 
     // fn operation(foo: u32) {
     //     self.0.send_and_log_on_error("operation", move |cx, object| {
@@ -409,9 +408,16 @@ fn bridge_callback_item(item: &TraitItem) -> Result<Callback> {
     });
 
     let result_string = if sig.asyncness.is_some() {
+        let result_ty = result_type(&sig.output);
         format!("Promise<{result_ty}>")
     } else {
-        result_ty.to_string()
+        if !matches!(sig.output, ReturnType::Default) {
+            return Err(Error::new(
+                item.span(),
+                "non-async callbacks with results are not supported for Node",
+            ));
+        }
+        "void".to_owned()
     };
     let ts_decl = format!(
         "{}({}): {};",

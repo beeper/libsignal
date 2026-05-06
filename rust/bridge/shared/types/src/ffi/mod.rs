@@ -24,9 +24,12 @@ pub use futures::*;
 mod io;
 pub use io::*;
 
-mod storage;
-pub use storage::*;
-
+// TODO: This re-export is because of the ffi_arg_type macro expecting all bridging structs to be
+// under the ffi module; eventually we should be able to remove it.
+pub use crate::protocol::storage::{
+    FfiIdentityKeyStoreStruct, FfiKyberPreKeyStoreStruct, FfiPreKeyStoreStruct,
+    FfiSenderKeyStoreStruct, FfiSessionStoreStruct, FfiSignedPreKeyStoreStruct,
+};
 use crate::support::describe_panic;
 
 #[derive(Debug)]
@@ -51,6 +54,9 @@ impl<T> BorrowedSliceOf<T> {
         Ok(unsafe { std::slice::from_raw_parts(self.base, self.length) })
     }
 }
+
+unsafe impl<T> Send for BorrowedSliceOf<T> where for<'a> &'a [T]: Send {}
+unsafe impl<T> Sync for BorrowedSliceOf<T> where for<'a> &'a [T]: Sync {}
 
 #[repr(C)]
 pub struct BorrowedMutableSliceOf<T> {

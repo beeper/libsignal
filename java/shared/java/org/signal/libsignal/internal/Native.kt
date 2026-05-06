@@ -214,6 +214,10 @@ internal object Native {
   public external fun AuthenticatedChatConnection_preconnect(asyncRuntime: ObjectHandle, connectionManager: ObjectHandle): CompletableFuture<Void?>
   @JvmStatic
   public external fun AuthenticatedChatConnection_send(asyncRuntime: ObjectHandle, chat: ObjectHandle, httpRequest: ObjectHandle, timeoutMillis: Int): CompletableFuture<Object>
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_send_message_java(asyncRuntime: ObjectHandle, chat: ObjectHandle, destination: ByteArray, timestamp: Long, deviceIds: IntArray, registrationIds: IntArray, contents: Array<Object>, onlineOnly: Boolean, isUrgent: Boolean): CompletableFuture<Void?>
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_send_sync_message_java(asyncRuntime: ObjectHandle, chat: ObjectHandle, timestamp: Long, deviceIds: IntArray, registrationIds: IntArray, contents: Array<Object>, isUrgent: Boolean): CompletableFuture<Void?>
 
   @JvmStatic @Throws(Exception::class)
   public external fun BackupAuthCredentialPresentation_CheckValidContents(presentationBytes: ByteArray): Unit
@@ -619,9 +623,7 @@ internal object Native {
   @JvmStatic
   public external fun KeyTransparency_AciSearchKey(aci: ByteArray): ByteArray
   @JvmStatic
-  public external fun KeyTransparency_Check(asyncRuntime: ObjectHandle, environment: Int, chatConnection: ObjectHandle, aci: ByteArray, aciIdentityKey: ObjectHandle, e164: String?, unidentifiedAccessKey: ByteArray?, usernameHash: ByteArray?, accountData: ByteArray?, lastDistinguishedTreeHead: ByteArray, isSelfCheck: Boolean, isE164Discoverable: Boolean): CompletableFuture<ByteArray>
-  @JvmStatic
-  public external fun KeyTransparency_Distinguished(asyncRuntime: ObjectHandle, environment: Int, chatConnection: ObjectHandle, lastDistinguishedTreeHead: ByteArray?): CompletableFuture<ByteArray>
+  public external fun KeyTransparency_Check(asyncRuntime: ObjectHandle, environment: Int, chatConnection: ObjectHandle, aci: ByteArray, aciIdentityKey: ObjectHandle, e164: String?, unidentifiedAccessKey: ByteArray?, usernameHash: ByteArray?, accountData: ByteArray?, lastDistinguishedTreeHead: ByteArray?, isSelfCheck: Boolean, isE164Discoverable: Boolean): CompletableFuture<Pair<ByteArray, ByteArray>>
   @JvmStatic
   public external fun KeyTransparency_E164SearchKey(e164: String): ByteArray
   @JvmStatic
@@ -1177,12 +1179,12 @@ internal object Native {
   public external fun ServiceId_ServiceIdString(value: ByteArray): String
 
   @JvmStatic @Throws(Exception::class)
-  public external fun SessionBuilder_ProcessPreKeyBundle(bundle: ObjectHandle, protocolAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Long): Unit
+  public external fun SessionBuilder_ProcessPreKeyBundle(bundle: ObjectHandle, protocolAddress: ObjectHandle, localAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Long): Unit
 
   @JvmStatic @Throws(Exception::class)
   public external fun SessionCipher_DecryptPreKeySignalMessage(message: ObjectHandle, protocolAddress: ObjectHandle, localAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, prekeyStore: PreKeyStore, signedPrekeyStore: SignedPreKeyStore, kyberPrekeyStore: KyberPreKeyStore): ByteArray
   @JvmStatic @Throws(Exception::class)
-  public external fun SessionCipher_DecryptSignalMessage(message: ObjectHandle, protocolAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore): ByteArray
+  public external fun SessionCipher_DecryptSignalMessage(message: ObjectHandle, protocolAddress: ObjectHandle, localAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore): ByteArray
   @JvmStatic @Throws(Exception::class)
   public external fun SessionCipher_EncryptMessage(ptext: ByteArray, protocolAddress: ObjectHandle, localAddress: ObjectHandle, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Long): CiphertextMessage
 
@@ -1303,6 +1305,8 @@ internal object Native {
   public external fun UnauthenticatedChatConnection_look_up_username_link(asyncRuntime: ObjectHandle, chat: ObjectHandle, uuid: UUID, entropy: ByteArray): CompletableFuture<Pair<String, ByteArray>?>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_send(asyncRuntime: ObjectHandle, chat: ObjectHandle, httpRequest: ObjectHandle, timeoutMillis: Int): CompletableFuture<Object>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_send_message(asyncRuntime: ObjectHandle, chat: ObjectHandle, destination: ByteArray, timestamp: Long, deviceIds: IntArray, registrationIds: IntArray, contents: Array<ByteArray>, authKind: Int, authBuffer: ByteArray?, onlineOnly: Boolean, isUrgent: Boolean): CompletableFuture<Void?>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_send_multi_recipient_message(asyncRuntime: ObjectHandle, chat: ObjectHandle, payload: ByteArray, timestamp: Long, auth: ByteArray?, onlineOnly: Boolean, isUrgent: Boolean): CompletableFuture<Array<Object>>
 

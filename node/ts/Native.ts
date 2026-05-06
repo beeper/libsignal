@@ -63,15 +63,6 @@ export enum IdentityChange {
   ReplacedExisting = 1,
 }
 
-// TODO: Resolve the different names here.
-export type IdentityKeyStore = BridgeIdentityKeyStore;
-export type PreKeyStore = BridgePreKeyStore;
-export type SignedPreKeyStore = BridgeSignedPreKeyStore;
-export type KyberPreKeyStore = BridgeKyberPreKeyStore;
-export type SessionStore = BridgeSessionStore;
-export type SenderKeyStore = BridgeSenderKeyStore;
-export type InputStream = BridgeInputStream;
-
 export type SyncInputStream = Uint8Array<ArrayBuffer>;
 
 export type ChallengeOption = 'pushChallenge' | 'captcha';
@@ -313,9 +304,9 @@ type NativeFunctions = {
   SealedSenderDecryptionResult_GetSenderE164: (obj: Wrapper<SealedSenderDecryptionResult>) => string | null;
   SealedSenderDecryptionResult_GetDeviceId: (obj: Wrapper<SealedSenderDecryptionResult>) => number;
   SealedSenderDecryptionResult_Message: (obj: Wrapper<SealedSenderDecryptionResult>) => Uint8Array<ArrayBuffer>;
-  SessionBuilder_ProcessPreKeyBundle: (bundle: Wrapper<PreKeyBundle>, protocolAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Timestamp) => Promise<void>;
+  SessionBuilder_ProcessPreKeyBundle: (bundle: Wrapper<PreKeyBundle>, protocolAddress: Wrapper<ProtocolAddress>, localAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Timestamp) => Promise<void>;
   SessionCipher_EncryptMessage: (ptext: Uint8Array<ArrayBuffer>, protocolAddress: Wrapper<ProtocolAddress>, localAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, now: Timestamp) => Promise<CiphertextMessage>;
-  SessionCipher_DecryptSignalMessage: (message: Wrapper<SignalMessage>, protocolAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
+  SessionCipher_DecryptSignalMessage: (message: Wrapper<SignalMessage>, protocolAddress: Wrapper<ProtocolAddress>, localAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
   SessionCipher_DecryptPreKeySignalMessage: (message: Wrapper<PreKeySignalMessage>, protocolAddress: Wrapper<ProtocolAddress>, localAddress: Wrapper<ProtocolAddress>, sessionStore: SessionStore, identityKeyStore: IdentityKeyStore, prekeyStore: PreKeyStore, signedPrekeyStore: SignedPreKeyStore, kyberPrekeyStore: KyberPreKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
   SealedSender_Encrypt: (destination: Wrapper<ProtocolAddress>, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
   SealedSender_MultiRecipientEncrypt: (recipients: Wrapper<ProtocolAddress>[], recipientSessions: Wrapper<SessionRecord>[], excludedRecipients: Uint8Array<ArrayBuffer>, content: Wrapper<UnidentifiedSenderMessageContent>, identityKeyStore: IdentityKeyStore) => Promise<Uint8Array<ArrayBuffer>>;
@@ -490,6 +481,7 @@ type NativeFunctions = {
   UnauthenticatedChatConnection_look_up_username_hash: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, hash: Uint8Array<ArrayBuffer>) => CancellablePromise<Uuid | null>;
   UnauthenticatedChatConnection_look_up_username_link: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, uuid: Uuid, entropy: Uint8Array<ArrayBuffer>) => CancellablePromise<[string, Uint8Array<ArrayBuffer>] | null>;
   UnauthenticatedChatConnection_send_multi_recipient_message: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, payload: Uint8Array<ArrayBuffer>, timestamp: Timestamp, auth: Uint8Array<ArrayBuffer> | null, onlineOnly: boolean, isUrgent: boolean) => CancellablePromise<Uint8Array<ArrayBuffer>[]>;
+  UnauthenticatedChatConnection_send_message: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, destination: Uint8Array<ArrayBuffer>, timestamp: Timestamp, deviceIds: Uint32Array<ArrayBuffer>, registrationIds: Uint32Array<ArrayBuffer>, contents: Uint8Array<ArrayBuffer>[], authKind: number, authBuffer: Uint8Array<ArrayBuffer> | null, onlineOnly: boolean, isUrgent: boolean) => CancellablePromise<void>;
   AuthenticatedChatConnection_preconnect: (asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>) => CancellablePromise<void>;
   AuthenticatedChatConnection_connect: (asyncRuntime: Wrapper<TokioAsyncContext>, connectionManager: Wrapper<ConnectionManager>, username: string, password: string, receiveStories: boolean, languages: string[]) => CancellablePromise<AuthenticatedChatConnection>;
   AuthenticatedChatConnection_init_listener: (chat: Wrapper<AuthenticatedChatConnection>, listener: ChatListener) => void;
@@ -508,11 +500,12 @@ type NativeFunctions = {
   AuthenticatedChatConnection_get_upload_form: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<AuthenticatedChatConnection>, uploadLength: bigint) => CancellablePromise<UploadForm>;
   UnauthenticatedChatConnection_backup_get_upload_form: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, credential: Uint8Array<ArrayBuffer>, serverKeys: Uint8Array<ArrayBuffer>, signingKey: Wrapper<PrivateKey>, uploadSize: bigint, rng: RandomNumberGenerator) => CancellablePromise<UploadForm>;
   UnauthenticatedChatConnection_backup_get_media_upload_form: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<UnauthenticatedChatConnection>, credential: Uint8Array<ArrayBuffer>, serverKeys: Uint8Array<ArrayBuffer>, signingKey: Wrapper<PrivateKey>, uploadSize: bigint, rng: RandomNumberGenerator) => CancellablePromise<UploadForm>;
+  AuthenticatedChatConnection_send_message: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<AuthenticatedChatConnection>, destination: Uint8Array<ArrayBuffer>, timestamp: Timestamp, deviceIds: Uint32Array<ArrayBuffer>, registrationIds: Uint32Array<ArrayBuffer>, contents: Wrapper<CiphertextMessage>[], onlineOnly: boolean, isUrgent: boolean) => CancellablePromise<void>;
+  AuthenticatedChatConnection_send_sync_message: (asyncRuntime: Wrapper<TokioAsyncContext>, chat: Wrapper<AuthenticatedChatConnection>, timestamp: Timestamp, deviceIds: Uint32Array<ArrayBuffer>, registrationIds: Uint32Array<ArrayBuffer>, contents: Wrapper<CiphertextMessage>[], isUrgent: boolean) => CancellablePromise<void>;
   KeyTransparency_AciSearchKey: (aci: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
   KeyTransparency_E164SearchKey: (e164: string) => Uint8Array<ArrayBuffer>;
   KeyTransparency_UsernameHashSearchKey: (hash: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
-  KeyTransparency_Check: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array<ArrayBuffer>, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array<ArrayBuffer> | null, usernameHash: Uint8Array<ArrayBuffer> | null, accountData: Uint8Array<ArrayBuffer> | null, lastDistinguishedTreeHead: Uint8Array<ArrayBuffer>, isSelfCheck: boolean, isE164Discoverable: boolean) => CancellablePromise<Uint8Array<ArrayBuffer>>;
-  KeyTransparency_Distinguished: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, lastDistinguishedTreeHead: Uint8Array<ArrayBuffer> | null) => CancellablePromise<Uint8Array<ArrayBuffer>>;
+  KeyTransparency_Check: (asyncRuntime: Wrapper<TokioAsyncContext>, environment: number, chatConnection: Wrapper<UnauthenticatedChatConnection>, aci: Uint8Array<ArrayBuffer>, aciIdentityKey: Wrapper<PublicKey>, e164: string | null, unidentifiedAccessKey: Uint8Array<ArrayBuffer> | null, usernameHash: Uint8Array<ArrayBuffer> | null, accountData: Uint8Array<ArrayBuffer> | null, lastDistinguishedTreeHead: Uint8Array<ArrayBuffer> | null, isSelfCheck: boolean, isE164Discoverable: boolean) => CancellablePromise<[Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>]>;
   RegistrationService_CreateSession: (asyncRuntime: Wrapper<TokioAsyncContext>, createSession: RegistrationCreateSessionRequest, connectChat: ConnectChatBridge) => CancellablePromise<RegistrationService>;
   RegistrationService_ResumeSession: (asyncRuntime: Wrapper<TokioAsyncContext>, sessionId: string, number: string, connectChat: ConnectChatBridge) => CancellablePromise<RegistrationService>;
   RegistrationService_RequestVerificationCode: (asyncRuntime: Wrapper<TokioAsyncContext>, service: Wrapper<RegistrationService>, transport: string, client: string, languages: string[]) => CancellablePromise<void>;
@@ -565,6 +558,12 @@ type NativeFunctions = {
   ConnectionManager_set_censorship_circumvention_enabled: (connectionManager: Wrapper<ConnectionManager>, enabled: boolean) => void;
   ConnectionManager_set_remote_config: (connectionManager: Wrapper<ConnectionManager>, remoteConfig: Wrapper<BridgedStringMap>, buildVariant: number) => void;
   ConnectionManager_on_network_change: (connectionManager: Wrapper<ConnectionManager>) => void;
+  PinHash_EncryptionKey: (ph: Wrapper<PinHash>) => Uint8Array<ArrayBuffer>;
+  PinHash_AccessKey: (ph: Wrapper<PinHash>) => Uint8Array<ArrayBuffer>;
+  PinHash_FromSalt: (pin: Uint8Array<ArrayBuffer>, salt: Uint8Array<ArrayBuffer>) => PinHash;
+  PinHash_FromUsernameMrenclave: (pin: Uint8Array<ArrayBuffer>, username: string, mrenclave: Uint8Array<ArrayBuffer>) => PinHash;
+  Pin_LocalHash: (pin: Uint8Array<ArrayBuffer>) => string;
+  Pin_VerifyLocalHash: (encodedHash: string, pin: Uint8Array<ArrayBuffer>) => boolean;
   AccountEntropyPool_Generate: () => string;
   AccountEntropyPool_IsValid: (accountEntropy: string) => boolean;
   AccountEntropyPool_DeriveSvrKey: (accountEntropy: AccountEntropyPool) => Uint8Array<ArrayBuffer>;
@@ -575,6 +574,7 @@ type NativeFunctions = {
   BackupKey_DeriveMediaId: (backupKey: Uint8Array<ArrayBuffer>, mediaName: string) => Uint8Array<ArrayBuffer>;
   BackupKey_DeriveMediaEncryptionKey: (backupKey: Uint8Array<ArrayBuffer>, mediaId: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
   BackupKey_DeriveThumbnailTransitEncryptionKey: (backupKey: Uint8Array<ArrayBuffer>, mediaId: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
+  Svr2Client_New: (mrenclave: Uint8Array<ArrayBuffer>, attestationMsg: Uint8Array<ArrayBuffer>, currentTimestamp: Timestamp) => SgxClientState;
   IncrementalMac_CalculateChunkSize: (dataSize: number) => number;
   IncrementalMac_Initialize: (key: Uint8Array<ArrayBuffer>, chunkSize: number) => IncrementalMac;
   IncrementalMac_Update: (mac: Wrapper<IncrementalMac>, bytes: Uint8Array<ArrayBuffer>, offset: number, length: number) => Uint8Array<ArrayBuffer>;
@@ -1051,6 +1051,7 @@ const { registerErrors,
   UnauthenticatedChatConnection_look_up_username_hash,
   UnauthenticatedChatConnection_look_up_username_link,
   UnauthenticatedChatConnection_send_multi_recipient_message,
+  UnauthenticatedChatConnection_send_message,
   AuthenticatedChatConnection_preconnect,
   AuthenticatedChatConnection_connect,
   AuthenticatedChatConnection_init_listener,
@@ -1069,11 +1070,12 @@ const { registerErrors,
   AuthenticatedChatConnection_get_upload_form,
   UnauthenticatedChatConnection_backup_get_upload_form,
   UnauthenticatedChatConnection_backup_get_media_upload_form,
+  AuthenticatedChatConnection_send_message,
+  AuthenticatedChatConnection_send_sync_message,
   KeyTransparency_AciSearchKey,
   KeyTransparency_E164SearchKey,
   KeyTransparency_UsernameHashSearchKey,
   KeyTransparency_Check,
-  KeyTransparency_Distinguished,
   RegistrationService_CreateSession,
   RegistrationService_ResumeSession,
   RegistrationService_RequestVerificationCode,
@@ -1126,6 +1128,12 @@ const { registerErrors,
   ConnectionManager_set_censorship_circumvention_enabled,
   ConnectionManager_set_remote_config,
   ConnectionManager_on_network_change,
+  PinHash_EncryptionKey,
+  PinHash_AccessKey,
+  PinHash_FromSalt,
+  PinHash_FromUsernameMrenclave,
+  Pin_LocalHash,
+  Pin_VerifyLocalHash,
   AccountEntropyPool_Generate,
   AccountEntropyPool_IsValid,
   AccountEntropyPool_DeriveSvrKey,
@@ -1136,6 +1144,7 @@ const { registerErrors,
   BackupKey_DeriveMediaId,
   BackupKey_DeriveMediaEncryptionKey,
   BackupKey_DeriveThumbnailTransitEncryptionKey,
+  Svr2Client_New,
   IncrementalMac_CalculateChunkSize,
   IncrementalMac_Initialize,
   IncrementalMac_Update,
@@ -1614,6 +1623,7 @@ export { registerErrors,
   UnauthenticatedChatConnection_look_up_username_hash,
   UnauthenticatedChatConnection_look_up_username_link,
   UnauthenticatedChatConnection_send_multi_recipient_message,
+  UnauthenticatedChatConnection_send_message,
   AuthenticatedChatConnection_preconnect,
   AuthenticatedChatConnection_connect,
   AuthenticatedChatConnection_init_listener,
@@ -1632,11 +1642,12 @@ export { registerErrors,
   AuthenticatedChatConnection_get_upload_form,
   UnauthenticatedChatConnection_backup_get_upload_form,
   UnauthenticatedChatConnection_backup_get_media_upload_form,
+  AuthenticatedChatConnection_send_message,
+  AuthenticatedChatConnection_send_sync_message,
   KeyTransparency_AciSearchKey,
   KeyTransparency_E164SearchKey,
   KeyTransparency_UsernameHashSearchKey,
   KeyTransparency_Check,
-  KeyTransparency_Distinguished,
   RegistrationService_CreateSession,
   RegistrationService_ResumeSession,
   RegistrationService_RequestVerificationCode,
@@ -1689,6 +1700,12 @@ export { registerErrors,
   ConnectionManager_set_censorship_circumvention_enabled,
   ConnectionManager_set_remote_config,
   ConnectionManager_on_network_change,
+  PinHash_EncryptionKey,
+  PinHash_AccessKey,
+  PinHash_FromSalt,
+  PinHash_FromUsernameMrenclave,
+  Pin_LocalHash,
+  Pin_VerifyLocalHash,
   AccountEntropyPool_Generate,
   AccountEntropyPool_IsValid,
   AccountEntropyPool_DeriveSvrKey,
@@ -1699,6 +1716,7 @@ export { registerErrors,
   BackupKey_DeriveMediaId,
   BackupKey_DeriveMediaEncryptionKey,
   BackupKey_DeriveThumbnailTransitEncryptionKey,
+  Svr2Client_New,
   IncrementalMac_CalculateChunkSize,
   IncrementalMac_Initialize,
   IncrementalMac_Update,
@@ -1833,7 +1851,7 @@ export { registerErrors,
 
 /* eslint-disable comma-dangle */
 export const enum LogLevel { Error = 1, Warn, Info, Debug, Trace }
-export /*trait*/ type BridgeInputStream = {
+export /*trait*/ type InputStream = {
   read: (amount: number) => Promise<Uint8Array<ArrayBuffer>>;
   skip: (amount: bigint) => Promise<void>;
 };
@@ -1866,36 +1884,36 @@ export interface RegisterAccountResponse { readonly __type: unique symbol; }
 export interface RegistrationAccountAttributes { readonly __type: unique symbol; }
 export interface BackupStoreResponse { readonly __type: unique symbol; }
 export interface BackupRestoreResponse { readonly __type: unique symbol; }
-export const NetRemoteConfigKeys = ['chatRequestConnectionCheckTimeoutMillis', 'useH2ForUnauthChat', 'useH2ForAuthChat', 'grpc.AccountsAnonymousLookupUsernameHash', 'grpc.AccountsAnonymousLookupUsernameLink.2', 'grpc.AccountsAnonymousCheckAccountExistence.2', 'grpc.MessagesAnonymousSendMultiRecipientMessage.2', 'grpc.AttachmentsGetUploadForm', ] as const;
+export const NetRemoteConfigKeys = ['chatRequestConnectionCheckTimeoutMillis', 'useH2ForUnauthChat', 'useH2ForAuthChat', 'grpc.AccountsAnonymousLookupUsernameHash', 'grpc.AccountsAnonymousLookupUsernameLink.2', 'grpc.AccountsAnonymousCheckAccountExistence.2', 'grpc.MessagesAnonymousSendMultiRecipientMessage.2', 'grpc.MessagesAnonymousSendSingleRecipientMessage', 'grpc.AttachmentsGetUploadForm', 'grpc.MessagesSendMessage', ] as const;
 export interface TokioAsyncContext { readonly __type: unique symbol; }
 export interface ConnectionManager { readonly __type: unique symbol; }
 export interface ConnectionProxyConfig { readonly __type: unique symbol; }
-export /*trait*/ type BridgeIdentityKeyStore = {
+export /*trait*/ type IdentityKeyStore = {
   getLocalIdentityKeyPair: () => Promise<[PrivateKey, PublicKey]>;
   getLocalRegistrationId: () => Promise<number>;
   getIdentityKey: (address: ProtocolAddress) => Promise<PublicKey | null>;
   saveIdentityKey: (address: ProtocolAddress, publicKey: PublicKey) => Promise<number>;
   isTrustedIdentity: (address: ProtocolAddress, publicKey: PublicKey, direction: number) => Promise<boolean>;
 };
-export /*trait*/ type BridgePreKeyStore = {
+export /*trait*/ type PreKeyStore = {
   loadPreKey: (id: number) => Promise<PreKeyRecord | null>;
   storePreKey: (id: number, record: PreKeyRecord) => Promise<void>;
   removePreKey: (id: number) => Promise<void>;
 };
-export /*trait*/ type BridgeSignedPreKeyStore = {
+export /*trait*/ type SignedPreKeyStore = {
   loadSignedPreKey: (id: number) => Promise<SignedPreKeyRecord | null>;
   storeSignedPreKey: (id: number, record: SignedPreKeyRecord) => Promise<void>;
 };
-export /*trait*/ type BridgeKyberPreKeyStore = {
+export /*trait*/ type KyberPreKeyStore = {
   loadKyberPreKey: (id: number) => Promise<KyberPreKeyRecord | null>;
   storeKyberPreKey: (id: number, record: KyberPreKeyRecord) => Promise<void>;
   markKyberPreKeyUsed: (id: number, ecPrekeyId: number, baseKey: PublicKey) => Promise<void>;
 };
-export /*trait*/ type BridgeSessionStore = {
+export /*trait*/ type SessionStore = {
   loadSession: (address: ProtocolAddress) => Promise<SessionRecord | null>;
   storeSession: (address: ProtocolAddress, record: SessionRecord) => Promise<void>;
 };
-export /*trait*/ type BridgeSenderKeyStore = {
+export /*trait*/ type SenderKeyStore = {
   loadSenderKey: (sender: ProtocolAddress, distributionId: Uuid) => Promise<SenderKeyRecord | null>;
   storeSenderKey: (sender: ProtocolAddress, distributionId: Uuid, record: SenderKeyRecord) => Promise<void>;
 };
@@ -1942,6 +1960,7 @@ export interface ReceiptCredentialResponse { readonly __type: unique symbol; }
 export interface UuidCiphertext { readonly __type: unique symbol; }
 export interface ServerPublicParams { readonly __type: unique symbol; }
 export interface ServerSecretParams { readonly __type: unique symbol; }
+export interface PinHash { readonly __type: unique symbol; }
 export interface IncrementalMac { readonly __type: unique symbol; }
 export interface ValidatingMac { readonly __type: unique symbol; }
 export interface MessageBackupKey { readonly __type: unique symbol; }

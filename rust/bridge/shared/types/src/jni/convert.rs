@@ -461,6 +461,28 @@ impl<'a> SimpleArgTypeInfo<'a> for Box<[u8]> {
     }
 }
 
+/// Copies from `int[]` into `Box<[u32]>`, reinterpreting negative values as large positive values.
+///
+/// Note that this is different from the implementation of [`ArgTypeInfo`] for plain `u32`.
+impl<'a> SimpleArgTypeInfo<'a> for Box<[u32]> {
+    type ArgType = JIntArray<'a>;
+
+    fn convert_from(
+        env: &mut JNIEnv<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        let len = env
+            .get_array_length(foreign)
+            .check_exceptions(env, "Box<[u32]>::convert_from")?
+            .try_into()
+            .expect("length fits in a usize");
+        let mut vec = vec![0; len];
+        env.get_int_array_region(foreign, 0, zerocopy::transmute_mut!(&mut vec[..]))
+            .check_exceptions(env, "Box<[u32]>::convert_from")?;
+        Ok(vec.into_boxed_slice())
+    }
+}
+
 impl<'a> SimpleArgTypeInfo<'a> for Box<[String]> {
     type ArgType = JObjectArray<'a>;
 
@@ -668,162 +690,72 @@ impl<'a> SimpleArgTypeInfo<'a> for Vec<&'a [u8]> {
     }
 }
 
+impl<'a> SimpleArgTypeInfo<'a> for Vec<Vec<u8>> {
+    type ArgType = JObjectArray<'a>;
+
+    fn convert_from(
+        env: &mut JNIEnv<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        try_scoped(|| {
+            let len = env.get_array_length(foreign)?;
+            (0..len)
+                .map(|i| {
+                    let next = AutoLocal::new(
+                        JByteArray::from(env.get_object_array_element(foreign, i)?),
+                        env,
+                    );
+                    env.convert_byte_array(&next)
+                })
+                .collect()
+        })
+        .check_exceptions(env, "Vec<Vec<u8>>::convert_from")
+    }
+}
+
 macro_rules! bridge_trait {
-    ($name:ident) => {
+    ($name:ident $(<$life:lifetime>)?, $load:expr) => {
         paste! {
             impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
                 for &'storage mut dyn $name
             {
                 type ArgType = JObject<'context>;
-                type StoredType = [<Jni $name>]<'storage>;
+                type StoredType = BridgedCallbacks<[<JniBridge $name>]$(<$life>)?>;
                 fn borrow(
                     env: &mut JNIEnv<'context>,
                     store: &'param Self::ArgType,
                 ) -> Result<Self::StoredType, BridgeLayerError> {
-                    Self::StoredType::new(env, store)
+                    Ok(BridgedCallbacks([<JniBridge $name>]::new(
+                        env, store,
+                    )?))
                 }
                 fn load_from(
                     stored: &'storage mut Self::StoredType,
                 ) -> Self {
-                    stored
-                }
-            }
-
-            impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
-                for Option<&'storage dyn $name>
-            {
-                type ArgType = JObject<'context>;
-                type StoredType = Option<[<Jni $name>]<'storage>>;
-                fn borrow(
-                    env: &mut JNIEnv<'context>,
-                    store: &'param Self::ArgType,
-                ) -> Result<Self::StoredType, BridgeLayerError> {
-                    if store.is_null() {
-                        Ok(None)
-                    } else {
-                        Ok(Some([<Jni $name>]::new(env, store)?))
-                    }
-                }
-                fn load_from(
-                    stored: &'storage mut Self::StoredType,
-                ) -> Self {
-                    stored.as_ref().map(|x| x as &'storage dyn $name)
+                    ($load)(stored)
                 }
             }
         }
     };
+    ($name:ident) => {
+        bridge_trait!($name, std::convert::identity);
+    };
 }
 
-// bridge_trait!(IdentityKeyStore);
-// bridge_trait!(PreKeyStore);
-// bridge_trait!(SenderKeyStore);
-// bridge_trait!(SessionStore);
-// bridge_trait!(SignedPreKeyStore);
-// bridge_trait!(KyberPreKeyStore);
-bridge_trait!(InputStream);
-bridge_trait!(SyncInputStream);
-
-impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
-    for &'storage mut dyn IdentityKeyStore
-{
-    type ArgType = JObject<'context>;
-    type StoredType = BridgedCallbacks<JniBridgeIdentityKeyStore>;
-    fn borrow(
-        env: &mut JNIEnv<'context>,
-        store: &'param Self::ArgType,
-    ) -> Result<Self::StoredType, BridgeLayerError> {
-        Ok(BridgedCallbacks(JniBridgeIdentityKeyStore::new(
-            env, store,
-        )?))
-    }
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
-    for &'storage mut dyn PreKeyStore
-{
-    type ArgType = JObject<'context>;
-    type StoredType = BridgedCallbacks<JniBridgePreKeyStore>;
-    fn borrow(
-        env: &mut JNIEnv<'context>,
-        store: &'param Self::ArgType,
-    ) -> Result<Self::StoredType, BridgeLayerError> {
-        Ok(BridgedCallbacks(JniBridgePreKeyStore::new(env, store)?))
-    }
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
-    for &'storage mut dyn SignedPreKeyStore
-{
-    type ArgType = JObject<'context>;
-    type StoredType = BridgedCallbacks<JniBridgeSignedPreKeyStore>;
-    fn borrow(
-        env: &mut JNIEnv<'context>,
-        store: &'param Self::ArgType,
-    ) -> Result<Self::StoredType, BridgeLayerError> {
-        Ok(BridgedCallbacks(JniBridgeSignedPreKeyStore::new(
-            env, store,
-        )?))
-    }
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
-    for &'storage mut dyn KyberPreKeyStore
-{
-    type ArgType = JObject<'context>;
-    type StoredType = BridgedCallbacks<JniBridgeKyberPreKeyStore>;
-    fn borrow(
-        env: &mut JNIEnv<'context>,
-        store: &'param Self::ArgType,
-    ) -> Result<Self::StoredType, BridgeLayerError> {
-        Ok(BridgedCallbacks(JniBridgeKyberPreKeyStore::new(
-            env, store,
-        )?))
-    }
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
-    for &'storage mut dyn SessionStore
-{
-    type ArgType = JObject<'context>;
-    type StoredType = BridgedCallbacks<JniBridgeSessionStore>;
-    fn borrow(
-        env: &mut JNIEnv<'context>,
-        store: &'param Self::ArgType,
-    ) -> Result<Self::StoredType, BridgeLayerError> {
-        Ok(BridgedCallbacks(JniBridgeSessionStore::new(env, store)?))
-    }
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
-    for &'storage mut dyn SenderKeyStore
-{
-    type ArgType = JObject<'context>;
-    type StoredType = BridgedCallbacks<JniBridgeSenderKeyStore>;
-    fn borrow(
-        env: &mut JNIEnv<'context>,
-        store: &'param Self::ArgType,
-    ) -> Result<Self::StoredType, BridgeLayerError> {
-        Ok(BridgedCallbacks(JniBridgeSenderKeyStore::new(env, store)?))
-    }
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
-        stored
-    }
-}
+bridge_trait!(IdentityKeyStore);
+bridge_trait!(PreKeyStore);
+bridge_trait!(SenderKeyStore);
+bridge_trait!(SessionStore);
+bridge_trait!(SignedPreKeyStore);
+bridge_trait!(KyberPreKeyStore);
+bridge_trait!(
+    InputStream<'storage>,
+    |x: &'storage mut Self::StoredType| &mut x.0
+);
+bridge_trait!(
+    SyncInputStream<'storage>,
+    |x: &'storage mut Self::StoredType| &mut x.0
+);
 
 impl<'a> CallbackResultTypeInfo<'a> for PublicKey {
     type ResultType = JObject<'a>;
@@ -1614,6 +1546,76 @@ where
         Ok((result_refs, result_arcs))
     }
     fn load_from(stored: &'storage mut Self::StoredType) -> &'storage [&'storage T] {
+        &stored.0
+    }
+}
+
+// Based on the `&'storage [&'storage T]` implementation above.
+impl<'storage, 'param: 'storage, 'context: 'param> ArgTypeInfo<'storage, 'param, 'context>
+    for &'storage [CiphertextMessageRef<'storage>]
+{
+    type ArgType = JObjectArray<'context>;
+    // Stored in this order so the references get dropped before the owners.
+    // https://doc.rust-lang.org/reference/destructors.html#r-destructors.operation
+    type StoredType = (
+        Vec<CiphertextMessageRef<'static>>,
+        Vec<Arc<dyn Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe + 'static>>,
+    );
+    fn borrow(
+        env: &mut JNIEnv<'context>,
+        foreign: &'param Self::ArgType,
+    ) -> Result<Self::StoredType, BridgeLayerError> {
+        type StoredGuarantees =
+            dyn Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe + 'static;
+
+        let len = env
+            .get_array_length(foreign)
+            .check_exceptions(env, "<&[CiphertextMessageRef]>::borrow")?;
+        let mut result_arcs = Vec::with_capacity(len.try_into().expect("fits in usize"));
+        let mut result_refs = Vec::with_capacity(len.try_into().expect("fits in usize"));
+        for i in 0..len {
+            let java_object = AutoLocal::new(
+                env.get_object_array_element(foreign, i)
+                    .check_exceptions(env, "<&[CiphertextMessageRef]>::borrow")?,
+                env,
+            );
+            let some_ref =
+                CiphertextMessageRef::borrow(env, &java_object)?.expect("always borrowed as Some");
+            // SAFETY: These references are all *currently* alive, so we should be able to get to
+            // their owning Arc.
+            let arc = match some_ref {
+                CiphertextMessageRef::SignalMessage(m) => unsafe {
+                    BridgeHandle::from_raw_without_consuming(NonNull::from(m))
+                        as Arc<StoredGuarantees>
+                },
+                CiphertextMessageRef::PreKeySignalMessage(m) => unsafe {
+                    BridgeHandle::from_raw_without_consuming(NonNull::from(m))
+                        as Arc<StoredGuarantees>
+                },
+                CiphertextMessageRef::SenderKeyMessage(m) => unsafe {
+                    BridgeHandle::from_raw_without_consuming(NonNull::from(m))
+                        as Arc<StoredGuarantees>
+                },
+                CiphertextMessageRef::PlaintextContent(m) => unsafe {
+                    BridgeHandle::from_raw_without_consuming(NonNull::from(m))
+                        as Arc<StoredGuarantees>
+                },
+            };
+            // SAFETY: The plain references inside the CiphertextMessageRef will be kept alive as
+            // long as any of the Arcs are kept alive, which they will be.
+            result_refs.push(unsafe {
+                std::mem::transmute::<CiphertextMessageRef<'_>, CiphertextMessageRef<'static>>(
+                    some_ref,
+                )
+            });
+            result_arcs.push(arc);
+        }
+        Ok((result_refs, result_arcs))
+    }
+
+    fn load_from(
+        stored: &'storage mut Self::StoredType,
+    ) -> &'storage [CiphertextMessageRef<'storage>] {
         &stored.0
     }
 }
@@ -2723,6 +2725,9 @@ macro_rules! jni_arg_type {
     (Box<[u8]>) => {
         ::jni::objects::JByteArray<'local>
     };
+    (Box<[u32]>) => {
+        ::jni::objects::JIntArray<'local>
+    };
     (Box<[String]>) => {
         ::jni::objects::JObjectArray<'local>
     };
@@ -2765,6 +2770,9 @@ macro_rules! jni_arg_type {
     (Vec<&[u8]>) => {
         jni::JavaByteBufferArray<'local>
     };
+    (Vec<Vec<u8> >) => {
+        jni::JavaArrayOfByteArray<'local>
+    };
     (Timestamp) => {
         ::jni::sys::jlong
     };
@@ -2785,6 +2793,9 @@ macro_rules! jni_arg_type {
     };
     (jni::CiphertextMessageRef) => {
         $crate::jni::JavaCiphertextMessage<'local>
+    };
+    (&[jni::CiphertextMessageRef<'_>]) => {
+        ::jni::objects::JObjectArray<'local>
     };
     (& [& $typ:ty]) => {
         ::jni::objects::JLongArray<'local>
@@ -2865,6 +2876,12 @@ macro_rules! jni_result_type {
     (Result<$typ:tt<$($args:tt),+> $(, $_:ty)?>) => {
         $crate::jni::Throwing<jni_result_type!($typ<$($args),+>)>
     };
+    (Result<($a:tt, $b:tt>)) => {
+        $crate::jni::Throwing<jni_result_type!(($a, $b))>
+    };
+    (Result<($a:tt<$($aargs:tt),+>, $b:tt<$($bargs:tt),+>) $(, $_:ty)?>) => {
+        $crate::jni::Throwing<jni_result_type!(($a<$($aargs),+>, $b<$($bargs),+>))>
+    };
     (Option<u32>) => {
         ::jni::sys::jint
     };
@@ -2885,6 +2902,9 @@ macro_rules! jni_result_type {
     };
     (($a:tt, $b:tt)) => {
         $crate::jni::JavaPair<'local, $crate::jni_result_type!($a), $crate::jni_result_type!($b)>
+    };
+    (($a:tt<$($aargs:tt),+>, $b:tt<$($bargs:tt),+>)) => {
+        $crate::jni::JavaPair<'local, $crate::jni_result_type!($a<$($aargs),+>), $crate::jni_result_type!($b<$($bargs),+>)>
     };
     (bool) => {
         ::jni::sys::jboolean
