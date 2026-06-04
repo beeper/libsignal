@@ -6,15 +6,13 @@
 use std::cell::RefCell;
 use std::io;
 
-use async_trait::async_trait;
-
 use super::*;
-use crate::io::{InputStream, InputStreamRead, SyncInputStream};
+use crate::io::SyncInputStream;
 
 pub type JavaInputStream<'a> = JObject<'a>;
 pub type JavaSyncInputStream<'a> = JObject<'a>;
 
-/// Implementation of [`InputStream`] for an argument to a bridge function.
+/// Implementation of [`InputStream`](crate::io::InputStream) for an argument to a bridge function.
 pub struct JniBridgeInputStream<'a> {
     env: RefCell<EnvHandle<'a>>,
     stream: &'a JObject<'a>,
@@ -31,7 +29,7 @@ enum BridgeOrIoError {
 
 impl<'a> JniBridgeInputStream<'a> {
     pub fn new<'context: 'a>(
-        env: &mut JNIEnv<'context>,
+        env: &mut jni::Env<'context>,
         stream: &'a JObject<'a>,
     ) -> Result<Self, BridgeLayerError> {
         check_jobject_type(env, stream, ClassName("java.io.InputStream"))?;
@@ -43,11 +41,9 @@ impl<'a> JniBridgeInputStream<'a> {
 
     fn do_read(&self, buf: &mut [u8]) -> Result<usize, BridgeOrIoError> {
         self.env.borrow_mut().with_local_frame(8, "read", |env| {
-            let amount = buf
-                .len()
-                .try_into()
-                .expect("cannot read into a buffer bigger than i32::MAX");
-            let java_buf = env.new_byte_array(amount).check_exceptions(env, "read")?;
+            let java_buf = env
+                .new_byte_array(buf.len())
+                .check_exceptions(env, "read")?;
             let amount_read: jint = call_method_checked(
                 env,
                 self.stream,
@@ -58,13 +54,14 @@ impl<'a> JniBridgeInputStream<'a> {
                 -1 => 0,
                 _ => u32::convert_from(env, &amount_read)? as usize,
             };
-            env.get_byte_array_region(
-                java_buf,
-                0,
-                zerocopy::FromBytes::mut_from_bytes(&mut buf[..amount_read])
-                    .expect("types have same alignment"),
-            )
-            .check_exceptions(env, "read")?;
+            java_buf
+                .get_region(
+                    env,
+                    0,
+                    zerocopy::FromBytes::mut_from_bytes(&mut buf[..amount_read])
+                        .expect("types have same alignment"),
+                )
+                .check_exceptions(env, "read")?;
             Ok(amount_read)
         })
     }
@@ -108,19 +105,6 @@ impl From<BridgeOrIoError> for IoError {
                 e => IoError::other(e.to_string()),
             },
         }
-    }
-}
-
-#[async_trait(?Send)]
-impl InputStream for JniBridgeInputStream<'_> {
-    fn read<'out, 'a: 'out>(&'a self, buf: &mut [u8]) -> io::Result<InputStreamRead<'out>> {
-        let amount_read = self.do_read(buf)?;
-        Ok(InputStreamRead::Ready { amount_read })
-    }
-
-    async fn skip(&self, amount: u64) -> io::Result<()> {
-        self.do_skip(amount)?;
-        Ok(())
     }
 }
 

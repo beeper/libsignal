@@ -1,6 +1,7 @@
-v0.93.2
+v0.94.4
 
-- CDSI: production enclave switch to 15637fa1
-- SVR: New enclaves for 2026Q2 for staging, and configurations (but not use) for prod.
-- node: Expose SVR2-related functionality
-- node: Support non-ASCII usernames and passwords in proxy URLs
+- Internal: libsignal now uses Android Gradle Plugin 9.1.1
+
+- zkgroup: Add AvatarUploadCredential, an anonymous credential used to rate-limit avatar uploads.
+
+- Several new requests have been added to UnauthBackupsService; however, they are only usable when an H2 connection is guaranteed, and should not be adopted otherwise.

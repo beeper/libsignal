@@ -82,6 +82,7 @@ def translate_to_java(typ: str) -> Tuple[str, bool]:
         'Nullable<ObjectHandle>': 'ObjectHandle',
         'jint': 'Int',
         'jlong': 'Long',
+        'jdouble': 'Double',
         'jboolean': 'Boolean',
         'JObject': 'Object',
         'JClass': 'Class<*>',
@@ -135,7 +136,7 @@ JAVA_DECL = re.compile(r"""
     Java_org_signal_libsignal_internal_Native(?:Testing)?_ # The required JNI prefix
     (([a-zA-Z0-9]+)                                        # (1) The method name, with (2) a grouping prefix
     (?:_1[a-zA-Z0-9_]*)?)                                  # ...possibly followed by an underscore and then more name
-    \(JNIEnv[ ].?env,[ ]JClass[ ]class_                    # and then the required JNI args,
+    \(EnvUnowned[ ].?env,[ ]JClass[ ]class_                # and then the required JNI args,
     (,[ ].*)?\);                                           # then (3) actual args
     """, re.VERBOSE)
 
@@ -239,6 +240,10 @@ def main() -> None:
         in_path=os.path.join(our_abs_dir, 'NativeTesting.kt.in'),
         out_path=os.path.join(repo_root, 'java', 'shared', 'java', 'org', 'signal', 'libsignal', 'internal', 'NativeTesting.kt'),
         verify=args.verify,
+    )
+    subprocess.check_call(
+        ['cargo', 'run', '-p', 'libsignal-jni-native_kt', '--'] + (['--verify'] if args.verify else []),
+        cwd=repo_root,
     )
 
 

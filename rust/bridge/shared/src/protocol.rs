@@ -372,20 +372,6 @@ fn SignalMessage_New(
     )
 }
 
-#[bridge_fn(ffi = "message_verify_mac")]
-fn SignalMessage_VerifyMac(
-    msg: &SignalMessage,
-    sender_identity_key: &PublicKey,
-    receiver_identity_key: &PublicKey,
-    mac_key: &[u8],
-) -> Result<bool> {
-    msg.verify_mac(
-        &IdentityKey::new(*sender_identity_key),
-        &IdentityKey::new(*receiver_identity_key),
-        mac_key,
-    )
-}
-
 #[bridge_fn(ffi = "message_get_sender_ratchet_key", node = false)]
 fn SignalMessage_GetSenderRatchetKey(m: &SignalMessage) -> PublicKey {
     *m.sender_ratchet_key()
@@ -974,8 +960,35 @@ fn SessionRecord_ArchiveCurrentState(session_record: &mut SessionRecord) -> Resu
 }
 
 #[bridge_fn]
-fn SessionRecord_HasUsableSenderChain(s: &SessionRecord, now: Timestamp) -> Result<bool> {
-    s.has_usable_sender_chain(now.into(), SessionUsabilityRequirements::NotStale)
+fn SessionRecord_HasUsableSenderChain(
+    s: &SessionRecord,
+    require_pq_ratio: f64,
+    now: Timestamp,
+) -> Result<bool> {
+    let has_chain =
+        s.has_usable_sender_chain(now.into(), SessionUsabilityRequirements::NotStale)?;
+    if !has_chain {
+        return Ok(false);
+    }
+    let has_pq_chain = s.has_usable_sender_chain(
+        now.into(),
+        SessionUsabilityRequirements::NotStale
+            | SessionUsabilityRequirements::EstablishedWithPqxdh
+            | SessionUsabilityRequirements::Spqr,
+    )?;
+    if has_pq_chain || require_pq_ratio == 0.0 {
+        return Ok(true);
+    }
+    let require_pq_ratio = if require_pq_ratio > 1.0 {
+        log::warn!("pinning overly high PQ ratio {require_pq_ratio} to 1.0");
+        1.0
+    } else if require_pq_ratio < 0.0 {
+        log::warn!("pinning overly low PQ ratio {require_pq_ratio} to 0.0");
+        0.0
+    } else {
+        require_pq_ratio
+    };
+    Ok(should_use_nonpq_session(require_pq_ratio, s.alice_base_key().expect("we should have a current session, since has_usable_sender_chain returned a non-error value")))
 }
 
 #[bridge_fn]

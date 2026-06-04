@@ -18,10 +18,13 @@ members = [
     "rust/zkcredential",
     "rust/zkgroup",
     "rust/bridge/ffi",
+    "rust/bridge/ffi/native_swift",
     "rust/bridge/jni",
     "rust/bridge/jni/impl",
+    "rust/bridge/jni/native_kt",
     "rust/bridge/jni/testing",
     "rust/bridge/node",
+    "rust/bridge/node/native_ts",
 ]
 default-members = [
     "rust/crypto",
@@ -38,7 +41,7 @@ default-members = [
 resolver = "2" # so that our dev-dependency features don't leak into products
 
 [workspace.package]
-version = "0.93.2"
+version = "0.94.4"
 authors = ["Signal Messenger LLC"]
 license = "AGPL-3.0-only"
 rust-version = "1.88"
@@ -67,6 +70,7 @@ libsignal-message-backup = { path = "rust/message-backup" }
 libsignal-net = { path = "rust/net" }
 libsignal-net-chat = { path = "rust/net/chat" }
 libsignal-net-grpc = { path = "rust/net/grpc" }
+libsignal-node = { path = "rust/bridge/node" }
 libsignal-protocol = { path = "rust/protocol" }
 libsignal-svrb = { path = "rust/svrb" }
 poksho = { path = "rust/poksho" }
@@ -149,8 +153,8 @@ hyper-util = "0.1.17"
 indexmap = "2.7.0"
 intmap = "3.1.2"
 itertools = "0.14.0"
-jni = "0.21"
-libc = "0.2.175"
+jni = "0.22.2"
+libc = "0.2.186"
 libcrux-ml-kem = { version = "0.0.8", default-features = false }
 linkme = "0.3.33"
 log = "0.4.21"
@@ -160,6 +164,7 @@ mediasan-common = "0.5.3"
 minidump = { version = "0.22.1", default-features = false }
 minidump-processor = { version = "0.22.1", default-features = false }
 minidump-unwind = { version = "0.22.1", default-features = false }
+minijinja = "2.19.0"
 mp4san = "0.5.3"
 neon = { version = "1.1.0", default-features = false }
 nonzero_ext = "0.3.0"
@@ -197,6 +202,7 @@ serde_json5 = "0.2.1"
 serde_with = "3.1.0"
 sha1 = "0.10"
 sha2 = "0.10"
+simd_cesu8 = "1.1.1"
 snow = { version = "0.10", default-features = false }
 socks5-server = "0.10.1"
 static_assertions = "1.1"
@@ -209,7 +215,7 @@ test-log = "0.2.16"
 testing_logger = "0.1.1"
 thiserror = "2.0.11"
 tls-parser = "0.12.2"
-tokio = "1.45"
+tokio = "1.52.2"
 tokio-socks = "0.5.2"
 tokio-stream = "0.1.16"
 tokio-tungstenite = "0.28.0"

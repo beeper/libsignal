@@ -78,6 +78,68 @@ impl<T: GrpcService + Clone + Sync> GrpcServiceProvider for T {
     }
 }
 
+/// A tonic encoder and decoder that passes byte buffers through unchanged, letting tonic
+/// add the gRPC framing and nothing else.
+struct PassthroughCodec;
+
+impl tonic::codec::Codec for PassthroughCodec {
+    type Encode = Vec<u8>;
+    type Decode = Vec<u8>;
+    type Encoder = Self;
+    type Decoder = Self;
+
+    fn encoder(&mut self) -> Self::Encoder {
+        PassthroughCodec
+    }
+    fn decoder(&mut self) -> Self::Decoder {
+        PassthroughCodec
+    }
+}
+
+impl tonic::codec::Encoder for PassthroughCodec {
+    type Item = Vec<u8>;
+    type Error = tonic::Status;
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        dst: &mut tonic::codec::EncodeBuf<'_>,
+    ) -> Result<(), Self::Error> {
+        use bytes::BufMut;
+        dst.put(&item[..]);
+        Ok(())
+    }
+}
+
+impl tonic::codec::Decoder for PassthroughCodec {
+    type Item = Vec<u8>;
+    type Error = tonic::Status;
+    fn decode(
+        &mut self,
+        src: &mut tonic::codec::DecodeBuf<'_>,
+    ) -> Result<Option<Self::Item>, Self::Error> {
+        use bytes::Buf;
+        Ok(Some(src.copy_to_bytes(src.remaining()).into()))
+    }
+}
+
+pub fn raw_grpc(
+    log_tag: &'static str,
+    service_provider: impl GrpcServiceProvider,
+    service_name: &str,
+    method: &str,
+    payload: Vec<u8>,
+) -> impl Future<Output = Result<Vec<u8>, RequestError<Infallible>>> {
+    let mut client = tonic::client::Grpc::new(service_provider.service());
+    let path = http::uri::PathAndQuery::from_maybe_shared(format!("/{service_name}/{method}"))
+        .expect("valid URI path");
+    log_and_send(log_tag, method, || async move {
+        let response = client
+            .unary(tonic::Request::new(payload), path, PassthroughCodec)
+            .await?;
+        Ok(response.into_inner())
+    })
+}
+
 async fn log_and_send<F, R, E>(
     log_tag: &'static str,
     log_safe_description: &str,
@@ -314,7 +376,7 @@ fn request_error_from_server_side_error_info<E>(
         }
         "RESOURCE_EXHAUSTED" | "UNAVAILABLE" => {
             // UNAVAILABLE is unlikely to have RetryInfo, but it doesn't really hurt to check.
-            if let Some(mut retry_delay) =
+            if let Some(retry_delay) =
                 matching_details::<google::rpc::RetryInfo>(&grpc_status.details)
                     .at_most_one()
                     .unwrap_or_else(|mut e| {
@@ -325,10 +387,23 @@ fn request_error_from_server_side_error_info<E>(
                     })
                     .and_then(|info| info.retry_delay)
             {
-                retry_delay.normalize();
+                // TODO: Use i32::div_ceil when that's stabilized.
+                // https://github.com/rust-lang/rust/issues/88581
+                fn nanos_to_secs_ceil(dividend: i32) -> i32 {
+                    const DIVISOR: i32 = 1_000_000_000;
+                    // Normal Div rounds towards 0.
+                    let result = dividend / DIVISOR;
+                    if dividend > 0 && dividend % DIVISOR != 0 {
+                        result + 1
+                    } else {
+                        result
+                    }
+                }
+
                 // Round up so that we're guaranteed to wait *at least* this long.
-                let retry_after_seconds =
-                    retry_delay.seconds + i64::from(retry_delay.nanos.clamp(0, 1));
+                let retry_after_seconds = retry_delay
+                    .seconds
+                    .saturating_add(nanos_to_secs_ceil(retry_delay.nanos).into());
                 return RequestError::RetryLater(RetryLater {
                     retry_after_seconds: u32::try_from(
                         retry_after_seconds.clamp(0, u32::MAX.into()),
@@ -424,10 +499,14 @@ pub(crate) mod testutil {
     use crate::api::testutil::TEST_SELF_ACI;
     use crate::ws::WsConnection;
 
-    pub(crate) fn req(uri: &str, body: impl prost::Message + 'static) -> http::Request<Vec<u8>> {
-        let body = tonic::codec::EncodeBody::new_client(
-            tonic_prost::ProstEncoder::new(Default::default()),
-            futures_util::stream::iter([Ok(body)]),
+    pub(crate) fn encode_for_grpc<C: tonic::codec::Encoder<Error = Status>>(
+        encoder: C,
+        item: C::Item,
+    ) -> Vec<u8> {
+        // The difference between client and server only seems to matter when using compression.
+        tonic::codec::EncodeBody::new_client(
+            encoder,
+            futures_util::stream::iter([Ok(item)]),
             None,
             None,
         )
@@ -436,8 +515,11 @@ pub(crate) mod testutil {
         .expect("non-blocking encoding")
         .expect("can read entire message")
         .to_bytes()
-        .into();
+        .into()
+    }
 
+    pub(crate) fn req(uri: &str, body: impl prost::Message + 'static) -> http::Request<Vec<u8>> {
+        let body = encode_for_grpc(tonic_prost::ProstEncoder::new(Default::default()), body);
         req_typed(uri, body)
     }
 
@@ -475,6 +557,10 @@ pub(crate) mod testutil {
         Status::new(code, "").into_http()
     }
 
+    /// Validates that the [`WsConnection`] implementation of an API defers to the gRPC
+    /// implementation when the `message` override is provided.
+    ///
+    /// Then defers to the inner validator for further checking and producing a response.
     pub(crate) struct GrpcOverrideRequestValidator<V> {
         pub(crate) validator: V,
         pub(crate) message: &'static str,
@@ -506,6 +592,13 @@ pub(crate) mod testutil {
         }
     }
 
+    /// Validates that a gRPC request matches in all parts of the underlying HTTP request, checking
+    /// the body byte-for-byte.
+    ///
+    /// Prefer a [`GrpcOverrideRequestValidator`] containing a `RequestValidator` if the request has
+    /// a corresponding config to switch between WS and gRPC implementations. Replace the
+    /// `RequestValidator` with `TypedRequestValidator` if comparing the bodies using protobuf
+    /// semantics (rather than bytewise) is important---it usually isn't.
     pub(crate) struct RequestValidator {
         pub expected: http::Request<Vec<u8>>,
         pub response: http::Response<Vec<u8>>,
@@ -554,7 +647,10 @@ pub(crate) mod testutil {
     /// Like `RequestValidator`, but compares the decoded protobuf of the incoming request instead
     /// of the serialized bytes.
     ///
-    /// Prefer `RequestValidator`
+    /// Prefer `RequestValidator` if the protobuf does not contain any `map` fields, because it also
+    /// checks that there are no extraneous fields in the body. (While protobuf permits fields to
+    /// appear in any order, our prost implementation is consistent within a build, if not
+    /// necessarily across versions. `map` is only a problem because it uses Rust's HashMap.)
     pub(crate) struct TypedRequestValidator<T> {
         pub expected: http::Request<T>,
         pub response: http::Response<Vec<u8>>,
@@ -595,6 +691,29 @@ pub(crate) mod testutil {
             pretty_assertions::assert_eq!(self.expected.body(), &actual_body, "body");
 
             std::future::ready(Ok(self.response.clone().map(|body| body.into())))
+        }
+    }
+
+    /// Use to check that no gRPC calls happen at all (e.g. for a `should_panic` test, but don't
+    /// forget to check the panic message in that case!).
+    pub(crate) struct UnreachableValidator;
+
+    impl tower_service::Service<http::Request<tonic::body::Body>> for &'_ UnreachableValidator {
+        type Response = http::Response<http_body_util::Full<bytes::Bytes>>;
+
+        type Error = hyper::Error;
+
+        type Future = std::future::Pending<Result<Self::Response, Self::Error>>;
+
+        fn poll_ready(
+            &mut self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            unreachable!("should not attempt to send");
+        }
+
+        fn call(&mut self, _req: http::Request<tonic::body::Body>) -> Self::Future {
+            unreachable!("should not attempt to send");
         }
     }
 
@@ -887,13 +1006,13 @@ mod test {
     fn test_retry_later(reason: &str) {
         let info = vec![
             google::rpc::RetryInfo {
-                retry_delay: Some(prost_types::Duration {
+                retry_delay: Some(libsignal_net_grpc::Duration {
                     seconds: 10,
                     nanos: 2,
                 }),
             },
             google::rpc::RetryInfo {
-                retry_delay: Some(prost_types::Duration {
+                retry_delay: Some(libsignal_net_grpc::Duration {
                     seconds: 20,
                     nanos: 5,
                 }),

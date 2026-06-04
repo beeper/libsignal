@@ -411,19 +411,6 @@ export class SignalMessage {
   serialize(): Uint8Array<ArrayBuffer> {
     return Native.SignalMessage_GetSerialized(this);
   }
-
-  verifyMac(
-    senderIdentityKey: PublicKey,
-    recevierIdentityKey: PublicKey,
-    macKey: Uint8Array<ArrayBuffer>
-  ): boolean {
-    return Native.SignalMessage_VerifyMac(
-      this,
-      senderIdentityKey,
-      recevierIdentityKey,
-      macKey
-    );
-  }
 }
 
 export class PreKeySignalMessage {
@@ -518,8 +505,12 @@ export class SessionRecord {
    *
    * If there is no current session, returns false.
    */
-  hasCurrentState(now: Date = new Date()): boolean {
-    return Native.SessionRecord_HasUsableSenderChain(this, now.getTime());
+  hasCurrentState(requirePqRatio: number, now: Date = new Date()): boolean {
+    return Native.SessionRecord_HasUsableSenderChain(
+      this,
+      requirePqRatio,
+      now.getTime()
+    );
   }
 
   currentRatchetKeyMatches(key: PublicKey): boolean {

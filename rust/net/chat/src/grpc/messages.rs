@@ -44,7 +44,7 @@ impl From<UserBasedAuthorization> for send_sealed_sender_message_request::Author
                 Self::GroupSendToken(zkgroup::serialize(&token))
             }
             UserBasedAuthorization::UnrestrictedUnauthenticatedAccess => {
-                Self::UnrestrictedAccess(())
+                Self::UnrestrictedAccess(Default::default())
             }
         }
     }
@@ -195,7 +195,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::UnauthenticatedChatApi<OverGr
         })?;
 
         match response {
-            send_message_response::Response::Success(()) => Ok(()),
+            send_message_response::Response::Success(_) => Ok(()),
             send_message_response::Response::FailedUnidentifiedAuthorization(
                 errors::FailedUnidentifiedAuthorization { description },
             ) => {
@@ -358,7 +358,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::AuthenticatedChatApi<OverGrpc
         })?;
 
         match response {
-            send_message_authenticated_sender_response::Response::Success(()) => Ok(()),
+            send_message_authenticated_sender_response::Response::Success(_) => Ok(()),
             send_message_authenticated_sender_response::Response::MismatchedDevices(
                 mismatched_devices,
             ) => Err(RequestError::Other(
@@ -424,7 +424,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::AuthenticatedChatApi<OverGrpc
         })?;
 
         match response {
-            send_message_authenticated_sender_response::Response::Success(()) => Ok(()),
+            send_message_authenticated_sender_response::Response::Success(_) => Ok(()),
             send_message_authenticated_sender_response::Response::MismatchedDevices(
                 mismatched_devices,
             ) => Err(RequestError::Other(
@@ -599,8 +599,8 @@ mod test {
     use crate::api::testutil::{SERIALIZED_GROUP_SEND_TOKEN, structurally_valid_group_send_token};
     use crate::api::{ChallengeOption, RateLimitChallenge};
     use crate::grpc::testutil::{
-        GrpcOverrideRequestValidator, RequestValidator, TypedRequestValidator, err, ok, req,
-        req_typed,
+        GrpcOverrideRequestValidator, RequestValidator, TypedRequestValidator,
+        UnreachableValidator, err, ok, req, req_typed,
     };
 
     const ACI_UUID: Uuid = uuid!("9d0652a3-dcc3-4d11-975f-74d61598733f");
@@ -778,14 +778,7 @@ mod test {
     #[test]
     #[should_panic(expected = "online-only")]
     fn ephemeral_story_is_not_allowed() {
-        let validator = RequestValidator {
-            expected: req(
-                "/org.signal.chat.messages.MessagesAnonymous/SendMultiRecipientStory",
-                SendMultiRecipientStoryRequest::default(),
-            ),
-            response: err(tonic::Code::FailedPrecondition),
-        };
-
+        let validator = UnreachableValidator;
         _ = Unauth(&validator)
             .send_multi_recipient_message(
                 vec![1, 2, 3].into(),
@@ -840,7 +833,7 @@ mod test {
     }
 
     #[test_case(ok(SendMessageResponse {
-        response: Some(send_message_response::Response::Success(()))
+        response: Some(send_message_response::Response::Success(Default::default()))
     }) => matches Ok(()))]
     #[test_case(ok(SendMessageResponse {
         response: None
@@ -986,7 +979,7 @@ mod test {
                     },
                 ),
                 response: ok(SendMessageResponse {
-                    response: Some(send_message_response::Response::Success(())),
+                    response: Some(send_message_response::Response::Success(Default::default())),
                 }),
             },
         };
@@ -1027,7 +1020,9 @@ mod test {
                         destination: Some(Aci::from(ACI_UUID).into()),
                         ephemeral: false,
                         urgent: true,
-                        authorization: Some(SealedSenderAuthorization::UnrestrictedAccess(())),
+                        authorization: Some(SealedSenderAuthorization::UnrestrictedAccess(
+                            Default::default(),
+                        )),
                         messages: Some(IndividualRecipientMessageBundle {
                             timestamp: 1700000000000,
                             messages: HashMap::from_iter([
@@ -1052,7 +1047,7 @@ mod test {
                     },
                 ),
                 response: ok(SendMessageResponse {
-                    response: Some(send_message_response::Response::Success(())),
+                    response: Some(send_message_response::Response::Success(Default::default())),
                 }),
             },
         };
@@ -1116,7 +1111,7 @@ mod test {
                     },
                 ),
                 response: ok(SendMessageResponse {
-                    response: Some(send_message_response::Response::Success(())),
+                    response: Some(send_message_response::Response::Success(Default::default())),
                 }),
             },
         };
@@ -1149,14 +1144,7 @@ mod test {
     #[test]
     #[should_panic(expected = "online-only")]
     fn ephemeral_story_is_not_allowed_single_recipient() {
-        let validator = RequestValidator {
-            expected: req(
-                "/org.signal.chat.messages.MessagesAnonymous/SendStory",
-                SendMultiRecipientStoryRequest::default(),
-            ),
-            response: err(tonic::Code::FailedPrecondition),
-        };
-
+        let validator = UnreachableValidator;
         _ = Unauth(&validator)
             .send_message(
                 Pni::from(PNI_UUID).into(),
@@ -1259,7 +1247,7 @@ mod test {
     }
 
     #[test_case(ok(SendMessageAuthenticatedSenderResponse {
-        response: Some(send_message_authenticated_sender_response::Response::Success(()))
+        response: Some(send_message_authenticated_sender_response::Response::Success(Default::default()))
     }) => matches Ok(()))]
     #[test_case(ok(SendMessageAuthenticatedSenderResponse {
         response: None
@@ -1388,7 +1376,7 @@ mod test {
     }
 
     #[test_case(ok(SendMessageAuthenticatedSenderResponse {
-        response: Some(send_message_authenticated_sender_response::Response::Success(()))
+        response: Some(send_message_authenticated_sender_response::Response::Success(Default::default()))
     }) => matches Ok(()))]
     #[test_case(ok(SendMessageAuthenticatedSenderResponse {
         response: None

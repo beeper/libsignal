@@ -52,7 +52,7 @@
 //! export function SenderKeyMessage_New(
 //!     keyId: number,
 //!     iteration: number,
-//!     ciphertext: Buffer,
+//!     ciphertext: Uint8Array<ArrayBuffer>,
 //!     pk: Wrapper<PrivateKey>
 //! ): SenderKeyMessage;
 //! ```
@@ -125,6 +125,16 @@
 //! validate all packages by enabling all three bridges at once. Instead, you can write e.g.
 //! `bridge_fn(jni = false)` to keep from exposing a particular function to Java.
 //!
+//!
+//! # "Nice" Bridging
+//! By specifying `#[bridge_fn(nice = true)]` or (e.g. `#[bridge_fn(nice_node = true)]` to override
+//! for a specific client language), a higher-level, "nice" bridge function will be generated. This
+//! higher-level bridge function is the client-language mirror to `bridge_fn`. Just like, on the
+//! Rust side, writers of `bridge_fn`s don't need to concern themselves with pointers or other
+//! such details, so too do nice functions allow code written in client languages to also avoid this
+//! concern. See `metadata.rs` for more details on "converters," which are the client-langauge
+//! analog of the `ResultTypeInfo` and `ArgTypeInfo` traits that enable this conversion.
+//!
 //! # Adding new argument and result types
 //!
 //! If your argument or result type is a Rust value being wrapped in an opaque box, declare it using
@@ -132,8 +142,9 @@
 //!
 //! 1. Argument and result types for FFI and JNI are determined by macros `ffi_arg_type`,
 //!    `ffi_result_type`, `jni_arg_type`, and `jni_result_type`. You may need to add your new type
-//!    there. JNI and Node types also undergo some additional transformation in the scripts
-//!    `gen_java_decl.py` and `gen_ts_decl.py`, which you may need to tweak as well.
+//!    there. JNI types also undergo some additional transformation in the scripts
+//!    `gen_java_decl.py`, which you may need to tweak as well. Node types are generated as Strings
+//!    via the `gen_ts_ffi()` methods on `node::{AsyncArg, Arg, Result}TypeInfo`.
 //!
 //! 2. Argument types conform to one or more of the following bridge-specific traits:
 //!
@@ -156,8 +167,9 @@
 //! [`macro@bridge_callbacks`] macro; see there for more information.
 
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::*;
-use syn::parse::Parse;
+use syn::parse::{Parse, Parser};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::*;
@@ -176,6 +188,20 @@ fn value_for_meta_key<'a>(
         .iter()
         .find(|meta| meta.path.get_ident().is_some_and(|ident| ident == key))
         .map(|meta| &meta.value)
+}
+
+fn bool_for_meta_key(
+    meta_values: &Punctuated<MetaNameValue, Token![,]>,
+    key: &str,
+) -> Result<Option<bool>> {
+    match value_for_meta_key(meta_values, key) {
+        Some(Expr::Lit(ExprLit {
+            lit: Lit::Bool(value),
+            ..
+        })) => Ok(Some(value.value)),
+        None => Ok(None),
+        Some(value) => Err(syn::Error::new(value.span(), "Expected bool value")),
+    }
 }
 
 fn name_for_meta_key(
@@ -311,6 +337,25 @@ impl Parse for BridgeIoParams {
     }
 }
 
+struct NiceFunctions {
+    node: bool,
+    jni: bool,
+    swift: bool,
+}
+impl NiceFunctions {
+    fn parse(meta_values: &Punctuated<MetaNameValue, Token![,]>) -> syn::Result<Self> {
+        let default = bool_for_meta_key(meta_values, "nice")?.unwrap_or_default();
+        Ok(NiceFunctions {
+            node: bool_for_meta_key(meta_values, "nice_node")?.unwrap_or(default),
+            jni: bool_for_meta_key(meta_values, "nice_jni")?.unwrap_or(default),
+            swift: bool_for_meta_key(meta_values, "nice_swift")?.unwrap_or(default),
+        })
+    }
+    fn any(&self) -> bool {
+        self.node || self.jni || self.swift
+    }
+}
+
 fn bridge_fn_impl(
     attr: TokenStream,
     item: TokenStream,
@@ -353,6 +398,20 @@ fn bridge_fn_impl(
         Ok(name) => name,
         Err(error) => return error.to_compile_error().into(),
     };
+    let nice = match NiceFunctions::parse(&item_names) {
+        Ok(nice) => nice,
+        Err(error) => return error.to_compile_error().into(),
+    };
+    if nice.any()
+        && matches!(&bridging_kind, BridgingKind::Io {runtime} if runtime.to_token_stream().to_string().trim() != "TokioAsyncContext")
+    {
+        return syn::Error::new(
+            Span::call_site(),
+            "nice async functions require TokioAsyncContext",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let ffi_feature = ffi_name.as_ref().map(|_| quote!(feature = "ffi"));
     let jni_feature = jni_name.as_ref().map(|_| quote!(feature = "jni"));
@@ -363,15 +422,21 @@ fn bridge_fn_impl(
     // We could early-exit on the Errors returned from generating each wrapper,
     // but since they could be for unrelated issues, it's better to show all of them to the user.
     let ffi_fn = ffi_name.map(|name| {
-        ffi::bridge_fn(&name, &function.sig, result_info, &bridging_kind)
-            .unwrap_or_else(Error::into_compile_error)
+        ffi::bridge_fn(
+            &name,
+            &function.sig,
+            result_info,
+            &bridging_kind,
+            nice.swift,
+        )
+        .unwrap_or_else(Error::into_compile_error)
     });
     let jni_fn = jni_name.map(|name| {
-        jni::bridge_fn(&name, &function.sig, &bridging_kind)
+        jni::bridge_fn(&name, &function.sig, &bridging_kind, nice.jni)
             .unwrap_or_else(Error::into_compile_error)
     });
     let node_fn = node_name.map(|name| {
-        node::bridge_fn(&name, &function.sig, &bridging_kind)
+        node::bridge_fn(&name, &function.sig, &bridging_kind, nice.node)
             .unwrap_or_else(Error::into_compile_error)
     });
 
@@ -538,6 +603,37 @@ pub fn bridge_callbacks(attr: TokenStream, item: TokenStream) -> TokenStream {
         #node_items
     }
     .into()
+}
+
+fn derive_bridged_as_value_inner(item: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let mut node = true;
+    for attr in &item.attrs {
+        if attr
+            .path()
+            .is_ident(&Ident::new("bridge", Span::call_site()))
+        {
+            let contents = Punctuated::<MetaNameValue, Token![,]>::parse_terminated
+                .parse2(attr.meta.require_list()?.tokens.clone())?;
+            node = bool_for_meta_key(&contents, "node")?.unwrap_or(true);
+        }
+    }
+    let node = if node {
+        Some(node::derive_bridged_as_value(&item)?)
+    } else {
+        None
+    };
+    Ok(quote! {
+        #node
+    })
+}
+
+#[proc_macro_derive(BridgedAsValue, attributes(bridge))]
+pub fn derive_bridged_as_value(item: TokenStream) -> TokenStream {
+    let item = syn::parse_macro_input!(item as DeriveInput);
+    match derive_bridged_as_value_inner(item) {
+        Ok(x) => x.into(),
+        Err(e) => e.into_compile_error().into(),
+    }
 }
 
 #[cfg(test)]

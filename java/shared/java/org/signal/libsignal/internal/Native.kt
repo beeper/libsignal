@@ -7,6 +7,7 @@
 
 package org.signal.libsignal.internal
 
+import org.signal.libsignal.internal.NativeHandleGuard.SimpleOwner
 import org.signal.libsignal.net.internal.BridgeChatListener
 import org.signal.libsignal.net.internal.BridgeProvisioningListener
 import org.signal.libsignal.net.internal.ConnectChatBridge
@@ -217,7 +218,44 @@ internal object Native {
   @JvmStatic
   public external fun AuthenticatedChatConnection_send_message_java(asyncRuntime: ObjectHandle, chat: ObjectHandle, destination: ByteArray, timestamp: Long, deviceIds: IntArray, registrationIds: IntArray, contents: Array<Object>, onlineOnly: Boolean, isUrgent: Boolean): CompletableFuture<Void?>
   @JvmStatic
+  public external fun AuthenticatedChatConnection_send_raw_grpc(asyncRuntime: ObjectHandle, chat: ObjectHandle, service: String, method: String, payload: ByteArray): CompletableFuture<ByteArray>
+  @JvmStatic
   public external fun AuthenticatedChatConnection_send_sync_message_java(asyncRuntime: ObjectHandle, chat: ObjectHandle, timestamp: Long, deviceIds: IntArray, registrationIds: IntArray, contents: Array<Object>, isUrgent: Boolean): CompletableFuture<Void?>
+
+  @JvmStatic @Throws(Exception::class)
+  public external fun AvatarUploadCredentialPresentation_CheckValidContents(presentationBytes: ByteArray): Unit
+  @JvmStatic
+  public external fun AvatarUploadCredentialPresentation_GetCm(presentationBytes: ByteArray): ByteArray
+  @JvmStatic
+  public external fun AvatarUploadCredentialPresentation_GetRedemptionTime(presentationBytes: ByteArray): Long
+  @JvmStatic @Throws(Exception::class)
+  public external fun AvatarUploadCredentialPresentation_Verify(presentationBytes: ByteArray, currentTime: Long, serverParamsBytes: ByteArray): Unit
+
+  @JvmStatic @Throws(Exception::class)
+  public external fun AvatarUploadCredentialRequestContext_CheckValidContents(contextBytes: ByteArray): Unit
+  @JvmStatic
+  public external fun AvatarUploadCredentialRequestContext_GetRequest(contextBytes: ByteArray): ByteArray
+  @JvmStatic
+  public external fun AvatarUploadCredentialRequestContext_New(aci: ByteArray, zkCredentialKeyPairBytes: ByteArray, rotationId: Long, randomness: ByteArray): ByteArray
+  @JvmStatic @Throws(Exception::class)
+  public external fun AvatarUploadCredentialRequestContext_ReceiveResponse(contextBytes: ByteArray, responseBytes: ByteArray, currentTime: Long, paramsBytes: ByteArray): ByteArray
+
+  @JvmStatic @Throws(Exception::class)
+  public external fun AvatarUploadCredentialRequest_CheckValidContents(requestBytes: ByteArray): Unit
+  @JvmStatic @Throws(Exception::class)
+  public external fun AvatarUploadCredentialRequest_IssueDeterministic(requestBytes: ByteArray, aci: ByteArray, zkCredentialKeyPubBytes: ByteArray, rotationId: Long, redemptionTime: Long, paramsBytes: ByteArray, randomness: ByteArray): ByteArray
+
+  @JvmStatic @Throws(Exception::class)
+  public external fun AvatarUploadCredentialResponse_CheckValidContents(responseBytes: ByteArray): Unit
+
+  @JvmStatic @Throws(Exception::class)
+  public external fun AvatarUploadCredential_CheckValidContents(credentialBytes: ByteArray): Unit
+  @JvmStatic
+  public external fun AvatarUploadCredential_GetCm(credentialBytes: ByteArray): ByteArray
+  @JvmStatic
+  public external fun AvatarUploadCredential_GetRedemptionTime(credentialBytes: ByteArray): Long
+  @JvmStatic
+  public external fun AvatarUploadCredential_PresentDeterministic(credentialBytes: ByteArray, serverParamsBytes: ByteArray, randomness: ByteArray): ByteArray
 
   @JvmStatic @Throws(Exception::class)
   public external fun BackupAuthCredentialPresentation_CheckValidContents(presentationBytes: ByteArray): Unit
@@ -627,6 +665,8 @@ internal object Native {
   @JvmStatic
   public external fun KeyTransparency_E164SearchKey(e164: String): ByteArray
   @JvmStatic
+  public external fun KeyTransparency_ResetDataField(accountData: ByteArray, field: Int): ByteArray
+  @JvmStatic
   public external fun KeyTransparency_UsernameHashSearchKey(hash: ByteArray): ByteArray
 
   @JvmStatic
@@ -947,7 +987,7 @@ internal object Native {
   public external fun RegistrationAccountAttributes_Destroy(handle: ObjectHandle): Unit
 
   @JvmStatic
-  public external fun RegistrationService_CheckSvr2Credentials(asyncRuntime: ObjectHandle, service: ObjectHandle, svrTokens: Array<Object>): CompletableFuture<Object>
+  public external fun RegistrationService_CheckSvr2Credentials(asyncRuntime: ObjectHandle, service: ObjectHandle, svrTokens: Array<Object>): CompletableFuture<Map<*, *>>
   @JvmStatic
   public external fun RegistrationService_CreateSession(asyncRuntime: ObjectHandle, createSession: Object, connectChat: ConnectChatBridge): CompletableFuture<ObjectHandle>
   @JvmStatic
@@ -1207,7 +1247,7 @@ internal object Native {
   @JvmStatic @Throws(Exception::class)
   public external fun SessionRecord_GetSessionVersion(s: ObjectHandle): Int
   @JvmStatic @Throws(Exception::class)
-  public external fun SessionRecord_HasUsableSenderChain(s: ObjectHandle, now: Long): Boolean
+  public external fun SessionRecord_HasUsableSenderChain(s: ObjectHandle, requirePqRatio: Double, now: Long): Boolean
   @JvmStatic
   public external fun SessionRecord_NewFresh(): ObjectHandle
   @JvmStatic @Throws(Exception::class)
@@ -1245,8 +1285,6 @@ internal object Native {
   public external fun SignalMessage_GetSerialized(obj: ObjectHandle): ByteArray
   @JvmStatic @Throws(Exception::class)
   public external fun SignalMessage_New(messageVersion: Int, macKey: ByteArray, senderRatchetKey: ObjectHandle, counter: Int, previousCounter: Int, ciphertext: ByteArray, senderIdentityKey: ObjectHandle, receiverIdentityKey: ObjectHandle, pqRatchet: ByteArray): ObjectHandle
-  @JvmStatic @Throws(Exception::class)
-  public external fun SignalMessage_VerifyMac(msg: ObjectHandle, senderIdentityKey: ObjectHandle, receiverIdentityKey: ObjectHandle, macKey: ByteArray): Boolean
 
   @JvmStatic @Throws(Exception::class)
   public external fun SignedPreKeyRecord_Deserialize(data: ByteArray): ObjectHandle
@@ -1280,11 +1318,21 @@ internal object Native {
   @JvmStatic
   public external fun UnauthenticatedChatConnection_Destroy(handle: ObjectHandle): Unit
   @JvmStatic
-  public external fun UnauthenticatedChatConnection_account_exists(asyncRuntime: ObjectHandle, chat: ObjectHandle, account: ByteArray): CompletableFuture<Boolean>
+  public external fun UnauthenticatedChatConnection_account_exists(asyncRuntime: ObjectHandle, chat: SimpleOwner, account: ByteArray): CompletableFuture<Boolean>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_backup_delete_all(asyncRuntime: ObjectHandle, chat: SimpleOwner, credential: ByteArray, serverKeys: ByteArray, signingKey: SimpleOwner, rng: Long): CompletableFuture<Void?>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_backup_get_cdn_credentials(asyncRuntime: ObjectHandle, chat: SimpleOwner, credential: ByteArray, serverKeys: ByteArray, signingKey: SimpleOwner, cdn: Int, rng: Long): CompletableFuture<Array<Object>>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_backup_get_media_upload_form(asyncRuntime: ObjectHandle, chat: ObjectHandle, credential: ByteArray, serverKeys: ByteArray, signingKey: ObjectHandle, uploadSize: Long, rng: Long): CompletableFuture<Object>
   @JvmStatic
+  public external fun UnauthenticatedChatConnection_backup_get_svrb_credentials(asyncRuntime: ObjectHandle, chat: SimpleOwner, credential: ByteArray, serverKeys: ByteArray, signingKey: SimpleOwner, rng: Long): CompletableFuture<Pair<String, String>>
+  @JvmStatic
   public external fun UnauthenticatedChatConnection_backup_get_upload_form(asyncRuntime: ObjectHandle, chat: ObjectHandle, credential: ByteArray, serverKeys: ByteArray, signingKey: ObjectHandle, uploadSize: Long, rng: Long): CompletableFuture<Object>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_backup_refresh(asyncRuntime: ObjectHandle, chat: SimpleOwner, credential: ByteArray, serverKeys: ByteArray, signingKey: SimpleOwner, rng: Long): CompletableFuture<Void?>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_backup_set_public_key(asyncRuntime: ObjectHandle, chat: SimpleOwner, credential: ByteArray, serverKeys: ByteArray, signingKey: SimpleOwner, rng: Long): CompletableFuture<Void?>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_connect(asyncRuntime: ObjectHandle, connectionManager: ObjectHandle, languages: Array<Object>): CompletableFuture<ObjectHandle>
   @JvmStatic
@@ -1309,6 +1357,8 @@ internal object Native {
   public external fun UnauthenticatedChatConnection_send_message(asyncRuntime: ObjectHandle, chat: ObjectHandle, destination: ByteArray, timestamp: Long, deviceIds: IntArray, registrationIds: IntArray, contents: Array<ByteArray>, authKind: Int, authBuffer: ByteArray?, onlineOnly: Boolean, isUrgent: Boolean): CompletableFuture<Void?>
   @JvmStatic
   public external fun UnauthenticatedChatConnection_send_multi_recipient_message(asyncRuntime: ObjectHandle, chat: ObjectHandle, payload: ByteArray, timestamp: Long, auth: ByteArray?, onlineOnly: Boolean, isUrgent: Boolean): CompletableFuture<Array<Object>>
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_send_raw_grpc(asyncRuntime: ObjectHandle, chat: ObjectHandle, service: String, method: String, payload: ByteArray): CompletableFuture<ByteArray>
 
   @JvmStatic @Throws(Exception::class)
   public external fun UnidentifiedSenderMessageContent_Deserialize(data: ByteArray): ObjectHandle
@@ -1359,6 +1409,16 @@ internal object Native {
 
   @JvmStatic @Throws(Exception::class)
   public external fun WebpSanitizer_Sanitize(input: InputStream): Unit
+
+  @JvmStatic @Throws(Exception::class)
+  public external fun ZkCredentialKeyPair_CheckValidContents(keyPairBytes: ByteArray): Unit
+  @JvmStatic
+  public external fun ZkCredentialKeyPair_GenerateDeterministic(randomness: ByteArray): ByteArray
+  @JvmStatic
+  public external fun ZkCredentialKeyPair_GetPublicKey(keyPairBytes: ByteArray): ByteArray
+
+  @JvmStatic @Throws(Exception::class)
+  public external fun ZkCredentialPublicKey_CheckValidContents(publicKeyBytes: ByteArray): Unit
 
   @JvmStatic
   public external fun initializeLibrary(): Unit

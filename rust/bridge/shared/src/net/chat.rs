@@ -19,7 +19,9 @@ use libsignal_core::ServiceId;
 use libsignal_core::curve::PrivateKey;
 use libsignal_net::chat::{self, ConnectError, LanguageList, Response as ChatResponse, SendError};
 use libsignal_net_chat::api;
-use libsignal_net_chat::api::backups::{BackupAuth, GetUploadFormFailure};
+use libsignal_net_chat::api::backups::{
+    BackupAuth, BackupAuthCredentialRejected, CdnCredentials, GetUploadFormFailure,
+};
 use libsignal_net_chat::api::keys::{DeviceSpecifier, GetPreKeysFailure, UnauthenticatedChatApi};
 use libsignal_net_chat::api::messages::{
     AuthenticatedChatApi, MultiRecipientMessageResponse, MultiRecipientSendAuthorization,
@@ -123,6 +125,27 @@ async fn UnauthenticatedChatConnection_send(
     };
     chat.send(request, Duration::from_millis(timeout_millis.into()))
         .await
+}
+
+#[bridge_io(TokioAsyncContext)]
+async fn UnauthenticatedChatConnection_send_raw_grpc(
+    chat: &UnauthenticatedChatConnection,
+    service: String,
+    method: String,
+    payload: Box<[u8]>,
+) -> Result<Vec<u8>, RequestError<Infallible>> {
+    chat.as_typed(|chat| {
+        Box::pin(libsignal_net_chat::grpc::raw_grpc(
+            "unauth",
+            chat.0
+                .shared_h2_connection()
+                .expect("requires an H2 connection"),
+            &service,
+            &method,
+            payload.into_vec(),
+        ))
+    })
+    .await
 }
 
 #[bridge_io(TokioAsyncContext)]
@@ -307,6 +330,27 @@ async fn AuthenticatedChatConnection_send(
 }
 
 #[bridge_io(TokioAsyncContext)]
+async fn AuthenticatedChatConnection_send_raw_grpc(
+    chat: &AuthenticatedChatConnection,
+    service: String,
+    method: String,
+    payload: Box<[u8]>,
+) -> Result<Vec<u8>, RequestError<Infallible>> {
+    chat.as_typed(|chat| {
+        Box::pin(libsignal_net_chat::grpc::raw_grpc(
+            "auth",
+            chat.0
+                .shared_h2_connection()
+                .expect("requires an H2 connection"),
+            &service,
+            &method,
+            payload.into_vec(),
+        ))
+    })
+    .await
+}
+
+#[bridge_io(TokioAsyncContext)]
 async fn AuthenticatedChatConnection_disconnect(chat: &AuthenticatedChatConnection) {
     chat.disconnect().await
 }
@@ -424,9 +468,9 @@ async fn UnauthenticatedChatConnection_get_pre_keys_unrestricted_auth(
     .await
 }
 
-#[bridge_io(TokioAsyncContext)]
+#[bridge_io(TokioAsyncContext, nice = true)]
 async fn UnauthenticatedChatConnection_account_exists(
-    chat: &UnauthenticatedChatConnection,
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
     account: ServiceId,
 ) -> Result<bool, RequestError<Infallible>> {
     chat.as_typed(|chat| chat.account_exists(account)).await
@@ -483,6 +527,91 @@ async fn UnauthenticatedChatConnection_backup_get_media_upload_form(
         )
     })
     .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_backup_set_public_key(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    credential: ::zkgroup::backups::BackupAuthCredential,
+    server_keys: ::zkgroup::generic_server_params::GenericServerPublicParams,
+    signing_key: BridgeHandleRef<'_, PrivateKey>,
+    rng: RandomNumberGenerator,
+) -> Result<(), RequestError<BackupAuthCredentialRejected>> {
+    let mut rng = rng.create();
+    let backup_auth = BackupAuth::new(&credential, &server_keys, &signing_key);
+    chat.require_grpc()
+        .await
+        .set_backup_public_key(&backup_auth, &mut rng)
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_backup_get_cdn_credentials(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    credential: ::zkgroup::backups::BackupAuthCredential,
+    server_keys: ::zkgroup::generic_server_params::GenericServerPublicParams,
+    signing_key: BridgeHandleRef<'_, PrivateKey>,
+    cdn: i32,
+    rng: RandomNumberGenerator,
+) -> Result<CdnCredentials, RequestError<BackupAuthCredentialRejected>> {
+    let mut rng = rng.create();
+    let backup_auth = BackupAuth::new(&credential, &server_keys, &signing_key);
+    let cdn = cdn
+        .try_into()
+        .expect("should not be using cdns above INT32_MAX");
+    chat.require_grpc()
+        .await
+        .get_backup_cdn_credentials(&backup_auth, cdn, &mut rng)
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_backup_get_svrb_credentials(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    credential: ::zkgroup::backups::BackupAuthCredential,
+    server_keys: ::zkgroup::generic_server_params::GenericServerPublicParams,
+    signing_key: BridgeHandleRef<'_, PrivateKey>,
+    rng: RandomNumberGenerator,
+) -> Result<(String, String), RequestError<BackupAuthCredentialRejected>> {
+    let mut rng = rng.create();
+    let backup_auth = BackupAuth::new(&credential, &server_keys, &signing_key);
+    chat.require_grpc()
+        .await
+        .get_backup_svrb_credentials(&backup_auth, &mut rng)
+        .await
+        .map(|libsignal_net::auth::Auth { username, password }| (username, password))
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_backup_refresh(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    credential: ::zkgroup::backups::BackupAuthCredential,
+    server_keys: ::zkgroup::generic_server_params::GenericServerPublicParams,
+    signing_key: BridgeHandleRef<'_, PrivateKey>,
+    rng: RandomNumberGenerator,
+) -> Result<(), RequestError<BackupAuthCredentialRejected>> {
+    let mut rng = rng.create();
+    let backup_auth = BackupAuth::new(&credential, &server_keys, &signing_key);
+    chat.require_grpc()
+        .await
+        .refresh_backup(&backup_auth, &mut rng)
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_backup_delete_all(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    credential: ::zkgroup::backups::BackupAuthCredential,
+    server_keys: ::zkgroup::generic_server_params::GenericServerPublicParams,
+    signing_key: BridgeHandleRef<'_, PrivateKey>,
+    rng: RandomNumberGenerator,
+) -> Result<(), RequestError<BackupAuthCredentialRejected>> {
+    let mut rng = rng.create();
+    let backup_auth = BackupAuth::new(&credential, &server_keys, &signing_key);
+    chat.require_grpc()
+        .await
+        .backup_delete_all(&backup_auth, &mut rng)
+        .await
 }
 
 #[allow(clippy::too_many_arguments)]
