@@ -189,6 +189,22 @@ public object NativeTesting {
   @JvmStatic
   public external fun TESTING_KeyTransStoredAccountData(): ByteArray
   @JvmStatic
+  public external fun TESTING_MySimpleTestEnum_identity(x: Object): Object
+  @JvmStatic
+  public external fun TESTING_MySimpleTestEnum_to_string(x: Object): String
+  @JvmStatic
+  public external fun TESTING_MyTestEnum_identity(x: Object): Object
+  @JvmStatic
+  public external fun TESTING_MyTestEnum_to_string(x: Object): String
+  @JvmStatic
+  public external fun TESTING_MyTestPoint_identity(x: Object): Object
+  @JvmStatic
+  public external fun TESTING_MyTestPoint_to_string(x: Object): String
+  @JvmStatic
+  public external fun TESTING_MyTestStruct_identity(x: Object): Object
+  @JvmStatic
+  public external fun TESTING_MyTestStruct_to_string(x: Object): String
+  @JvmStatic
   public external fun TESTING_NonSuspendingBackgroundThreadRuntime_Destroy(handle: ObjectHandle): Unit
   @JvmStatic
   public external fun TESTING_NonSuspendingBackgroundThreadRuntime_New(): ObjectHandle
@@ -272,6 +288,10 @@ public object NativeTesting {
   public external fun TESTING_TokioAsyncContext_NewSingleThreaded(): ObjectHandle
   @JvmStatic
   public external fun TESTING_TokioAsyncFuture(asyncRuntime: ObjectHandle, input: Int): CompletableFuture<Int>
+  @JvmStatic
+  public external fun TESTING_conversion_Data_VecU8_identity(x: ByteArray): ByteArray
+  @JvmStatic
+  public external fun TESTING_conversion_Data_VecU8_to_string(x: ByteArray): String
   @JvmStatic
   public external fun TESTING_conversion_Data_identity(x: ByteArray): ByteArray
   @JvmStatic

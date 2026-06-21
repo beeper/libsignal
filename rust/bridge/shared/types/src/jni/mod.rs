@@ -286,9 +286,13 @@ impl JniError for SignalProtocolError {
                     jni_args!((addr_name => java.lang.String) -> void),
                 );
             }
-            SignalProtocolError::SessionNotFound(addr) => {
-                let addr_object = protocol_address_to_jobject(env, addr)?;
+            SignalProtocolError::SessionNotFound(SessionNotFound { address, op: _ }) => {
                 let message = new_jstring_from_owned_utf8(env, self.to_string())?;
+                let addr_object = if let Some(address) = address {
+                    protocol_address_to_jobject(env, address)?
+                } else {
+                    JObject::null()
+                };
                 return new_instance(
                     env,
                     ClassName("org.signal.libsignal.protocol.NoSessionException"),
@@ -1731,7 +1735,7 @@ impl GlobalAndVM {
 ///
 /// A value that's already an object will be unchanged. A `void` "value" will be converted to
 /// `null`.
-fn box_primitive_if_needed<'a>(
+pub fn box_primitive_if_needed<'a>(
     env: &mut jni::Env<'a>,
     value: JValueOwned<'a>,
 ) -> Result<JObject<'a>, BridgeLayerError> {

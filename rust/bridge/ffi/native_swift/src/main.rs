@@ -15,6 +15,7 @@ use clap::Parser;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use libsignal_bridge_types::ffi::{FFI_ITEMS, SwiftMetadataContext};
 use minijinja::context;
+use minijinja::value::DynObject;
 
 #[derive(Parser)]
 /// Regenerate NativeNice.swift and NativeNiceTesting.swift
@@ -26,12 +27,53 @@ struct Cli {
     verify: bool,
 }
 
+fn preserve_underscores(
+    inner: impl Fn(&str) -> String + 'static,
+) -> impl Fn(String) -> String + 'static {
+    move |x| {
+        let x_sans_underscore = x.trim_start_matches('_');
+        let core = inner(x_sans_underscore);
+        format!("{}{core}", &x[0..(x.len() - x_sans_underscore.len())])
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
     let mut env = minijinja::Environment::new();
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
-    env.add_filter("to_snake_case", |x: String| x.to_snake_case());
-    env.add_filter("to_lower_camel_case", |x: String| x.to_lower_camel_case());
+    // cbindgen does some mangling to avoid identifiers conflicting with keywords
+    env.add_filter("to_snake_case", |x: String| match x.as_str() {
+        "double" | "Double" => "double_".to_string(),
+        _ => preserve_underscores(ToSnakeCase::to_snake_case)(x),
+    });
+    env.add_filter(
+        "to_lower_camel_case",
+        preserve_underscores(ToLowerCamelCase::to_lower_camel_case),
+    );
+    env.add_filter("arg_converter", |ty: String| {
+        libsignal_bridge_types::metadata::ffi::names::arg_converter(&ty)
+    });
+    env.add_filter("return_converter", |ty: String| {
+        libsignal_bridge_types::metadata::ffi::names::return_converter(&ty)
+    });
+    env.add_function("enum_has_payload", |e: DynObject| {
+        e.get_value_by_str("variants")
+            .expect("missing variants")
+            .try_iter()
+            .expect("enumerate variants")
+            .any(|name_struct_pair| {
+                name_struct_pair
+                    .get_item_by_index(1)
+                    .expect("get_item_by_index()")
+                    .as_object()
+                    .expect("struct is object")
+                    .get_value_by_str("fields")
+                    .expect("missing fields")
+                    .len()
+                    .expect("fields has len")
+                    > 0
+            })
+    });
     env.add_template("NativeNice.swift.in", include_str!("NativeNice.swift.in"))?;
     let mut non_testing_ctx = SwiftMetadataContext::default();
     let mut testing_ctx = SwiftMetadataContext::default();
@@ -55,6 +97,10 @@ fn main() -> anyhow::Result<()> {
         } else {
             "./swift/Sources/LibSignalClient/NativeNice.swift"
         });
+        if !args.verify {
+            // If we're not verifying, write the initial code to disk to help us debug syntax errors.
+            std::fs::write(&dst, code.as_bytes())?;
+        }
         let (r, mut w) = std::io::pipe()?;
         std::thread::spawn(move || w.write_all(code.as_bytes()).expect("write succeeds"));
         let out = Command::new("swift")

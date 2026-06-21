@@ -143,6 +143,34 @@ export const enum LogLevel {
   Trace,
 }
 
+export type ReturnFfiMyRemoteDeriveEnum =
+  | {
+      __type: 0;
+    }
+  | {
+      __type: 1;
+      _0: number;
+      _1: number;
+    }
+  | {
+      __type: 2;
+      x: string;
+      y: number;
+    };
+
+export type ReturnFfiMyRemoteDeriveStruct = {
+  x: number;
+  y: number;
+};
+
+export type ReturnFfiMySimpleTestEnum =
+  | {
+      __type: 0;
+    }
+  | {
+      __type: 1;
+    };
+
 export type ReturnFfiMyTestEnum =
   | {
       __type: 0;
@@ -177,6 +205,34 @@ export type ReturnFfiMyTestStruct = {
   my_numeric_field: number;
   my_string_field: string;
 };
+
+export type ArgFfiMyRemoteDeriveEnum =
+  | {
+      __type: 0;
+    }
+  | {
+      __type: 1;
+      _0: number;
+      _1: number;
+    }
+  | {
+      __type: 2;
+      x: string;
+      y: number;
+    };
+
+export type ArgFfiMyRemoteDeriveStruct = {
+  x: number;
+  y: number;
+};
+
+export type ArgFfiMySimpleTestEnum =
+  | {
+      __type: 0;
+    }
+  | {
+      __type: 1;
+    };
 
 export type ArgFfiMyTestEnum =
   | {
@@ -677,6 +733,61 @@ type NativeFunctions = {
   DecryptionErrorMessage_Serialize: (
     obj: Wrapper<DecryptionErrorMessage>
   ) => Uint8Array<ArrayBuffer>;
+  DonationPermitDerivedKeyPair_CheckValidContents: (
+    buffer: Uint8Array<ArrayBuffer>
+  ) => void;
+  DonationPermitDerivedKeyPair_ForExpiration: (
+    timestamp: Timestamp,
+    root: Wrapper<ServerSecretParams>
+  ) => Uint8Array<ArrayBuffer>;
+  DonationPermitRequestContext_CheckValidContents: (
+    buffer: Uint8Array<ArrayBuffer>
+  ) => void;
+  DonationPermitRequestContext_NewDeterministic: (
+    count: number,
+    randomness: Uint8Array<ArrayBuffer>
+  ) => Uint8Array<ArrayBuffer>;
+  DonationPermitRequestContext_Receive: (
+    context: Uint8Array<ArrayBuffer>,
+    response: Uint8Array<ArrayBuffer>,
+    public_params: Wrapper<ServerPublicParams>,
+    now: Timestamp
+  ) => Array<Uint8Array<ArrayBuffer>>;
+  DonationPermitRequestContext_Request: (
+    ctx: Uint8Array<ArrayBuffer>
+  ) => Uint8Array<ArrayBuffer>;
+  DonationPermitRequest_CheckValidContents: (
+    buffer: Uint8Array<ArrayBuffer>
+  ) => void;
+  DonationPermitRequest_Len: (
+    donation_permit_request: Uint8Array<ArrayBuffer>
+  ) => number;
+  DonationPermitResponse_CheckValidContents: (
+    buffer: Uint8Array<ArrayBuffer>
+  ) => void;
+  DonationPermitResponse_DefaultExpiration: (
+    current_time: Timestamp
+  ) => Timestamp;
+  DonationPermitResponse_GetExpiration: (
+    response: Uint8Array<ArrayBuffer>
+  ) => Timestamp;
+  DonationPermitResponse_IssueDeterministic: (
+    request: Uint8Array<ArrayBuffer>,
+    key_pair: Uint8Array<ArrayBuffer>,
+    seed: Uint8Array<ArrayBuffer>
+  ) => Uint8Array<ArrayBuffer>;
+  DonationPermit_CheckValidContents: (buffer: Uint8Array<ArrayBuffer>) => void;
+  DonationPermit_Expiration: (
+    donation_permit: Uint8Array<ArrayBuffer>
+  ) => Timestamp;
+  DonationPermit_SpendId: (
+    donation_permit: Uint8Array<ArrayBuffer>
+  ) => Uint8Array<ArrayBuffer>;
+  DonationPermit_Verify: (
+    permit: Uint8Array<ArrayBuffer>,
+    now: Timestamp,
+    key_pair: Uint8Array<ArrayBuffer>
+  ) => void;
   ExpiringProfileKeyCredentialResponse_CheckValidContents: (
     buffer: Uint8Array<ArrayBuffer>
   ) => void;
@@ -1849,6 +1960,35 @@ type NativeFunctions = {
     attestation_msg: Uint8Array<ArrayBuffer>,
     current_timestamp: Timestamp
   ) => SgxClientState;
+  Svr2_Delete: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    connection_manager: Wrapper<ConnectionManager>,
+    username: string,
+    password: string
+  ) => CancellablePromise<void>;
+  Svr2_FinishBackup: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    session: Wrapper<Svr2BackupSession>,
+    connection_manager: Wrapper<ConnectionManager>,
+    username: string,
+    password: string
+  ) => CancellablePromise<void>;
+  Svr2_Restore: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    pin: Uint8Array<ArrayBuffer>,
+    connection_manager: Wrapper<ConnectionManager>,
+    username: string,
+    password: string
+  ) => CancellablePromise<[Uint8Array<ArrayBuffer>, number]>;
+  Svr2_StartBackup: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    pin: Uint8Array<ArrayBuffer>,
+    data: Uint8Array<ArrayBuffer>,
+    max_tries: number,
+    connection_manager: Wrapper<ConnectionManager>,
+    username: string,
+    password: string
+  ) => CancellablePromise<Svr2BackupSession>;
   TESTING_BridgedStringMap_dump_to_json: (
     map: Wrapper<BridgedStringMap>
   ) => string;
@@ -2020,6 +2160,20 @@ type NativeFunctions = {
   TESTING_KeyTransFatalVerificationFailure: () => void;
   TESTING_KeyTransNonFatalVerificationFailure: () => void;
   TESTING_KeyTransStoredAccountData: () => Uint8Array<ArrayBuffer>;
+  TESTING_MyRemoteDeriveEnum_identity: (
+    x: ArgFfiMyRemoteDeriveEnum
+  ) => ReturnFfiMyRemoteDeriveEnum;
+  TESTING_MyRemoteDeriveStruct_identity: (
+    x: ArgFfiMyRemoteDeriveStruct
+  ) => ReturnFfiMyRemoteDeriveStruct;
+  TESTING_MySimpleTestEnum_identity: (
+    x: ArgFfiMySimpleTestEnum
+  ) => ReturnFfiMySimpleTestEnum;
+  TESTING_MySimpleTestEnum_identity_async: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    x: ArgFfiMySimpleTestEnum
+  ) => CancellablePromise<ReturnFfiMySimpleTestEnum>;
+  TESTING_MySimpleTestEnum_to_string: (x: ArgFfiMySimpleTestEnum) => string;
   TESTING_MyTestEnum_identity: (x: ArgFfiMyTestEnum) => ReturnFfiMyTestEnum;
   TESTING_MyTestEnum_identity_async: (
     asyncRuntime: Wrapper<TokioAsyncContext>,
@@ -2125,6 +2279,16 @@ type NativeFunctions = {
     asyncRuntime: Wrapper<TokioAsyncContext>,
     input: number
   ) => CancellablePromise<number>;
+  TESTING_conversion_Data_VecU8_identity: (
+    x: Uint8Array<ArrayBuffer>
+  ) => Uint8Array<ArrayBuffer>;
+  TESTING_conversion_Data_VecU8_identity_async: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    x: Uint8Array<ArrayBuffer>
+  ) => CancellablePromise<Uint8Array<ArrayBuffer>>;
+  TESTING_conversion_Data_VecU8_to_string: (
+    x: Uint8Array<ArrayBuffer>
+  ) => string;
   TESTING_conversion_Data_identity: (
     x: Uint8Array<ArrayBuffer>
   ) => Uint8Array<ArrayBuffer>;
@@ -2520,6 +2684,22 @@ const {
   DecryptionErrorMessage_GetRatchetKey,
   DecryptionErrorMessage_GetTimestamp,
   DecryptionErrorMessage_Serialize,
+  DonationPermitDerivedKeyPair_CheckValidContents,
+  DonationPermitDerivedKeyPair_ForExpiration,
+  DonationPermitRequestContext_CheckValidContents,
+  DonationPermitRequestContext_NewDeterministic,
+  DonationPermitRequestContext_Receive,
+  DonationPermitRequestContext_Request,
+  DonationPermitRequest_CheckValidContents,
+  DonationPermitRequest_Len,
+  DonationPermitResponse_CheckValidContents,
+  DonationPermitResponse_DefaultExpiration,
+  DonationPermitResponse_GetExpiration,
+  DonationPermitResponse_IssueDeterministic,
+  DonationPermit_CheckValidContents,
+  DonationPermit_Expiration,
+  DonationPermit_SpendId,
+  DonationPermit_Verify,
   ExpiringProfileKeyCredentialResponse_CheckValidContents,
   ExpiringProfileKeyCredential_CheckValidContents,
   ExpiringProfileKeyCredential_GetExpirationTime,
@@ -2843,6 +3023,10 @@ const {
   SignedPreKeyRecord_New,
   SignedPreKeyRecord_Serialize,
   Svr2Client_New,
+  Svr2_Delete,
+  Svr2_FinishBackup,
+  Svr2_Restore,
+  Svr2_StartBackup,
   TESTING_BridgedStringMap_dump_to_json,
   TESTING_CdsiLookupErrorConvert,
   TESTING_CdsiLookupResponseConvert,
@@ -2900,6 +3084,11 @@ const {
   TESTING_KeyTransFatalVerificationFailure,
   TESTING_KeyTransNonFatalVerificationFailure,
   TESTING_KeyTransStoredAccountData,
+  TESTING_MyRemoteDeriveEnum_identity,
+  TESTING_MyRemoteDeriveStruct_identity,
+  TESTING_MySimpleTestEnum_identity,
+  TESTING_MySimpleTestEnum_identity_async,
+  TESTING_MySimpleTestEnum_to_string,
   TESTING_MyTestEnum_identity,
   TESTING_MyTestEnum_identity_async,
   TESTING_MyTestEnum_to_string,
@@ -2949,6 +3138,9 @@ const {
   TESTING_TokioAsyncContext_FutureSuccessBytes,
   TESTING_TokioAsyncContext_NewSingleThreaded,
   TESTING_TokioAsyncFuture,
+  TESTING_conversion_Data_VecU8_identity,
+  TESTING_conversion_Data_VecU8_identity_async,
+  TESTING_conversion_Data_VecU8_to_string,
   TESTING_conversion_Data_identity,
   TESTING_conversion_Data_identity_async,
   TESTING_conversion_Data_to_string,
@@ -3136,6 +3328,22 @@ export {
   DecryptionErrorMessage_GetRatchetKey,
   DecryptionErrorMessage_GetTimestamp,
   DecryptionErrorMessage_Serialize,
+  DonationPermitDerivedKeyPair_CheckValidContents,
+  DonationPermitDerivedKeyPair_ForExpiration,
+  DonationPermitRequestContext_CheckValidContents,
+  DonationPermitRequestContext_NewDeterministic,
+  DonationPermitRequestContext_Receive,
+  DonationPermitRequestContext_Request,
+  DonationPermitRequest_CheckValidContents,
+  DonationPermitRequest_Len,
+  DonationPermitResponse_CheckValidContents,
+  DonationPermitResponse_DefaultExpiration,
+  DonationPermitResponse_GetExpiration,
+  DonationPermitResponse_IssueDeterministic,
+  DonationPermit_CheckValidContents,
+  DonationPermit_Expiration,
+  DonationPermit_SpendId,
+  DonationPermit_Verify,
   ExpiringProfileKeyCredentialResponse_CheckValidContents,
   ExpiringProfileKeyCredential_CheckValidContents,
   ExpiringProfileKeyCredential_GetExpirationTime,
@@ -3459,6 +3667,10 @@ export {
   SignedPreKeyRecord_New,
   SignedPreKeyRecord_Serialize,
   Svr2Client_New,
+  Svr2_Delete,
+  Svr2_FinishBackup,
+  Svr2_Restore,
+  Svr2_StartBackup,
   TESTING_BridgedStringMap_dump_to_json,
   TESTING_CdsiLookupErrorConvert,
   TESTING_CdsiLookupResponseConvert,
@@ -3516,6 +3728,11 @@ export {
   TESTING_KeyTransFatalVerificationFailure,
   TESTING_KeyTransNonFatalVerificationFailure,
   TESTING_KeyTransStoredAccountData,
+  TESTING_MyRemoteDeriveEnum_identity,
+  TESTING_MyRemoteDeriveStruct_identity,
+  TESTING_MySimpleTestEnum_identity,
+  TESTING_MySimpleTestEnum_identity_async,
+  TESTING_MySimpleTestEnum_to_string,
   TESTING_MyTestEnum_identity,
   TESTING_MyTestEnum_identity_async,
   TESTING_MyTestEnum_to_string,
@@ -3565,6 +3782,9 @@ export {
   TESTING_TokioAsyncContext_FutureSuccessBytes,
   TESTING_TokioAsyncContext_NewSingleThreaded,
   TESTING_TokioAsyncFuture,
+  TESTING_conversion_Data_VecU8_identity,
+  TESTING_conversion_Data_VecU8_identity_async,
+  TESTING_conversion_Data_VecU8_to_string,
   TESTING_conversion_Data_identity,
   TESTING_conversion_Data_identity_async,
   TESTING_conversion_Data_to_string,
@@ -3936,6 +4156,9 @@ export interface SignalMessage {
   readonly __type: unique symbol;
 }
 export interface SignedPreKeyRecord {
+  readonly __type: unique symbol;
+}
+export interface Svr2BackupSession {
   readonly __type: unique symbol;
 }
 export interface TestingFutureCancellationCounter {

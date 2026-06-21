@@ -18,6 +18,25 @@ import {
 } from './NiceConverters.js';
 import { Rng } from './RngForTesting.js';
 
+export type MyRemoteDeriveEnum =
+  | 'unit'
+  | {
+      tuple: [number, number];
+    }
+  | {
+      record: {
+        x: string;
+        y: number;
+      };
+    };
+
+export type MyRemoteDeriveStruct = {
+  x: number;
+  y: number;
+};
+
+export type MySimpleTestEnum = 'a' | 'b';
+
 export type MyTestEnum =
   | 'unit'
   | {
@@ -44,6 +63,53 @@ export type MyTestStruct = {
   myNumericField: number;
   myStringField: string;
 };
+
+function returnConverterMyRemoteDeriveEnum(
+  ffiInput: Native.ReturnFfiMyRemoteDeriveEnum
+): MyRemoteDeriveEnum {
+  switch (ffiInput.__type) {
+    case 0:
+      return 'unit';
+    case 1:
+      return {
+        tuple: [identity(ffiInput._0), identity(ffiInput._1)],
+      };
+    case 2:
+      return {
+        record: {
+          x: identity(ffiInput.x),
+          y: identity(ffiInput.y),
+        },
+      };
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for MyRemoteDeriveEnum');
+  }
+}
+
+function returnConverterMyRemoteDeriveStruct(
+  ffiInput: Native.ReturnFfiMyRemoteDeriveStruct
+): MyRemoteDeriveStruct {
+  return {
+    x: identity(ffiInput.x),
+    y: identity(ffiInput.y),
+  };
+}
+
+function returnConverterMySimpleTestEnum(
+  ffiInput: Native.ReturnFfiMySimpleTestEnum
+): MySimpleTestEnum {
+  switch (ffiInput.__type) {
+    case 0:
+      return 'a';
+    case 1:
+      return 'b';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for MySimpleTestEnum');
+  }
+}
 
 function returnConverterMyTestEnum(
   ffiInput: Native.ReturnFfiMyTestEnum
@@ -91,6 +157,57 @@ function returnConverterMyTestStruct(
     myNumericField: identity(ffiInput.my_numeric_field),
     myStringField: identity(ffiInput.my_string_field),
   };
+}
+
+function argConverterMyRemoteDeriveEnum(
+  niceInput: MyRemoteDeriveEnum
+): Native.ArgFfiMyRemoteDeriveEnum {
+  if (niceInput === 'unit') {
+    return { __type: 0 };
+  }
+
+  if ('tuple' in niceInput) {
+    const [_0, _1] = niceInput.tuple;
+    return {
+      __type: 1,
+      _0: identity(_0),
+      _1: identity(_1),
+    };
+  }
+
+  if ('record' in niceInput) {
+    const { x: x, y: y } = niceInput.record;
+    return {
+      __type: 2,
+      x: identity(x),
+      y: identity(y),
+    };
+  }
+
+  niceInput satisfies never;
+  throw new Error('Cannot match on MyRemoteDeriveEnum argument');
+}
+
+function argConverterMyRemoteDeriveStruct(
+  niceInput: MyRemoteDeriveStruct
+): Native.ArgFfiMyRemoteDeriveStruct {
+  const { x: x, y: y } = niceInput;
+  return { x: identity(x), y: identity(y) };
+}
+
+function argConverterMySimpleTestEnum(
+  niceInput: MySimpleTestEnum
+): Native.ArgFfiMySimpleTestEnum {
+  if (niceInput === 'a') {
+    return { __type: 0 };
+  }
+
+  if (niceInput === 'b') {
+    return { __type: 1 };
+  }
+
+  niceInput satisfies never;
+  throw new Error('Cannot match on MySimpleTestEnum argument');
 }
 
 function argConverterMyTestEnum(
@@ -159,6 +276,69 @@ function argConverterMyTestStruct(
     my_numeric_field: identity(my_numeric_field),
     my_string_field: identity(my_string_field),
   };
+}
+
+export function TESTING_MyRemoteDeriveEnum_identity({
+  x: x,
+}: {
+  x: MyRemoteDeriveEnum;
+}): MyRemoteDeriveEnum {
+  return returnConverterMyRemoteDeriveEnum(
+    Native.TESTING_MyRemoteDeriveEnum_identity(
+      argConverterMyRemoteDeriveEnum(x)
+    )
+  );
+}
+
+export function TESTING_MyRemoteDeriveStruct_identity({
+  x: x,
+}: {
+  x: MyRemoteDeriveStruct;
+}): MyRemoteDeriveStruct {
+  return returnConverterMyRemoteDeriveStruct(
+    Native.TESTING_MyRemoteDeriveStruct_identity(
+      argConverterMyRemoteDeriveStruct(x)
+    )
+  );
+}
+
+export function TESTING_MySimpleTestEnum_identity({
+  x: x,
+}: {
+  x: MySimpleTestEnum;
+}): MySimpleTestEnum {
+  return returnConverterMySimpleTestEnum(
+    Native.TESTING_MySimpleTestEnum_identity(argConverterMySimpleTestEnum(x))
+  );
+}
+export async function TESTING_MySimpleTestEnum_identity_async({
+  asyncContext,
+  abortSignal,
+  x: x,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  x: MySimpleTestEnum;
+}): Promise<MySimpleTestEnum> {
+  return returnConverterMySimpleTestEnum(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.TESTING_MySimpleTestEnum_identity_async(
+        asyncContext,
+        argConverterMySimpleTestEnum(x)
+      )
+    )
+  );
+}
+
+export function TESTING_MySimpleTestEnum_to_string({
+  x: x,
+}: {
+  x: MySimpleTestEnum;
+}): string {
+  return identity(
+    Native.TESTING_MySimpleTestEnum_to_string(argConverterMySimpleTestEnum(x))
+  );
 }
 
 export function TESTING_MyTestEnum_identity({
@@ -303,6 +483,41 @@ export async function TESTING_TokioAsyncContext_FutureSuccessBytes({
       )
     )
   );
+}
+
+export function TESTING_conversion_Data_VecU8_identity({
+  x: x,
+}: {
+  x: Uint8Array<ArrayBuffer>;
+}): Uint8Array<ArrayBuffer> {
+  return identity(Native.TESTING_conversion_Data_VecU8_identity(identity(x)));
+}
+export async function TESTING_conversion_Data_VecU8_identity_async({
+  asyncContext,
+  abortSignal,
+  x: x,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  x: Uint8Array<ArrayBuffer>;
+}): Promise<Uint8Array<ArrayBuffer>> {
+  return identity(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.TESTING_conversion_Data_VecU8_identity_async(
+        asyncContext,
+        identity(x)
+      )
+    )
+  );
+}
+
+export function TESTING_conversion_Data_VecU8_to_string({
+  x: x,
+}: {
+  x: Uint8Array<ArrayBuffer>;
+}): string {
+  return identity(Native.TESTING_conversion_Data_VecU8_to_string(identity(x)));
 }
 
 export function TESTING_conversion_Data_identity({

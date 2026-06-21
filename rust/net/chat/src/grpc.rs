@@ -16,7 +16,8 @@ use std::error::Error;
 use std::future::Future;
 
 use itertools::Itertools;
-use libsignal_net::infra::errors::{LogSafeDisplay, RetryLater};
+use libsignal_core::LogSafeDisplay;
+use libsignal_net::infra::errors::RetryLater;
 use libsignal_net::infra::http_client::{Http2TransportError, Http2TransportErrorKind};
 use libsignal_net_grpc::proto::chat::messages::ChallengeRequired as ChallengeRequiredProto;
 use libsignal_net_grpc::proto::google;
@@ -599,9 +600,34 @@ pub(crate) mod testutil {
     /// a corresponding config to switch between WS and gRPC implementations. Replace the
     /// `RequestValidator` with `TypedRequestValidator` if comparing the bodies using protobuf
     /// semantics (rather than bytewise) is important---it usually isn't.
+    #[derive(Clone)]
     pub(crate) struct RequestValidator {
         pub expected: http::Request<Vec<u8>>,
         pub response: http::Response<Vec<u8>>,
+    }
+
+    impl tower_service::Service<http::Request<tonic::body::Body>> for RequestValidator {
+        type Response =
+            <&'static Self as tower_service::Service<http::Request<tonic::body::Body>>>::Response;
+        type Error =
+            <&'static Self as tower_service::Service<http::Request<tonic::body::Body>>>::Error;
+        type Future =
+            <&'static Self as tower_service::Service<http::Request<tonic::body::Body>>>::Future;
+
+        fn poll_ready(
+            &mut self,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            let mut x: &Self = self;
+            <&Self as tower_service::Service<http::Request<tonic::body::Body>>>::poll_ready(
+                &mut x, cx,
+            )
+        }
+
+        fn call(&mut self, req: http::Request<tonic::body::Body>) -> Self::Future {
+            let mut x: &Self = self;
+            <&Self as tower_service::Service<http::Request<tonic::body::Body>>>::call(&mut x, req)
+        }
     }
 
     impl tower_service::Service<http::Request<tonic::body::Body>> for &'_ RequestValidator {

@@ -214,17 +214,18 @@ pub mod node {
 pub mod jni {
     use std::collections::BTreeMap;
 
-    use linkme::distributed_slice;
     use serde::Serialize;
 
     use super::*;
 
-    #[derive(Debug, Clone, Serialize)]
+    #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
     pub struct KtArgConverter {
         /// What's the high-level kotlin type?
         pub nice_type: String,
         /// What's the low-level kotlin type that gets passed to native?
         pub ffi_type: String,
+        /// What's the kotlin spelling of the type that this type erases to (for a field lookup)
+        pub ffi_field_type_erased: String,
         /// What function should be used to convert between the types?
         ///
         /// This will be invoked like `<converter_function>(my_value)`. As a result, instance
@@ -232,7 +233,7 @@ pub mod jni {
         /// like `(Object::toString)(my_value)`.
         pub converter_function: String,
     }
-    #[derive(Debug, Clone, Serialize)]
+    #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
     pub struct KtReturnConverter {
         /// What's the high-level kotlin type?
         pub nice_type: String,
@@ -257,6 +258,10 @@ pub mod jni {
     #[derive(Debug, Clone, Serialize, Default)]
     pub struct KtMetadataContext {
         pub nice_functions: BTreeMap<String, NiceFunction>,
+
+        pub derived_types: BTreeMap<String, StructOrEnum<NiceType>>,
+        pub derived_return_converters: BTreeMap<String, StructOrEnum<KtReturnConverter>>,
+        pub derived_arg_converters: BTreeMap<String, StructOrEnum<KtArgConverter>>,
     }
 
     /// These functions should mutate the attached [KtMetadataContext] to register their item.
@@ -304,19 +309,18 @@ pub mod jni {
 pub mod ffi {
     use std::collections::BTreeMap;
 
-    use linkme::distributed_slice;
     use serde::Serialize;
 
     use super::*;
 
-    #[derive(Debug, Clone, Serialize)]
+    #[derive(Debug, Clone, Serialize, PartialEq, PartialOrd, Ord, Eq, Hash)]
     pub struct SwiftArgConverter {
         /// What's the high-level swift type?
         pub nice_type: String,
         /// What's the type which implements the Swift `ArgConverter` protocol
         pub converter_type: String,
     }
-    #[derive(Debug, Clone, Serialize)]
+    #[derive(Debug, Clone, Serialize, PartialEq, PartialOrd, Ord, Eq, Hash)]
     pub struct SwiftReturnConverter {
         /// What's the high-level swift type?
         pub nice_type: String,
@@ -335,6 +339,10 @@ pub mod ffi {
     #[derive(Debug, Clone, Serialize, Default)]
     pub struct SwiftMetadataContext {
         pub nice_functions: BTreeMap<String, NiceFunction>,
+
+        pub derived_types: BTreeMap<String, StructOrEnum<NiceType>>,
+        pub derived_return_converters: BTreeMap<String, StructOrEnum<SwiftReturnConverter>>,
+        pub derived_arg_converters: BTreeMap<String, StructOrEnum<SwiftArgConverter>>,
     }
 
     /// These functions should mutate the attached [SwiftMetadataContext] to register their item.
@@ -374,6 +382,14 @@ pub mod ffi {
             ) -> SwiftReturnConverter {
                 T::register_swift_result_converter(ctx)
             }
+        }
+    }
+    pub mod names {
+        pub fn return_converter(ty: &str) -> String {
+            format!("DerivedReturnConverter{ty}")
+        }
+        pub fn arg_converter(ty: &str) -> String {
+            format!("DerivedArgConverter{ty}")
         }
     }
 }

@@ -9,25 +9,15 @@
   "ktlint:standard:function-naming",
   "ktlint:standard:property-naming",
   "ktlint:standard:filename",
+  "ktlint:standard:max-line-length",
 )
 
 package org.signal.libsignal.internal
 
+import org.signal.libsignal.internal.NativeNiceHelpers.identity
+import org.signal.libsignal.internal.NativeNiceHelpers.mapPair
+
 internal object NativeNice {
-  @Suppress("NOTHING_TO_INLINE")
-  private inline fun <T> identity(x: T): T = x
-
-  @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
-  private fun convertToObject(x: Any): Object = x as Object
-
-  private inline fun <InA, InB, OutA, OutB> mapPair(
-    crossinline transformA: (InA) -> OutA,
-    crossinline transformB: (InB) -> OutB,
-  ): (Pair<InA, InB>) -> Pair<OutA, OutB> =
-    {
-      Pair(transformA(it.first), transformB(it.second))
-    }
-
   public fun UnauthenticatedChatConnection_account_exists(
     asyncCtx: TokioAsyncContext,
     chat: org.signal.libsignal.net.UnauthenticatedChatConnection,
@@ -45,7 +35,6 @@ internal object NativeNice {
       }
     return ffiOut
       .makeCancelable(asyncCtx)
-      .thenApply { identity(it) }
   }
 
   public fun UnauthenticatedChatConnection_backup_delete_all(
@@ -78,7 +67,6 @@ internal object NativeNice {
       }
     return ffiOut
       .makeCancelable(asyncCtx)
-      .thenApply { identity(it) }
   }
 
   public fun UnauthenticatedChatConnection_backup_get_cdn_credentials(
@@ -183,7 +171,6 @@ internal object NativeNice {
       }
     return ffiOut
       .makeCancelable(asyncCtx)
-      .thenApply { identity(it) }
   }
 
   public fun UnauthenticatedChatConnection_backup_set_public_key(
@@ -216,6 +203,5 @@ internal object NativeNice {
       }
     return ffiOut
       .makeCancelable(asyncCtx)
-      .thenApply { identity(it) }
   }
 }

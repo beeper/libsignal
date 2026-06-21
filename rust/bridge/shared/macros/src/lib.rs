@@ -169,7 +169,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::*;
-use syn::parse::{Parse, Parser};
+use syn::parse::Parse;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::*;
@@ -607,23 +607,57 @@ pub fn bridge_callbacks(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn derive_bridged_as_value_inner(item: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let mut node = true;
+    let mut ffi = true;
+    let mut jni = true;
+    let mut remote: Option<syn::Path> = None;
     for attr in &item.attrs {
         if attr
             .path()
             .is_ident(&Ident::new("bridge", Span::call_site()))
         {
-            let contents = Punctuated::<MetaNameValue, Token![,]>::parse_terminated
-                .parse2(attr.meta.require_list()?.tokens.clone())?;
-            node = bool_for_meta_key(&contents, "node")?.unwrap_or(true);
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("node") {
+                    let flag: LitBool = meta.value()?.parse()?;
+                    node = flag.value();
+                    Ok(())
+                } else if meta.path.is_ident("ffi") {
+                    let flag: LitBool = meta.value()?.parse()?;
+                    ffi = flag.value();
+                    Ok(())
+                } else if meta.path.is_ident("jni") {
+                    let flag: LitBool = meta.value()?.parse()?;
+                    jni = flag.value();
+                    Ok(())
+                } else if meta.path.is_ident("remote") {
+                    remote = Some(meta.value()?.parse()?);
+                    Ok(())
+                } else {
+                    Err(meta.error("unrecognized key"))
+                }
+            })?;
         }
     }
+    // What type should this impl target?
+    let target = remote.unwrap_or_else(|| item.ident.clone().into());
     let node = if node {
-        Some(node::derive_bridged_as_value(&item)?)
+        Some(node::derive_bridged_as_value(&item, &target)?)
+    } else {
+        None
+    };
+    let ffi = if ffi {
+        Some(ffi::derive_bridged_as_value(&item, &target)?)
+    } else {
+        None
+    };
+    let jni = if jni {
+        Some(jni::derive_bridged_as_value(&item, &target)?)
     } else {
         None
     };
     Ok(quote! {
         #node
+        #ffi
+        #jni
     })
 }
 
@@ -631,6 +665,66 @@ fn derive_bridged_as_value_inner(item: DeriveInput) -> syn::Result<proc_macro2::
 pub fn derive_bridged_as_value(item: TokenStream) -> TokenStream {
     let item = syn::parse_macro_input!(item as DeriveInput);
     match derive_bridged_as_value_inner(item) {
+        Ok(x) => x.into(),
+        Err(e) => e.into_compile_error().into(),
+    }
+}
+
+fn derive_structural_from_inner(item: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let mut from: Option<syn::Path> = None;
+    for attr in &item.attrs {
+        if attr.path().is_ident("structural_from") {
+            attr.parse_nested_meta(|meta| {
+                from = Some(meta.path);
+                Ok(())
+            })?;
+        }
+    }
+    let from = from.ok_or_else(|| syn::Error::new_spanned(&item, "Missing structural_from()"))?;
+    let impl_ = util::Impl::new(
+        &item,
+        &item.ident.clone().into(),
+        Some(parse_quote!(From<#from>)),
+    );
+    let util::DeriveInputInfo {
+        patterns: to_patterns,
+        ..
+    } = util::DeriveInputInfo::new(&item, &item.ident.clone().into());
+    let util::DeriveInputInfo {
+        patterns: from_patterns,
+        ..
+    } = util::DeriveInputInfo::new(&item, &from);
+    Ok(quote! {
+        #impl_ {
+            fn from(from_value: #from) -> Self {
+                match from_value {
+                    #(#from_patterns => #to_patterns,)*
+                }
+            }
+        }
+    })
+}
+
+/// Derive a `From` for two types (structs or enums) which exactly match.
+///
+/// # Example
+/// ```
+/// # use libsignal_bridge_macros::StructuralFrom;
+/// struct Foo {
+///     a: i32,
+///     b: String,
+/// }
+/// #[derive(StructuralFrom)]
+/// #[structural_from(Foo)]
+/// struct Foo2 {
+///     a: i32,
+///     b: String,
+/// }
+/// ```
+#[proc_macro_derive(StructuralFrom, attributes(structural_from))]
+pub fn derive_structual_from(item: TokenStream) -> TokenStream {
+    let item = syn::parse_macro_input!(item as DeriveInput);
+    match derive_structural_from_inner(item) {
         Ok(x) => x.into(),
         Err(e) => e.into_compile_error().into(),
     }

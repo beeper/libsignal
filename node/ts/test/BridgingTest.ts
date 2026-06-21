@@ -372,6 +372,16 @@ describe('NativeTestingNice', () => {
           NativeNice.TESTING_conversion_Data_identity({ x }),
         nativeIdentityAsync: NativeNice.TESTING_conversion_Data_identity_async,
       });
+      await testConversion({
+        item,
+        toString: toBase64(item),
+        nativeToString: (x) =>
+          NativeNice.TESTING_conversion_Data_VecU8_to_string({ x }),
+        nativeIdentity: (x) =>
+          NativeNice.TESTING_conversion_Data_VecU8_identity({ x }),
+        nativeIdentityAsync:
+          NativeNice.TESTING_conversion_Data_VecU8_identity_async,
+      });
     }
   });
   it('should handle async', async () => {
@@ -386,6 +396,20 @@ describe('NativeTestingNice', () => {
   });
 
   it('derived conversions', async () => {
+    {
+      for (const item of ['a', 'b'] as const) {
+        await testConversion({
+          item,
+          toString: item.toUpperCase(),
+          nativeToString: (x) =>
+            NativeNice.TESTING_MySimpleTestEnum_to_string({ x }),
+          nativeIdentity: (x) =>
+            NativeNice.TESTING_MySimpleTestEnum_identity({ x }),
+          nativeIdentityAsync:
+            NativeNice.TESTING_MySimpleTestEnum_identity_async,
+        });
+      }
+    }
     {
       const item: NativeNice.MyTestPoint = [1, 2];
       await testConversion({

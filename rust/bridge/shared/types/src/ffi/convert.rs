@@ -41,13 +41,20 @@ use crate::support::{
 
 #[cfg(feature = "metadata")]
 mod metadata {
+    use crate::metadata::NiceType;
     pub use crate::metadata::ffi::*;
 
     pub trait NiceArgConverter {
         fn register_swift_arg_converter(ctx: &mut SwiftMetadataContext) -> SwiftArgConverter;
+        fn register_swift_nice_type(ctx: &mut SwiftMetadataContext) -> NiceType {
+            Self::register_swift_arg_converter(ctx).nice_type
+        }
     }
     pub trait NiceResultConverter {
         fn register_swift_result_converter(ctx: &mut SwiftMetadataContext) -> SwiftReturnConverter;
+        fn register_swift_nice_type(ctx: &mut SwiftMetadataContext) -> NiceType {
+            Self::register_swift_result_converter(ctx).nice_type
+        }
     }
 }
 #[cfg(feature = "metadata")]
@@ -270,6 +277,20 @@ impl<'a> ArgTypeInfo<'a> for crate::support::ServiceIdSequence<'a> {
     fn load_from(stored: &'a mut Self::StoredType) -> Self {
         let buffer = <&'a [u8]>::load_from(stored);
         Self::parse(buffer)
+    }
+}
+
+impl SimpleArgTypeInfo for Vec<u8> {
+    type ArgType = BorrowedSliceOf<u8>;
+
+    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+        Ok(unsafe { foreign.as_slice() }?.to_vec())
+    }
+}
+#[cfg(feature = "metadata")]
+impl NiceArgConverter for Vec<u8> {
+    fn register_swift_arg_converter(ctx: &mut SwiftMetadataContext) -> SwiftArgConverter {
+        <&[u8]>::register_swift_arg_converter(ctx)
     }
 }
 
@@ -1293,6 +1314,7 @@ impl<A: ResultTypeInfo, B: ResultTypeInfo> ResultTypeInfo for (A, B) {
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
         Ok(PairOf {
             first: self.0.convert_into()?,
+            // TODO: if self.1.convert_into() fails, we may leak memory
             second: self.1.convert_into()?,
         })
     }
@@ -1326,6 +1348,7 @@ where
         Ok(OptionalPairOf {
             present: true,
             first: value.0.convert_into()?,
+            // TODO: if self.1.convert_into() fails, we may leak memory
             second: value.1.convert_into()?,
         })
     }
@@ -1657,6 +1680,7 @@ macro_rules! ffi_arg_type {
     (&[u8]) => (ffi::BorrowedSliceOf<std::ffi::c_uchar>);
     (&mut [u8]) => (ffi::BorrowedMutableSliceOf<std::ffi::c_uchar>);
     (ServiceIdSequence<'_>) => (ffi::BorrowedSliceOf<std::ffi::c_uchar>);
+    (Vec<u8>) => (ffi::BorrowedSliceOf<std::ffi::c_uchar>);
     (Vec<&[u8]>) => (ffi::BorrowedSliceOf<ffi_arg_type!(&[u8])>);
     (Vec<Vec<u8> >) => (ffi::BorrowedSliceOf<ffi_arg_type!(&[u8])>);
     (String) => (*const std::ffi::c_char);
@@ -1703,6 +1727,14 @@ macro_rules! ffi_arg_type {
     (AsType<$typ:ident, $bridged:ident>) => (ffi_arg_type!($bridged));
 
     (TestingFutureCancellationGuard) => (ffi_arg_type!(&TestingFutureCancellationCounter));
+
+    // Derived types
+    (MyTestStruct) => (MyTestStructFfiArg);
+    (MyTestPoint) => (MyTestPointFfiArg);
+    (MyTestEnum) => (MyTestEnumFfiArg);
+    (MySimpleTestEnum) => (MySimpleTestEnumFfiArg);
+    (MyRemoteDeriveStruct) => (MyRemoteDeriveStructFfiArg);
+    (MyRemoteDeriveEnum) => (MyRemoteDeriveEnumFfiArg);
 
     // In order to provide a fixed-sized array of the correct length,
     // a serialized type FooBar must have a constant FOO_BAR_LEN that's in scope (and exposed to C).
@@ -1791,6 +1823,14 @@ macro_rules! ffi_result_type {
     (PreKeysResponse) => (ffi::FfiPreKeysResponse);
     (UploadForm) => (ffi::FfiUploadForm);
     (CdnCredentials) => (ffi::PairOf<ffi::OwnedBufferOf<ffi::CStringPtr>, ffi::OwnedBufferOf<ffi::CStringPtr> >);
+
+    // Derived types
+    (MyTestStruct) => (MyTestStructFfiResult);
+    (MyTestPoint) => (MyTestPointFfiResult);
+    (MyTestEnum) => (MyTestEnumFfiResult);
+    (MySimpleTestEnum) => (MySimpleTestEnumFfiResult);
+    (MyRemoteDeriveStruct) => (MyRemoteDeriveStructFfiResult);
+    (MyRemoteDeriveEnum) => (MyRemoteDeriveEnumFfiResult);
 
     // In order to provide a fixed-sized array of the correct length,
     // a serialized type FooBar must have a constant FOO_BAR_LEN that's in scope (and exposed to C).
