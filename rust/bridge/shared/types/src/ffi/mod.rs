@@ -100,6 +100,9 @@ pub struct OwnedBufferOfMaxAligned<T> {
 }
 
 impl<T> OwnedBufferOfMaxAligned<T> {
+    #[cfg(all(target_os = "android", target_arch = "arm"))]
+    pub const ALIGNMENT: usize = 8;
+    #[cfg(not(all(target_os = "android", target_arch = "arm")))]
     pub const ALIGNMENT: usize = std::mem::align_of::<libc::max_align_t>();
     pub fn layout_for_count(count: usize) -> std::alloc::Layout {
         std::alloc::Layout::array::<T>(count)

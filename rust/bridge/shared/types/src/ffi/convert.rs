@@ -1103,6 +1103,11 @@ pub struct FfiBulkPolledStreamTerminationReason {
     raw: *mut SignalFfiError,
 }
 
+#[cfg(not(windows))]
+const MAP_FAILED: *mut std::ffi::c_void = libc::MAP_FAILED;
+#[cfg(windows)]
+const MAP_FAILED: *mut std::ffi::c_void = std::ptr::without_provenance_mut(usize::MAX);
+
 impl<T: IntoFfiError> ResultTypeInfo for Option<BulkPolledStreamTerminationReason<T>> {
     type ResultType = FfiBulkPolledStreamTerminationReason;
 
@@ -1111,7 +1116,7 @@ impl<T: IntoFfiError> ResultTypeInfo for Option<BulkPolledStreamTerminationReaso
             Some(BulkPolledStreamTerminationReason::Error(e)) => {
                 crate::support::BridgedError(e).convert_into()?
             }
-            Some(BulkPolledStreamTerminationReason::Finished) => libc::MAP_FAILED.cast(),
+            Some(BulkPolledStreamTerminationReason::Finished) => MAP_FAILED.cast(),
             None => std::ptr::null_mut(),
         };
         Ok(FfiBulkPolledStreamTerminationReason { raw })
