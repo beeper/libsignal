@@ -6,17 +6,62 @@
 // WARNING: this file was automatically generated
 
 import * as Native from './Native.js';
+import {
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  type GrpcTestCase,
+  type ArgFfiMyRemoteDeriveEnum,
+  type ArgFfiMyRemoteDeriveStruct,
+  type ArgFfiMySimpleTestEnum,
+  type ArgFfiMyTestEnum,
+  type ArgFfiMyTestPoint,
+  type ArgFfiMyTestStruct,
+  type ReturnFfiGetDevicesOut,
+  type ReturnFfiLinkedDeviceInternal,
+  type ReturnFfiMyRemoteDeriveEnum,
+  type ReturnFfiMyRemoteDeriveStruct,
+  type ReturnFfiMySimpleTestEnum,
+  type ReturnFfiMyTestEnum,
+  type ReturnFfiMyTestPoint,
+  type ReturnFfiMyTestStruct,
+  type ReturnFfiRemoveDeviceArgs,
+  type ReturnFfiRemoveDeviceOut,
+  type ReturnFfiReserveUsernameHashArgs,
+  type ReturnFfiReserveUsernameHashOut,
+  type ReturnFfiSetDeviceNameArgs,
+  type ReturnFfiSetDeviceNameOut,
+  type ReturnFfiSetUsernameLinkArgs,
+  type ReturnFfiSetUsernameLinkOut,
+  type ReturnFfiTestStreamChunk,
+  /* eslint-enable @typescript-eslint/no-unused-vars */
+} from './Native.js';
+
 import { ServiceId } from './Address.js';
 import * as zkgroup from './zkgroup/index.js';
+import * as uuid from './uuid.js';
 import ByteArray from './zkgroup/internal/ByteArray.js';
-import { TokioAsyncContext } from './net.js';
-import { CdnCredentials } from './net/chat/CdnCredentials.js';
+import type { TokioAsyncContext } from './net.js';
+import type { CdnCredentials } from './net/chat/CdnCredentials.js';
 import {
+  type DeviceId,
+  type Timestamp,
   cdnCredentialReturnConverter,
   identity,
   serviceIdArgConverter,
+  grpcTestCaseConverter,
 } from './NiceConverters.js';
 import { Rng } from './RngForTesting.js';
+
+export type GetDevicesOut = {
+  devices: Array<LinkedDeviceInternal>;
+};
+
+export type LinkedDeviceInternal = {
+  id: DeviceId;
+  encryptedName: Uint8Array<ArrayBuffer>;
+  lastSeen: Timestamp;
+  registrationId: number;
+  createdAtCiphertext: Uint8Array<ArrayBuffer>;
+};
 
 export type MyRemoteDeriveEnum =
   | 'unit'
@@ -63,6 +108,66 @@ export type MyTestStruct = {
   myNumericField: number;
   myStringField: string;
 };
+
+export type RemoveDeviceArgs = {
+  id: number;
+};
+
+export type RemoveDeviceOut = 'success';
+
+export type ReserveUsernameHashArgs = {
+  usernames: Array<Uint8Array<ArrayBuffer>>;
+};
+
+export type ReserveUsernameHashOut =
+  | {
+      success: Uint8Array<ArrayBuffer>;
+    }
+  | 'usernameNotAvailable';
+
+export type SetDeviceNameArgs = {
+  id: number;
+  encryptedName: Uint8Array<ArrayBuffer>;
+};
+
+export type SetDeviceNameOut = 'success' | 'deviceNotFound';
+
+export type SetUsernameLinkArgs = {
+  usernameCiphertext: Uint8Array<ArrayBuffer>;
+  keepLinkHandle: boolean;
+};
+
+export type SetUsernameLinkOut =
+  | {
+      success: uuid.Uuid;
+    }
+  | 'usernameNotSet';
+
+export type TestStreamChunk = {
+  chunk: Array<string>;
+  termination: ('finished' | Error) | null;
+};
+
+function returnConverterGetDevicesOut(
+  ffiInput: Native.ReturnFfiGetDevicesOut
+): GetDevicesOut {
+  return {
+    devices: ((arr: Array<ReturnFfiLinkedDeviceInternal>) =>
+      arr.map(returnConverterLinkedDeviceInternal))(ffiInput.devices),
+  };
+}
+
+function returnConverterLinkedDeviceInternal(
+  ffiInput: Native.ReturnFfiLinkedDeviceInternal
+): LinkedDeviceInternal {
+  return {
+    id: identity(ffiInput.id),
+    encryptedName: identity(ffiInput.encrypted_name),
+    lastSeen: identity(ffiInput.last_seen),
+    registrationId: identity(ffiInput.registration_id),
+    createdAtCiphertext: identity(ffiInput.created_at_ciphertext),
+  };
+}
 
 function returnConverterMyRemoteDeriveEnum(
   ffiInput: Native.ReturnFfiMyRemoteDeriveEnum
@@ -156,6 +261,115 @@ function returnConverterMyTestStruct(
   return {
     myNumericField: identity(ffiInput.my_numeric_field),
     myStringField: identity(ffiInput.my_string_field),
+  };
+}
+
+function returnConverterRemoveDeviceArgs(
+  ffiInput: Native.ReturnFfiRemoveDeviceArgs
+): RemoveDeviceArgs {
+  return {
+    id: identity(ffiInput.id),
+  };
+}
+
+function returnConverterRemoveDeviceOut(
+  ffiInput: Native.ReturnFfiRemoveDeviceOut
+): RemoveDeviceOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return 'success';
+
+    default:
+      ffiInput.__type satisfies never;
+      throw new Error('Unknown FFI return enum type for RemoveDeviceOut');
+  }
+}
+
+function returnConverterReserveUsernameHashArgs(
+  ffiInput: Native.ReturnFfiReserveUsernameHashArgs
+): ReserveUsernameHashArgs {
+  return {
+    usernames: ((arr: Array<Uint8Array<ArrayBuffer>>) => arr.map(identity))(
+      ffiInput.usernames
+    ),
+  };
+}
+
+function returnConverterReserveUsernameHashOut(
+  ffiInput: Native.ReturnFfiReserveUsernameHashOut
+): ReserveUsernameHashOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return {
+        success: identity(ffiInput._0),
+      };
+    case 1:
+      return 'usernameNotAvailable';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error(
+        'Unknown FFI return enum type for ReserveUsernameHashOut'
+      );
+  }
+}
+
+function returnConverterSetDeviceNameArgs(
+  ffiInput: Native.ReturnFfiSetDeviceNameArgs
+): SetDeviceNameArgs {
+  return {
+    id: identity(ffiInput.id),
+    encryptedName: identity(ffiInput.encrypted_name),
+  };
+}
+
+function returnConverterSetDeviceNameOut(
+  ffiInput: Native.ReturnFfiSetDeviceNameOut
+): SetDeviceNameOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return 'success';
+    case 1:
+      return 'deviceNotFound';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for SetDeviceNameOut');
+  }
+}
+
+function returnConverterSetUsernameLinkArgs(
+  ffiInput: Native.ReturnFfiSetUsernameLinkArgs
+): SetUsernameLinkArgs {
+  return {
+    usernameCiphertext: identity(ffiInput.username_ciphertext),
+    keepLinkHandle: identity(ffiInput.keep_link_handle),
+  };
+}
+
+function returnConverterSetUsernameLinkOut(
+  ffiInput: Native.ReturnFfiSetUsernameLinkOut
+): SetUsernameLinkOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return {
+        success: uuid.stringify(ffiInput._0),
+      };
+    case 1:
+      return 'usernameNotSet';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for SetUsernameLinkOut');
+  }
+}
+
+function returnConverterTestStreamChunk(
+  ffiInput: Native.ReturnFfiTestStreamChunk
+): TestStreamChunk {
+  return {
+    chunk: ((arr: Array<string>) => arr.map(identity))(ffiInput.chunk),
+    termination: identity(ffiInput.termination),
   };
 }
 
@@ -278,6 +492,158 @@ function argConverterMyTestStruct(
   };
 }
 
+export async function AuthenticatedChatConnection_clear_push_token({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.AuthenticatedChatConnection>;
+}): Promise<void> {
+  return identity(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.AuthenticatedChatConnection_clear_push_token(
+        asyncContext,
+        identity(chat)
+      )
+    )
+  );
+}
+export async function AuthenticatedChatConnection_get_devices({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.AuthenticatedChatConnection>;
+}): Promise<Array<LinkedDeviceInternal>> {
+  return ((arr: Array<ReturnFfiLinkedDeviceInternal>) =>
+    arr.map(returnConverterLinkedDeviceInternal))(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.AuthenticatedChatConnection_get_devices(
+        asyncContext,
+        identity(chat)
+      )
+    )
+  );
+}
+export async function AuthenticatedChatConnection_remove_device({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+  deviceId: device_id,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.AuthenticatedChatConnection>;
+  deviceId: DeviceId;
+}): Promise<void> {
+  return identity(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.AuthenticatedChatConnection_remove_device(
+        asyncContext,
+        identity(chat),
+        identity(device_id)
+      )
+    )
+  );
+}
+export async function AuthenticatedChatConnection_reserve_username_hash({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+  usernameHashes: username_hashes,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.AuthenticatedChatConnection>;
+  usernameHashes: Array<Uint8Array<ArrayBuffer>>;
+}): Promise<Uint8Array<ArrayBuffer>> {
+  return identity(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.AuthenticatedChatConnection_reserve_username_hash(
+        asyncContext,
+        identity(chat),
+        ((arr: Array<Uint8Array<ArrayBuffer>>) => arr.map(identity))(
+          username_hashes
+        )
+      )
+    )
+  );
+}
+export async function AuthenticatedChatConnection_set_device_name({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+  deviceId: device_id,
+  encryptedName: encrypted_name,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.AuthenticatedChatConnection>;
+  deviceId: DeviceId;
+  encryptedName: Uint8Array<ArrayBuffer>;
+}): Promise<void> {
+  return identity(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.AuthenticatedChatConnection_set_device_name(
+        asyncContext,
+        identity(chat),
+        identity(device_id),
+        identity(encrypted_name)
+      )
+    )
+  );
+}
+export async function AuthenticatedChatConnection_set_username_link({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+  usernameCiphertext: username_ciphertext,
+  keepLinkHandle: keep_link_handle,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.AuthenticatedChatConnection>;
+  usernameCiphertext: Uint8Array<ArrayBuffer>;
+  keepLinkHandle: boolean;
+}): Promise<uuid.Uuid> {
+  return uuid.stringify(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.AuthenticatedChatConnection_set_username_link(
+        asyncContext,
+        identity(chat),
+        identity(username_ciphertext),
+        identity(keep_link_handle)
+      )
+    )
+  );
+}
+
+export function TESTING_ClearPushTokenTests(): Array<GrpcTestCase<void, void>> {
+  return grpcTestCaseConverter(
+    identity,
+    identity
+  )(Native.TESTING_ClearPushTokenTests());
+}
+
+export function TESTING_GetDevicesTests(): Array<
+  GrpcTestCase<void, GetDevicesOut>
+> {
+  return grpcTestCaseConverter(
+    identity,
+    returnConverterGetDevicesOut
+  )(Native.TESTING_GetDevicesTests());
+}
+
 export function TESTING_MyRemoteDeriveEnum_identity({
   x: x,
 }: {
@@ -298,6 +664,56 @@ export function TESTING_MyRemoteDeriveStruct_identity({
   return returnConverterMyRemoteDeriveStruct(
     Native.TESTING_MyRemoteDeriveStruct_identity(
       argConverterMyRemoteDeriveStruct(x)
+    )
+  );
+}
+
+export function TESTING_MySimpleTestEnum_BridgeVec_identity({
+  x: x,
+}: {
+  x: Array<MySimpleTestEnum>;
+}): Array<MySimpleTestEnum> {
+  return ((arr: Array<ReturnFfiMySimpleTestEnum>) =>
+    arr.map(returnConverterMySimpleTestEnum))(
+    Native.TESTING_MySimpleTestEnum_BridgeVec_identity(
+      ((arr: Array<MySimpleTestEnum>) => arr.map(argConverterMySimpleTestEnum))(
+        x
+      )
+    )
+  );
+}
+export async function TESTING_MySimpleTestEnum_BridgeVec_identity_async({
+  asyncContext,
+  abortSignal,
+  x: x,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  x: Array<MySimpleTestEnum>;
+}): Promise<Array<MySimpleTestEnum>> {
+  return ((arr: Array<ReturnFfiMySimpleTestEnum>) =>
+    arr.map(returnConverterMySimpleTestEnum))(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.TESTING_MySimpleTestEnum_BridgeVec_identity_async(
+        asyncContext,
+        ((arr: Array<MySimpleTestEnum>) =>
+          arr.map(argConverterMySimpleTestEnum))(x)
+      )
+    )
+  );
+}
+
+export function TESTING_MySimpleTestEnum_BridgeVec_to_string({
+  x: x,
+}: {
+  x: Array<MySimpleTestEnum>;
+}): string {
+  return identity(
+    Native.TESTING_MySimpleTestEnum_BridgeVec_to_string(
+      ((arr: Array<MySimpleTestEnum>) => arr.map(argConverterMySimpleTestEnum))(
+        x
+      )
     )
   );
 }
@@ -458,6 +874,60 @@ export function TESTING_MyTestStruct_to_string({
   );
 }
 
+export function TESTING_RemoveDeviceTests(): Array<
+  GrpcTestCase<RemoveDeviceArgs, RemoveDeviceOut>
+> {
+  return grpcTestCaseConverter(
+    returnConverterRemoveDeviceArgs,
+    returnConverterRemoveDeviceOut
+  )(Native.TESTING_RemoveDeviceTests());
+}
+
+export function TESTING_ReserveUsernameHashTests(): Array<
+  GrpcTestCase<ReserveUsernameHashArgs, ReserveUsernameHashOut>
+> {
+  return grpcTestCaseConverter(
+    returnConverterReserveUsernameHashArgs,
+    returnConverterReserveUsernameHashOut
+  )(Native.TESTING_ReserveUsernameHashTests());
+}
+
+export function TESTING_ReturnIoError(): Error {
+  return identity(Native.TESTING_ReturnIoError());
+}
+
+export function TESTING_ReturnSomeIoError({
+  present: present,
+}: {
+  present: boolean;
+}): Error | null {
+  return identity(Native.TESTING_ReturnSomeIoError(identity(present)));
+}
+
+export function TESTING_SetDeviceNameTests(): Array<
+  GrpcTestCase<SetDeviceNameArgs, SetDeviceNameOut>
+> {
+  return grpcTestCaseConverter(
+    returnConverterSetDeviceNameArgs,
+    returnConverterSetDeviceNameOut
+  )(Native.TESTING_SetDeviceNameTests());
+}
+
+export function TESTING_SetUsernameLinkTests(): Array<
+  GrpcTestCase<SetUsernameLinkArgs, SetUsernameLinkOut>
+> {
+  return grpcTestCaseConverter(
+    returnConverterSetUsernameLinkArgs,
+    returnConverterSetUsernameLinkOut
+  )(Native.TESTING_SetUsernameLinkTests());
+}
+
+export function TESTING_TestStreamChunk_return(): TestStreamChunk {
+  return returnConverterTestStreamChunk(
+    Native.TESTING_TestStreamChunk_return()
+  );
+}
+
 export function TESTING_TestingIntBox_Get({
   myIntBox: my_int_box,
 }: {
@@ -483,6 +953,124 @@ export async function TESTING_TokioAsyncContext_FutureSuccessBytes({
       )
     )
   );
+}
+
+export function TESTING_conversion_BridgeVecData32_identity({
+  x: x,
+}: {
+  x: Array<Uint8Array<ArrayBuffer>>;
+}): Array<Uint8Array<ArrayBuffer>> {
+  return ((arr: Array<Uint8Array<ArrayBuffer>>) => arr.map(identity))(
+    Native.TESTING_conversion_BridgeVecData32_identity(
+      ((arr: Array<Uint8Array<ArrayBuffer>>) => arr.map(identity))(x)
+    )
+  );
+}
+export async function TESTING_conversion_BridgeVecData32_identity_async({
+  asyncContext,
+  abortSignal,
+  x: x,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  x: Array<Uint8Array<ArrayBuffer>>;
+}): Promise<Array<Uint8Array<ArrayBuffer>>> {
+  return ((arr: Array<Uint8Array<ArrayBuffer>>) => arr.map(identity))(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.TESTING_conversion_BridgeVecData32_identity_async(
+        asyncContext,
+        ((arr: Array<Uint8Array<ArrayBuffer>>) => arr.map(identity))(x)
+      )
+    )
+  );
+}
+
+export function TESTING_conversion_BridgeVecData32_to_string({
+  x: x,
+}: {
+  x: Array<Uint8Array<ArrayBuffer>>;
+}): string {
+  return identity(
+    Native.TESTING_conversion_BridgeVecData32_to_string(
+      ((arr: Array<Uint8Array<ArrayBuffer>>) => arr.map(identity))(x)
+    )
+  );
+}
+
+export function TESTING_conversion_BridgeVecString_identity({
+  x: x,
+}: {
+  x: Array<string>;
+}): Array<string> {
+  return ((arr: Array<string>) => arr.map(identity))(
+    Native.TESTING_conversion_BridgeVecString_identity(
+      ((arr: Array<string>) => arr.map(identity))(x)
+    )
+  );
+}
+export async function TESTING_conversion_BridgeVecString_identity_async({
+  asyncContext,
+  abortSignal,
+  x: x,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  x: Array<string>;
+}): Promise<Array<string>> {
+  return ((arr: Array<string>) => arr.map(identity))(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.TESTING_conversion_BridgeVecString_identity_async(
+        asyncContext,
+        ((arr: Array<string>) => arr.map(identity))(x)
+      )
+    )
+  );
+}
+
+export function TESTING_conversion_BridgeVecString_to_string({
+  x: x,
+}: {
+  x: Array<string>;
+}): string {
+  return identity(
+    Native.TESTING_conversion_BridgeVecString_to_string(
+      ((arr: Array<string>) => arr.map(identity))(x)
+    )
+  );
+}
+
+export function TESTING_conversion_Data32_identity({
+  x: x,
+}: {
+  x: Uint8Array<ArrayBuffer>;
+}): Uint8Array<ArrayBuffer> {
+  return identity(Native.TESTING_conversion_Data32_identity(identity(x)));
+}
+export async function TESTING_conversion_Data32_identity_async({
+  asyncContext,
+  abortSignal,
+  x: x,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  x: Uint8Array<ArrayBuffer>;
+}): Promise<Uint8Array<ArrayBuffer>> {
+  return identity(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.TESTING_conversion_Data32_identity_async(asyncContext, identity(x))
+    )
+  );
+}
+
+export function TESTING_conversion_Data32_to_string({
+  x: x,
+}: {
+  x: Uint8Array<ArrayBuffer>;
+}): string {
+  return identity(Native.TESTING_conversion_Data32_to_string(identity(x)));
 }
 
 export function TESTING_conversion_Data_VecU8_identity({
@@ -552,6 +1140,41 @@ export function TESTING_conversion_Data_to_string({
   return identity(Native.TESTING_conversion_Data_to_string(identity(x)));
 }
 
+export function TESTING_conversion_DeviceId_identity({
+  x: x,
+}: {
+  x: DeviceId;
+}): DeviceId {
+  return identity(Native.TESTING_conversion_DeviceId_identity(identity(x)));
+}
+export async function TESTING_conversion_DeviceId_identity_async({
+  asyncContext,
+  abortSignal,
+  x: x,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  x: DeviceId;
+}): Promise<DeviceId> {
+  return identity(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.TESTING_conversion_DeviceId_identity_async(
+        asyncContext,
+        identity(x)
+      )
+    )
+  );
+}
+
+export function TESTING_conversion_DeviceId_to_string({
+  x: x,
+}: {
+  x: DeviceId;
+}): string {
+  return identity(Native.TESTING_conversion_DeviceId_to_string(identity(x)));
+}
+
 export function TESTING_conversion_ServiceId_identity({
   x: x,
 }: {
@@ -589,6 +1212,38 @@ export function TESTING_conversion_ServiceId_to_string({
   return identity(
     Native.TESTING_conversion_ServiceId_to_string(serviceIdArgConverter(x))
   );
+}
+
+export function TESTING_conversion_Uuid_identity({
+  x: x,
+}: {
+  x: uuid.Uuid;
+}): uuid.Uuid {
+  return uuid.stringify(Native.TESTING_conversion_Uuid_identity(uuid.parse(x)));
+}
+export async function TESTING_conversion_Uuid_identity_async({
+  asyncContext,
+  abortSignal,
+  x: x,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  x: uuid.Uuid;
+}): Promise<uuid.Uuid> {
+  return uuid.stringify(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.TESTING_conversion_Uuid_identity_async(asyncContext, uuid.parse(x))
+    )
+  );
+}
+
+export function TESTING_conversion_Uuid_to_string({
+  x: x,
+}: {
+  x: uuid.Uuid;
+}): string {
+  return identity(Native.TESTING_conversion_Uuid_to_string(uuid.parse(x)));
 }
 
 export function TESTING_conversion_bool_identity({

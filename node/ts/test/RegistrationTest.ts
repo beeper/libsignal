@@ -196,9 +196,46 @@ describe('Registration types', () => {
           ['SessionNotFound', ErrorCode.RegistrationSessionNotFound],
           [
             'NotReadyForVerification',
-            ErrorCode.RegistrationSessionNotReadyForVerification,
+            {
+              code: ErrorCode.RegistrationSessionNotReadyForVerification,
+              sessionState: {
+                allowedToRequestCode: false,
+                verified: false,
+                nextSmsSecs: 3,
+                nextCallSecs: 14,
+                nextVerificationAttemptSecs: 15,
+                requestedInformation: new Set(['captcha']),
+              },
+            },
           ],
-          ['SendFailed', ErrorCode.RegistrationVerificationSendFailed],
+          [
+            'NotReadyForVerificationNoSessionState',
+            {
+              code: ErrorCode.RegistrationSessionNotReadyForVerification,
+              sessionState: undefined,
+            },
+          ],
+          [
+            'SendFailed',
+            {
+              code: ErrorCode.RegistrationVerificationSendFailed,
+              sessionState: {
+                allowedToRequestCode: false,
+                verified: false,
+                nextSmsSecs: 3,
+                nextCallSecs: 14,
+                nextVerificationAttemptSecs: 15,
+                requestedInformation: new Set(['captcha']),
+              },
+            },
+          ],
+          [
+            'SendFailedNoSessionState',
+            {
+              code: ErrorCode.RegistrationVerificationSendFailed,
+              sessionState: undefined,
+            },
+          ],
           [
             'CodeNotDeliverable',
             {
@@ -222,7 +259,24 @@ describe('Registration types', () => {
           ['SessionNotFound', ErrorCode.RegistrationSessionNotFound],
           [
             'NotReadyForVerification',
-            ErrorCode.RegistrationSessionNotReadyForVerification,
+            {
+              code: ErrorCode.RegistrationSessionNotReadyForVerification,
+              sessionState: {
+                allowedToRequestCode: false,
+                verified: false,
+                nextSmsSecs: 3,
+                nextCallSecs: 14,
+                nextVerificationAttemptSecs: 15,
+                requestedInformation: new Set(['captcha']),
+              },
+            },
+          ],
+          [
+            'NotReadyForVerificationNoSessionState',
+            {
+              code: ErrorCode.RegistrationSessionNotReadyForVerification,
+              sessionState: undefined,
+            },
           ],
           retryLaterCase,
           unknownCase,
@@ -362,6 +416,128 @@ describe('Registration client', () => {
       });
 
       await requestVerification;
+    });
+
+    it('refreshes cached session state from failed requests', async () => {
+      const tokio = new TokioAsyncContext(Native.TokioAsyncContext_new());
+
+      const [createSession, getRemote] = RegistrationService.fakeCreateSession(
+        tokio,
+        { e164: '+18005550123' }
+      );
+      const fakeRemote = await getRemote;
+
+      const createRequest = await fakeRemote.assertReceiveIncomingRequest();
+      fakeRemote.sendReplyTo(createRequest, {
+        status: 200,
+        message: 'OK',
+        headers: ['content-type: application/json'],
+        body: Buffer.from(
+          JSON.stringify({
+            allowedToRequestCode: true,
+            verified: false,
+            requestedInformation: ['pushChallenge'],
+            id: 'fake-session-A',
+          })
+        ),
+      });
+      const session = await createSession;
+
+      // A failed requestVerification whose body carries updated session state
+      // should refresh the service's cached sessionState across the bridge,
+      // even though the call rejects.
+      const requestVerification = session.requestVerification({
+        transport: 'voice',
+        client: 'libsignal test',
+        languages: ['fr-CA'],
+      });
+      const sendCodeRequest = await fakeRemote.assertReceiveIncomingRequest();
+      fakeRemote.sendReplyTo(sendCodeRequest, {
+        status: 418,
+        message: 'Send failed',
+        headers: ['content-type: application/json'],
+        body: Buffer.from(
+          JSON.stringify({
+            allowedToRequestCode: false,
+            verified: false,
+            nextSms: 42,
+            requestedInformation: ['captcha'],
+            id: 'fake-session-A',
+          })
+        ),
+      });
+      await expect(requestVerification).to.be.rejected;
+      expect(session.sessionState).to.deep.eq({
+        allowedToRequestCode: false,
+        verified: false,
+        nextSmsSecs: 42,
+        nextCallSecs: undefined,
+        nextVerificationAttemptSecs: undefined,
+        requestedInformation: new Set(['captcha']),
+      });
+
+      // Same for a failed verifySession (submit code).
+      const verifySession = session.verifySession('123456');
+      const submitCodeRequest = await fakeRemote.assertReceiveIncomingRequest();
+      fakeRemote.sendReplyTo(submitCodeRequest, {
+        status: 409,
+        message: 'Not ready',
+        headers: ['content-type: application/json'],
+        body: Buffer.from(
+          JSON.stringify({
+            allowedToRequestCode: true,
+            verified: false,
+            nextVerificationAttempt: 37,
+            requestedInformation: [],
+            id: 'fake-session-A',
+          })
+        ),
+      });
+      await expect(verifySession).to.be.rejected;
+      expect(session.sessionState).to.deep.eq({
+        allowedToRequestCode: true,
+        verified: false,
+        nextSmsSecs: undefined,
+        nextCallSecs: undefined,
+        nextVerificationAttemptSecs: 37,
+        requestedInformation: new Set(),
+      });
+
+      // A 429 (rate limited) response also carries session state in its body,
+      // but comes back as a RateLimitedError rather than a typed error. The
+      // cached session state is still refreshed.
+      const rateLimited = session.requestVerification({
+        transport: 'voice',
+        client: 'libsignal test',
+        languages: ['fr-CA'],
+      });
+      const rateLimitedRequest =
+        await fakeRemote.assertReceiveIncomingRequest();
+      fakeRemote.sendReplyTo(rateLimitedRequest, {
+        status: 429,
+        message: 'Too many requests',
+        headers: ['content-type: application/json', 'retry-after: 60'],
+        body: Buffer.from(
+          JSON.stringify({
+            allowedToRequestCode: true,
+            verified: false,
+            nextCall: 99,
+            requestedInformation: [],
+            id: 'fake-session-A',
+          })
+        ),
+      });
+      await expect(rateLimited)
+        .to.eventually.be.rejectedWith(LibSignalErrorBase)
+        .and.have.property('code', ErrorCode.RateLimitedError);
+      expect(session.sessionState).to.deep.eq({
+        allowedToRequestCode: true,
+        verified: false,
+        nextSmsSecs: undefined,
+        nextCallSecs: 99,
+        nextVerificationAttemptSecs: undefined,
+        requestedInformation: new Set(),
+      });
     });
   });
 });

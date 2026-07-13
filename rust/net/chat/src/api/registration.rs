@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::str::FromStr;
 use std::time::Duration;
 
-use libsignal_core::{Aci, Pni, ServiceIdKind};
+use libsignal_core::{Aci, LogSafeDisplay, Pni, ServiceIdKind};
 use libsignal_net::auth::Auth;
 use libsignal_net::chat::LanguageList;
 use libsignal_protocol::{GenericSignedPreKey, PublicKey};
@@ -22,7 +23,7 @@ pub use error::*;
 mod session_id;
 pub use session_id::{InvalidSessionId, SessionId};
 
-use crate::api::ChallengeOption;
+use crate::api::{ChallengeOption, RequestError};
 
 pub type UnidentifiedAccessKey = [u8; zkgroup::ACCESS_KEY_LEN];
 
@@ -57,7 +58,10 @@ pub(crate) trait RegistrationChatApi {
         client: &str,
         languages: LanguageList,
     ) -> impl Future<
-        Output = Result<RegistrationResponse, Self::Error<RequestVerificationCodeError>>,
+        Output = Result<
+            RegistrationResponse,
+            WithRecoveredSession<Self::Error<RequestVerificationCodeError>>,
+        >,
     > + Send;
 
     fn submit_push_challenge(
@@ -70,7 +74,12 @@ pub(crate) trait RegistrationChatApi {
         &self,
         session_id: &SessionId,
         code: &str,
-    ) -> impl Future<Output = Result<RegistrationResponse, Self::Error<SubmitVerificationError>>> + Send;
+    ) -> impl Future<
+        Output = Result<
+            RegistrationResponse,
+            WithRecoveredSession<Self::Error<SubmitVerificationError>>,
+        >,
+    > + Send;
 
     fn check_svr2_credentials(
         &self,
@@ -96,6 +105,31 @@ pub(crate) trait RegistrationChatApi {
 pub(crate) struct RegistrationResponse {
     pub(crate) session_id: SessionId,
     pub(crate) session: RegistrationSession,
+}
+
+/// Request outcome with an extra payload of a session state
+///
+/// Some error results can contain the session state.
+pub(crate) struct WithRecoveredSession<T> {
+    pub(crate) result: T,
+    pub(crate) session: Option<RegistrationSession>,
+}
+
+impl<T> WithRecoveredSession<T> {
+    /// Discards any recovered session, yielding the wrapped value.
+    pub(crate) fn into_inner(self) -> T {
+        self.result
+    }
+}
+
+/// A plain error carries no recovered session.
+impl<E, D> From<RequestError<E, D>> for WithRecoveredSession<RequestError<E, D>> {
+    fn from(result: RequestError<E, D>) -> Self {
+        Self {
+            result,
+            session: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
@@ -140,6 +174,23 @@ pub struct RegistrationSession {
     pub requested_information: HashSet<ChallengeOption>,
 }
 
+impl Display for RegistrationSession {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // IMPORTANT: If you are adding a new field, consider the implications for the LogSafeDisplay.
+        let Self {
+            allowed_to_request_code: _,
+            verified: _,
+            next_sms: _,
+            next_call: _,
+            next_verification_attempt: _,
+            requested_information: _,
+        } = self;
+        write!(f, "{self:?}")
+    }
+}
+
+impl LogSafeDisplay for RegistrationSession {}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, strum::EnumString)]
 #[strum(serialize_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -157,6 +208,22 @@ pub struct VerificationCodeNotDeliverable {
     pub reason: String,
     pub permanent_failure: bool,
 }
+
+impl Display for VerificationCodeNotDeliverable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // IMPORTANT: When adding new fields, consider the implications for the
+        // LogSafeDisplay impl below.
+        let Self {
+            // Despite it being a string, it comes from a fixed list of
+            // values on the server.
+            reason: _,
+            permanent_failure: _,
+        } = self;
+        write!(f, "{self:?}")
+    }
+}
+
+impl LogSafeDisplay for VerificationCodeNotDeliverable {}
 
 #[serde_as]
 #[derive(Clone, PartialEq, Eq, serde::Deserialize, derive_more::Debug)]

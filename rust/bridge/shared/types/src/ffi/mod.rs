@@ -79,6 +79,39 @@ impl<T> BorrowedMutableSliceOf<T> {
     }
 }
 
+/// A buffer of `length` elements of type `T`, allocated with the alignment of
+/// [`libc::max_align_t`].
+///
+/// The number of bytes allocated is stored in `size_bytes`.
+///
+/// `base` should be allocated via Rust's global alloc (i.e. via [`std::alloc::alloc`])
+///
+/// # Motivation
+/// Rust's global allocator takes a size and alignment for _both_ allocation and deallocation. As a
+/// result, if we want to have a general "free this buffer" function, that function needs to be
+/// able to know the total size of the allocation and its alignment. Having a fixed (constant)
+/// alignment means we don't need to store the alignment in this struct (or have a separate free
+/// function for each type).
+#[repr(C)]
+pub struct OwnedBufferOfMaxAligned<T> {
+    pub base: *mut T,
+    pub length: usize,
+    pub size_bytes: usize,
+}
+
+impl<T> OwnedBufferOfMaxAligned<T> {
+    pub const ALIGNMENT: usize = std::mem::align_of::<libc::max_align_t>();
+    pub fn layout_for_count(count: usize) -> std::alloc::Layout {
+        std::alloc::Layout::array::<T>(count)
+            .expect("valid layout")
+            .align_to(Self::ALIGNMENT)
+            .expect("valid layout")
+    }
+    pub fn layout_for_size_bytes(size_bytes: usize) -> std::alloc::Layout {
+        std::alloc::Layout::from_size_align(size_bytes, Self::ALIGNMENT).expect("valid layout")
+    }
+}
+
 /// A representation of a array allocated on the Rust heap for use in C code.
 #[repr(C)]
 #[derive_where(Debug)]
@@ -427,14 +460,6 @@ pub fn run_ffi_safe<F: FnOnce() -> Result<(), SignalFfiError> + std::panic::Unwi
         Err(e) => e.into_raw_box_for_ffi(),
     }
 }
-
-/// Like [`std::panic::AssertUnwindSafe`], but FFI-compatible.
-#[derive(derive_more::Deref)]
-#[repr(transparent)]
-pub struct UnwindSafeArg<T>(pub T);
-
-impl<T> std::panic::UnwindSafe for UnwindSafeArg<T> {}
-impl<T> std::panic::RefUnwindSafe for UnwindSafeArg<T> {}
 
 pub unsafe fn native_handle_cast<T>(handle: *const T) -> Result<&'static T, SignalFfiError> {
     if handle.is_null() {

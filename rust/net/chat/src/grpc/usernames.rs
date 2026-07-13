@@ -6,15 +6,120 @@
 use std::convert::Infallible;
 
 use async_trait::async_trait;
+use displaydoc::Display;
 use libsignal_core::Aci;
 use libsignal_net_grpc::proto::chat::account::accounts_anonymous_client::AccountsAnonymousClient;
+use libsignal_net_grpc::proto::chat::account::accounts_client::AccountsClient;
 use libsignal_net_grpc::proto::chat::account::*;
 use libsignal_net_grpc::proto::chat::errors;
+use uuid::Uuid;
 
 use super::{GrpcServiceProvider, OverGrpc, log_and_send};
 use crate::api::usernames::validate_username_from_link;
-use crate::api::{RequestError, Unauth};
+use crate::api::{Auth, RequestError, Unauth};
 use crate::logging::{Redact, RedactHex};
+
+pub type UsernameHash = [u8; 32];
+#[derive(Debug, Display)]
+/// None of the candidate usernames were available.
+pub struct UsernameNotAvailable;
+
+#[derive(Debug, Display)]
+/// The authenticated account did not have a username set.
+pub struct UsernameNotSet;
+
+impl std::fmt::Display for Redact<ReserveUsernameHashRequest> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(ReserveUsernameHashRequest { username_hashes }) = self;
+        f.debug_struct("ReserveUsernameHash")
+            .field("username_hashes.len", &username_hashes.len())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for Redact<SetUsernameLinkRequest> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(SetUsernameLinkRequest {
+            username_ciphertext,
+            keep_link_handle,
+        }) = self;
+        f.debug_struct("SetUsernameLinkRequest")
+            .field("username_ciphertext.len", &username_ciphertext.len())
+            .field("keep_link_handle", &keep_link_handle)
+            .finish()
+    }
+}
+
+pub type UsernameLinkHandle = Uuid;
+
+impl<T: GrpcServiceProvider> Auth<T> {
+    /// Given a prioritized list of between 1 and 20 username hashes, try reserving them (in order)
+    ///
+    /// The first successfully reserved hash will be returned.
+    pub async fn reserve_username_hash(
+        &self,
+        username_hashes: &[UsernameHash],
+    ) -> Result<UsernameHash, RequestError<UsernameNotAvailable>> {
+        let mut client = AccountsClient::new(self.0.service());
+        let request = ReserveUsernameHashRequest {
+            username_hashes: username_hashes.iter().map(|hash| hash.to_vec()).collect(),
+        };
+        let desc = Redact(&request).to_string();
+        match log_and_send("auth", &desc, || client.reserve_username_hash(request))
+            .await?
+            .into_inner()
+            .response
+            .ok_or_else(|| RequestError::Unexpected {
+                log_safe: "missing response".to_string(),
+            })? {
+            reserve_username_hash_response::Response::UsernameHash(hash) => {
+                let hash_len = hash.len();
+                UsernameHash::try_from(hash).map_err(|_| RequestError::Unexpected {
+                    log_safe: format!("Expected 32 byte username hash; got {}", hash_len),
+                })
+            }
+            reserve_username_hash_response::Response::UsernameNotAvailable(
+                libsignal_net_grpc::proto::chat::account::UsernameNotAvailable {},
+            ) => Err(RequestError::Other(UsernameNotAvailable)),
+        }
+    }
+
+    /// For the given encrypted username, generate a username link handle. The username link handle
+    /// can be used to lookup the encrypted username.
+    ///
+    /// An account can only have one username link at a time; this endpoint overwrites the previous
+    /// encrypted username if there was one.
+    ///
+    /// `username_ciphertext` must be between 1 and 128 bytes.
+    pub async fn set_username_link(
+        &self,
+        username_ciphertext: &[u8],
+        keep_link_handle: bool,
+    ) -> Result<UsernameLinkHandle, RequestError<UsernameNotSet>> {
+        let mut client = AccountsClient::new(self.0.service());
+        let request = SetUsernameLinkRequest {
+            username_ciphertext: username_ciphertext.to_vec(),
+            keep_link_handle,
+        };
+        let desc = Redact(&request).to_string();
+        match log_and_send("auth", &desc, || client.set_username_link(request))
+            .await?
+            .into_inner()
+            .response
+            .ok_or_else(|| RequestError::Unexpected {
+                log_safe: "missing response".to_string(),
+            })? {
+            set_username_link_response::Response::UsernameLinkHandle(username_link_handle) => {
+                Uuid::from_slice(&username_link_handle).map_err(|_| RequestError::Unexpected {
+                    log_safe: "invalid uuid".to_string(),
+                })
+            }
+            set_username_link_response::Response::NoUsernameSet(_) => {
+                Err(RequestError::Other(UsernameNotSet))
+            }
+        }
+    }
+}
 
 #[async_trait]
 impl<T: GrpcServiceProvider> crate::api::usernames::UnauthenticatedChatApi<OverGrpc> for Unauth<T> {
@@ -118,10 +223,148 @@ impl std::fmt::Display for Redact<LookupUsernameLinkRequest> {
     }
 }
 
+pub mod test_cases {
+    use super::*;
+    use crate::grpc::GrpcTestCase;
+    pub struct ReserveUsernameHashArgs {
+        pub usernames: Vec<UsernameHash>,
+    }
+    pub enum ReserveUsernameHashOut {
+        Success(UsernameHash),
+        UsernameNotAvailable,
+    }
+    pub fn reserve_username_hash_test_cases() -> Vec<
+        GrpcTestCase<
+            ReserveUsernameHashArgs,
+            ReserveUsernameHashRequest,
+            ReserveUsernameHashResponse,
+            ReserveUsernameHashOut,
+        >,
+    > {
+        let hash0 = *b"................................";
+        let hash1 = *b"++++++++++++++++++++++++++++++++";
+        let method = "/org.signal.chat.account.Accounts/ReserveUsernameHash";
+        vec![
+            GrpcTestCase {
+                name: "success".to_string(),
+                method: method.to_string(),
+                request: ReserveUsernameHashArgs {
+                    usernames: vec![hash0, hash1],
+                },
+                request_grpc: ReserveUsernameHashRequest {
+                    username_hashes: vec![hash0.to_vec(), hash1.to_vec()],
+                },
+                response_grpc: ReserveUsernameHashResponse {
+                    response: Some(reserve_username_hash_response::Response::UsernameHash(
+                        hash0.to_vec(),
+                    )),
+                },
+                response: ReserveUsernameHashOut::Success(hash0),
+            },
+            GrpcTestCase {
+                name: "failed to reserve username".to_string(),
+                method: method.to_string(),
+                request: ReserveUsernameHashArgs {
+                    usernames: vec![hash0, hash1],
+                },
+                request_grpc: ReserveUsernameHashRequest {
+                    username_hashes: vec![hash0.to_vec(), hash1.to_vec()],
+                },
+                response_grpc: ReserveUsernameHashResponse {
+                    response: Some(
+                        reserve_username_hash_response::Response::UsernameNotAvailable(
+                            Default::default(),
+                        ),
+                    ),
+                },
+                response: ReserveUsernameHashOut::UsernameNotAvailable,
+            },
+        ]
+    }
+    pub struct SetUsernameLinkArgs {
+        pub username_ciphertext: Vec<u8>,
+        pub keep_link_handle: bool,
+    }
+    pub enum SetUsernameLinkOut {
+        Success(UsernameLinkHandle),
+        UsernameNotSet,
+    }
+    pub fn set_username_link_test_cases() -> Vec<
+        GrpcTestCase<
+            SetUsernameLinkArgs,
+            SetUsernameLinkRequest,
+            SetUsernameLinkResponse,
+            SetUsernameLinkOut,
+        >,
+    > {
+        let method = "/org.signal.chat.account.Accounts/SetUsernameLink";
+        let username_ciphertext = b"fun encrypted username".to_vec();
+        let username_link_handle = uuid::uuid!("C525F4F7-AF58-47CC-936E-D1B717F3C50A");
+        vec![
+            GrpcTestCase {
+                name: "success, keep_link_handle".to_string(),
+                method: method.to_string(),
+                request: SetUsernameLinkArgs {
+                    username_ciphertext: username_ciphertext.clone(),
+                    keep_link_handle: true,
+                },
+                request_grpc: SetUsernameLinkRequest {
+                    username_ciphertext: username_ciphertext.clone(),
+                    keep_link_handle: true,
+                },
+                response_grpc: SetUsernameLinkResponse {
+                    response: Some(set_username_link_response::Response::UsernameLinkHandle(
+                        username_link_handle.into(),
+                    )),
+                },
+                response: SetUsernameLinkOut::Success(username_link_handle),
+            },
+            GrpcTestCase {
+                name: "success, no keep_link_handle".to_string(),
+                method: method.to_string(),
+                request: SetUsernameLinkArgs {
+                    username_ciphertext: username_ciphertext.clone(),
+                    keep_link_handle: false,
+                },
+                request_grpc: SetUsernameLinkRequest {
+                    username_ciphertext: username_ciphertext.clone(),
+                    keep_link_handle: false,
+                },
+                response_grpc: SetUsernameLinkResponse {
+                    response: Some(set_username_link_response::Response::UsernameLinkHandle(
+                        username_link_handle.into(),
+                    )),
+                },
+                response: SetUsernameLinkOut::Success(username_link_handle),
+            },
+            GrpcTestCase {
+                name: "failure, no keep_link_handle".to_string(),
+                method: method.to_string(),
+                request: SetUsernameLinkArgs {
+                    username_ciphertext: username_ciphertext.clone(),
+                    keep_link_handle: false,
+                },
+                request_grpc: SetUsernameLinkRequest {
+                    username_ciphertext: username_ciphertext.clone(),
+                    keep_link_handle: false,
+                },
+                response_grpc: SetUsernameLinkResponse {
+                    response: Some(set_username_link_response::Response::NoUsernameSet(
+                        Default::default(),
+                    )),
+                },
+                response: SetUsernameLinkOut::UsernameNotSet,
+            },
+        ]
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use assert_matches::assert_matches;
     use data_encoding_macro::base64url_nopad;
     use futures_util::FutureExt as _;
+    use libsignal_net::chat::fake::BodyWithTrailers;
     use libsignal_net_grpc::proto::chat::common::{IdentityType, ServiceIdentifier};
     use libsignal_net_grpc::proto::chat::services;
     use test_case::test_case;
@@ -129,7 +372,9 @@ mod test {
 
     use super::*;
     use crate::api::usernames::UnauthenticatedChatApi;
-    use crate::grpc::testutil::{GrpcOverrideRequestValidator, RequestValidator, err, ok, req};
+    use crate::grpc::testutil::{
+        GrpcOverrideRequestValidator, RequestValidator, err, ok, req, run_tests,
+    };
 
     const ACI_UUID: Uuid = uuid!("9d0652a3-dcc3-4d11-975f-74d61598733f");
 
@@ -165,7 +410,7 @@ mod test {
     }) => matches Ok(None))]
     #[test_case(err(tonic::Code::Internal) => matches Err(RequestError::Unexpected { .. }))]
     fn test_hash_lookup(
-        response: http::Response<Vec<u8>>,
+        response: http::Response<BodyWithTrailers>,
     ) -> Result<Option<Aci>, RequestError<Infallible>> {
         // Not realistic, but not likely to show up by accident.
         let hash = &[0x00, 0xff, 0xff, 0xff];
@@ -207,7 +452,7 @@ mod test {
     }) => matches Ok(None))]
     #[test_case(err(tonic::Code::Internal) => matches Err(RequestError::Unexpected { .. }))]
     fn test_link_lookup(
-        response: http::Response<Vec<u8>>,
+        response: http::Response<BodyWithTrailers>,
     ) -> Result<Option<String>, RequestError<usernames::UsernameLinkError>> {
         let validator = GrpcOverrideRequestValidator {
             message: services::AccountsAnonymous::LookupUsernameLink.into(),
@@ -227,5 +472,48 @@ mod test {
             .now_or_never()
             .expect("sync")
             .map(|u| u.map(|u| u.to_string()))
+    }
+
+    #[test]
+    fn test_reserve_username_hash() {
+        use test_cases::*;
+        run_tests(
+            reserve_username_hash_test_cases(),
+            |chat: Auth<_>, ReserveUsernameHashArgs { usernames }| async move {
+                chat.reserve_username_hash(&usernames).await
+            },
+            |resp, result| match resp {
+                ReserveUsernameHashOut::Success(winner) => {
+                    assert_matches!(result, Ok(x) if x == winner)
+                }
+                ReserveUsernameHashOut::UsernameNotAvailable => {
+                    assert_matches!(result, Err(RequestError::Other(UsernameNotAvailable)))
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_set_username_link() {
+        use test_cases::*;
+        run_tests(
+            set_username_link_test_cases(),
+            |chat: Auth<_>,
+             SetUsernameLinkArgs {
+                 username_ciphertext,
+                 keep_link_handle,
+             }| async move {
+                chat.set_username_link(&username_ciphertext, keep_link_handle)
+                    .await
+            },
+            |resp, result| match resp {
+                SetUsernameLinkOut::Success(out) => {
+                    assert_matches!(result, Ok(x) if x == out)
+                }
+                SetUsernameLinkOut::UsernameNotSet => {
+                    assert_matches!(result, Err(RequestError::Other(UsernameNotSet)))
+                }
+            },
+        );
     }
 }

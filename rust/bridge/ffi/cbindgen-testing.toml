@@ -29,6 +29,7 @@ exclude = [
     "BorrowedBytestringArray",
     "BorrowedSliceOfBorrowedSliceOfc_uchar",
     "BorrowedSliceOfc_uchar",
+    "BorrowedSliceOfu832",
     "BorrowedSliceOfusize",
     "BytestringArray",
     "ConstPointerAuthChat",
@@ -44,6 +45,7 @@ exclude = [
     "CPromiseFfiCdsiLookupResponse",
     "CPromiseMutPointerRegistrationService",
     "CPromiseOwnedBufferOfc_uchar",
+    "FfiBulkPolledStreamTerminationReason",
     "FfiCdsiLookupResponse",
     "FfiCdsiLookupResponseEntry",
     "FfiChatListenerStruct",
@@ -67,7 +69,10 @@ exclude = [
     "OwnedBufferOfc_uchar",
     "OwnedBufferOfCStringPtr",
     "OwnedBufferOfFfiCdsiLookupResponseEntry",
+    "OwnedBufferOfMaxAlignedBridgeCopyBackupMediaItemFfiResult",
+    "OwnedBufferOfMaxAlignedLinkedDeviceInternalFfiResult",
     "OwnedBufferOfusize",
+    "Uuid",
 ]
 item_types = [
     "enums",

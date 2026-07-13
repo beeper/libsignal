@@ -14,6 +14,7 @@ use anyhow::Context;
 use clap::Parser;
 use heck::ToLowerCamelCase;
 use libsignal_bridge_types::jni::{JNI_ITEMS, KtMetadataContext};
+use libsignal_bridge_types::metadata::remove_all_checked;
 use minijinja::context;
 
 #[derive(Parser)]
@@ -24,6 +25,9 @@ struct Cli {
     /// Don't actually overwrite output files, just make sure they're up-to-date.
     #[clap(long)]
     verify: bool,
+    /// Just dump all metadata to JSON on stdout; do nothing else.
+    #[clap(long)]
+    dump_json: bool,
 }
 
 struct RemoveOnDrop {
@@ -64,6 +68,28 @@ fn main() -> anyhow::Result<()> {
                 &mut non_testing_ctx
             },
         );
+    }
+    remove_all_checked(
+        &mut testing_ctx.derived_types,
+        &non_testing_ctx.derived_types,
+    );
+    remove_all_checked(
+        &mut testing_ctx.derived_arg_converters,
+        &non_testing_ctx.derived_arg_converters,
+    );
+    remove_all_checked(
+        &mut testing_ctx.derived_return_converters,
+        &non_testing_ctx.derived_return_converters,
+    );
+    if args.dump_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&std::collections::BTreeMap::from_iter([
+                ("testing", &testing_ctx),
+                ("non_testing", &non_testing_ctx),
+            ]))?
+        );
+        return Ok(());
     }
     for testing in [false, true] {
         let code = env.get_template("NativeNice.kt.in")?.render(context! {

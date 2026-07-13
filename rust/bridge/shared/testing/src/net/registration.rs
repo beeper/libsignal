@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use libsignal_bridge_macros::*;
 use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::net::registration::{
     ConnectChatBridge, RegistrationCreateSessionRequest, RegistrationService,
@@ -270,8 +269,20 @@ make_error_testing_enum!(
         NotReadyForVerification => NotReadyForVerification,
         SendFailed => SendFailed,
         CodeNotDeliverable => CodeNotDeliverable,
+        ; SendFailedNoSessionState, NotReadyForVerificationNoSessionState,
     }
 );
+
+fn test_registration_session() -> RegistrationSession {
+    RegistrationSession {
+        allowed_to_request_code: false,
+        verified: false,
+        next_sms: Some(Duration::from_secs(3)),
+        next_call: Some(Duration::from_secs(14)),
+        next_verification_attempt: Some(Duration::from_secs(15)),
+        requested_information: HashSet::from_iter([ChallengeOption::Captcha]),
+    }
+}
 
 /// Return an error matching the requested description.
 #[bridge_fn]
@@ -289,10 +300,18 @@ fn TESTING_RegistrationService_RequestVerificationCodeErrorConvert(
                 RequestVerificationCodeError::SessionNotFound
             }
             TestingRequestVerificationCodeError::NotReadyForVerification => {
-                RequestVerificationCodeError::NotReadyForVerification
+                RequestVerificationCodeError::NotReadyForVerification(Some(
+                    test_registration_session(),
+                ))
+            }
+            TestingRequestVerificationCodeError::NotReadyForVerificationNoSessionState => {
+                RequestVerificationCodeError::NotReadyForVerification(None)
             }
             TestingRequestVerificationCodeError::SendFailed => {
-                RequestVerificationCodeError::SendFailed
+                RequestVerificationCodeError::SendFailed(Some(test_registration_session()))
+            }
+            TestingRequestVerificationCodeError::SendFailedNoSessionState => {
+                RequestVerificationCodeError::SendFailed(None)
             }
             TestingRequestVerificationCodeError::CodeNotDeliverable => {
                 RequestVerificationCodeError::CodeNotDeliverable(VerificationCodeNotDeliverable {
@@ -308,6 +327,7 @@ make_error_testing_enum!(
         InvalidSessionId => InvalidSessionId,
         SessionNotFound => SessionNotFound,
         NotReadyForVerification => NotReadyForVerification,
+        ; NotReadyForVerificationNoSessionState,
     }
 );
 
@@ -327,7 +347,10 @@ fn TESTING_RegistrationService_SubmitVerificationErrorConvert(
                 SubmitVerificationError::SessionNotFound
             }
             TestingSubmitVerificationError::NotReadyForVerification => {
-                SubmitVerificationError::NotReadyForVerification
+                SubmitVerificationError::NotReadyForVerification(Some(test_registration_session()))
+            }
+            TestingSubmitVerificationError::NotReadyForVerificationNoSessionState => {
+                SubmitVerificationError::NotReadyForVerification(None)
             }
         }))
 }

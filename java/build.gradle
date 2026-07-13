@@ -22,7 +22,7 @@ repositories {
 }
 
 allprojects {
-    version = "0.96.2"
+    version = "0.97.2"
     group   = "org.signal"
 
     tasks.withType(JavaCompile) {
@@ -34,7 +34,7 @@ allprojects {
         options.addStringOption('Xdoclint:none', '-quiet')
     }
     tasks.withType(KotlinCompile).configureEach {
-        compilerOptions.jvmTarget = JvmTarget.JVM_17
+        compilerOptions.jvmTarget = JvmTarget.JVM_21
     }
     tasks.withType(AbstractArchiveTask) {
         preserveFileTimestamps = false

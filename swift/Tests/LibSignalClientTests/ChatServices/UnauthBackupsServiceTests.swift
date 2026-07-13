@@ -220,7 +220,6 @@ class UnauthBackupsServiceTests: UnauthChatServiceTestBase<any UnauthBackupsServ
         return result
     }
 
-    @available(*, deprecated, message: "testing APIs marked deprecated")
     func testSetPublicKey() async throws {
         try await testSimpleGrpcRequest(
             requestName: "org.signal.chat.backup.SetPublicKeyRequest",
@@ -239,7 +238,6 @@ class UnauthBackupsServiceTests: UnauthChatServiceTestBase<any UnauthBackupsServ
         }
     }
 
-    @available(*, deprecated, message: "testing APIs marked deprecated")
     func testGetCdnCredentials() async throws {
         let credentials = try await testSimpleGrpcRequest(
             requestName: "org.signal.chat.backup.GetCdnCredentialsRequest",
@@ -260,7 +258,6 @@ class UnauthBackupsServiceTests: UnauthChatServiceTestBase<any UnauthBackupsServ
         }
     }
 
-    @available(*, deprecated, message: "testing APIs marked deprecated")
     func testGetSvrBCredentials() async throws {
         let credentials: Auth = try await testSimpleGrpcRequest(
             requestName: "org.signal.chat.backup.GetSvrBCredentialsRequest",
@@ -282,7 +279,6 @@ class UnauthBackupsServiceTests: UnauthChatServiceTestBase<any UnauthBackupsServ
         }
     }
 
-    @available(*, deprecated, message: "testing APIs marked deprecated")
     func testRefresh() async throws {
         try await testSimpleGrpcRequest(
             requestName: "org.signal.chat.backup.RefreshRequest",
@@ -302,7 +298,6 @@ class UnauthBackupsServiceTests: UnauthChatServiceTestBase<any UnauthBackupsServ
         }
     }
 
-    @available(*, deprecated, message: "testing APIs marked deprecated")
     func testDeleteAll() async throws {
         try await testSimpleGrpcRequest(
             requestName: "org.signal.chat.backup.DeleteAllRequest",
@@ -319,6 +314,70 @@ class UnauthBackupsServiceTests: UnauthChatServiceTestBase<any UnauthBackupsServ
             responseName: "org.signal.chat.backup.DeleteAllResponse",
         ) {
             try await $0.backupDeleteAll(auth: TEST_AUTH, rngForTesting: 0)
+        }
+    }
+
+    func testCopyMedia() async throws {
+        signal_testing_enable_deterministic_rng_for_testing()
+        try await testGrpcCases(
+            try NativeTestingNice.TESTING_CopyBackupMediaTests(),
+            invoke: { (api, args: [BridgeCopyBackupMediaItem]) in
+                let items = args.map {
+                    CopyBackupMediaItem(
+                        sourceAttachmentCdn: $0.sourceAttachmentCdn,
+                        sourceKey: $0.sourceKey,
+                        objectLength: UInt64(exactly: $0.objectLength)!,
+                        mediaId: $0.mediaId,
+                        encryptionKey: $0.encryptionKey
+                    )
+                }
+                return try await api.copyBackupMedia(auth: TEST_AUTH, items: items, rngForTesting: 0)
+                    .collectUntilError()
+            },
+            check: { (expected: [CopyBackupMediaOut], actual) in
+                var (actualItems, maybeError) = try! actual.get()
+                for nextExpected in expected {
+                    switch nextExpected {
+                    case .item(let nextItem):
+                        let actualItem: CopyBackupMediaOutcome = actualItems.removeFirst()
+                        XCTAssertEqual(CopyBackupMediaOutcome(nextItem), actualItem)
+                    case .invalidDataInStream:
+                        if case SignalError.networkProtocolError(_)? = maybeError {
+                        } else {
+                            XCTFail("expected error not seen: \(maybeError, default: "<none>")")
+                        }
+                    case .credentialRejected:
+                        if case SignalError.requestUnauthorized(_)? = maybeError {
+                        } else {
+                            XCTFail("expected error not seen: \(maybeError, default: "<none>")")
+                        }
+                    case .credentialRejectedWithoutAppropriateServerInfo:
+                        if case SignalError.networkProtocolError(_)? = maybeError {
+                        } else {
+                            XCTFail("expected error not seen: \(maybeError, default: "<none>")")
+                        }
+                    }
+                }
+                XCTAssertEqual(actualItems, [])
+            }
+        )
+    }
+}
+
+extension CopyBackupMediaOutcome: Equatable {
+    public static func == (lhs: CopyBackupMediaOutcome, rhs: CopyBackupMediaOutcome) -> Bool {
+        lhs.mediaId == rhs.mediaId && lhs.result == rhs.result
+    }
+}
+extension CopyBackupMediaOutcome.Result: Equatable {
+    public static func == (lhs: CopyBackupMediaOutcome.Result, rhs: CopyBackupMediaOutcome.Result) -> Bool {
+        switch (lhs, rhs) {
+        case (.success(cdn: let lCdn), .success(cdn: let rCdn)): lCdn == rCdn
+        case (.sourceNotFound, .sourceNotFound),
+            (.wrongSourceLength, .wrongSourceLength),
+            (.outOfSpace, .outOfSpace):
+            true
+        default: false
         }
     }
 }

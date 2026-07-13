@@ -31,6 +31,8 @@ use libsignal_net::svrb::Error as SvrbError;
 use libsignal_net_chat::api::backups::{BackupAuthCredentialRejected, GetUploadFormFailure};
 use libsignal_net_chat::api::messages::UploadTooLarge;
 use libsignal_net_chat::api::{RateLimitChallenge, RequestError as ChatRequestError};
+use libsignal_net_chat::grpc::devices::DeviceIdNotFoundInAccount;
+use libsignal_net_chat::grpc::usernames::UsernameNotAvailable;
 use libsignal_protocol::*;
 use signal_crypto::Error as SignalCryptoError;
 use usernames::{UsernameError, UsernameLinkError};
@@ -80,6 +82,7 @@ pub type JavaCiphertextMessage<'a> = JObject<'a>;
 pub type JavaSignedPublicPreKey<'a> = JObject<'a>;
 pub type JavaSimpleOwner<'a> = JObject<'a>;
 pub type JavaMap<'a> = JMap<'a>;
+pub type JavaArrayStar<'a> = JObjectArray<'a>;
 
 /// Return type marker for `bridge_fn`s that return Result, which gen_java_decl.py will pick out
 /// when generating Native.java.
@@ -766,10 +769,10 @@ mod registration {
                 RequestVerificationCodeError::SessionNotFound => {
                     session_not_found(env, self.to_string())
                 }
-                RequestVerificationCodeError::NotReadyForVerification => {
+                RequestVerificationCodeError::NotReadyForVerification(_) => {
                     not_ready_for_verification(env, self.to_string())
                 }
-                RequestVerificationCodeError::SendFailed => make_single_message_throwable(
+                RequestVerificationCodeError::SendFailed(_) => make_single_message_throwable(
                     env,
                     self.to_string(),
                     ClassName("org.signal.libsignal.net.RegistrationSessionSendCodeException"),
@@ -809,7 +812,7 @@ mod registration {
                 SubmitVerificationError::SessionNotFound => {
                     session_not_found(env, self.to_string())
                 }
-                SubmitVerificationError::NotReadyForVerification => {
+                SubmitVerificationError::NotReadyForVerification(_) => {
                     not_ready_for_verification(env, self.to_string())
                 }
             }
@@ -1161,6 +1164,34 @@ impl JniError for libsignal_net_chat::api::messages::MultiRecipientSendFailure {
                 )
             }
         }
+    }
+}
+
+impl JniError for DeviceIdNotFoundInAccount {
+    fn to_throwable_impl<'a>(
+        &self,
+        env: &mut jni::Env<'a>,
+    ) -> Result<JObject<'a>, BridgeLayerError> {
+        let message = self.to_string();
+        make_single_message_throwable(
+            env,
+            message,
+            ClassName("org.signal.libsignal.net.DeviceIdNotFoundException"),
+        )
+    }
+}
+
+impl JniError for UsernameNotAvailable {
+    fn to_throwable_impl<'a>(
+        &self,
+        env: &mut jni::Env<'a>,
+    ) -> Result<JObject<'a>, BridgeLayerError> {
+        let message = self.to_string();
+        make_single_message_throwable(
+            env,
+            message,
+            ClassName("org.signal.libsignal.net.UsernameNotAvailableException"),
+        )
     }
 }
 
@@ -1806,4 +1837,18 @@ where
     let result = T::Success::JNI_RESULT_SIGNATURE;
     assert!(!result.is_empty(), "missing JNI_SIGNATURE");
     result
+}
+
+impl JniError for libsignal_net_chat::grpc::usernames::UsernameNotSet {
+    fn to_throwable_impl<'a>(
+        &self,
+        env: &mut jni::Env<'a>,
+    ) -> Result<JObject<'a>, BridgeLayerError> {
+        let message = self.to_string();
+        make_single_message_throwable(
+            env,
+            message,
+            ClassName("org.signal.libsignal.net.UsernameNotSetException"),
+        )
+    }
 }

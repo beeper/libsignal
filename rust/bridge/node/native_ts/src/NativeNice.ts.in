@@ -6,12 +6,32 @@
 // WARNING: this file was automatically generated
 
 import * as Native from './Native.js';
+import {
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  type GrpcTestCase,
+  {% for (ty, v) in ctx.derived_arg_converters|items -%}
+    type {{ ty|arg_ffi_type }},
+  {%- endfor %}
+  {% for (ty, v) in ctx.derived_return_converters|items -%}
+    type {{ ty|return_ffi_type }},
+  {%- endfor %}
+  /* eslint-enable @typescript-eslint/no-unused-vars */
+} from './Native.js';
+
 import { ServiceId } from './Address.js';
 import * as zkgroup from './zkgroup/index.js';
+import * as uuid from './uuid.js';
 import ByteArray from './zkgroup/internal/ByteArray.js';
-import { TokioAsyncContext } from './net.js';
-import { CdnCredentials } from './net/chat/CdnCredentials.js';
-import { cdnCredentialReturnConverter, identity, serviceIdArgConverter } from './NiceConverters.js';
+import type { TokioAsyncContext } from './net.js';
+import type { CdnCredentials } from './net/chat/CdnCredentials.js';
+import {
+  type DeviceId,
+  type Timestamp,
+  cdnCredentialReturnConverter,
+  identity,
+  serviceIdArgConverter,
+  grpcTestCaseConverter,
+} from './NiceConverters.js';
 import { Rng } from './RngForTesting.js';
 
 {% macro struct_type(struct) %}
@@ -92,7 +112,13 @@ import { Rng } from './RngForTesting.js';
                     {%- endif %}
             {%- endfor %}
             default:
-                ffiInput satisfies never;
+                {% if enum.variants|count == 1 -%}
+                    {#- A single-variant enum's FFI type is not a union, so ffiInput itself is
+                        never narrowed; the discriminant still is. -#}
+                    ffiInput.__type satisfies never;
+                {%- else -%}
+                    ffiInput satisfies never;
+                {%- endif %}
                 throw new Error('Unknown FFI return enum type for {{ name }}');
             }
         }

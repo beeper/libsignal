@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use http::HeaderMap;
 use libsignal_net::chat::Response as ChatResponse;
 
 use crate::api::registration::{
-    CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError, RegistrationLock,
+    CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError, RegistrationSession,
     RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError, UpdateSessionError,
-    VerificationCodeNotDeliverable,
+    WithRecoveredSession,
 };
 use crate::api::{AllowRateLimitChallenges, RequestError};
-use crate::ws::{CustomError, ResponseError};
+use crate::ws::{CustomError, ResponseError, parse_json_from_body};
 
 // Rate limit challenges are allowed for all registration requests.
 const ALLOW_RATE_LIMIT_CHALLENGES: AllowRateLimitChallenges = AllowRateLimitChallenges::Yes;
@@ -49,6 +50,13 @@ impl<D> From<ResponseError> for RequestError<ResumeSessionError, D> {
     }
 }
 
+fn session_state_from_json_body(
+    headers: &HeaderMap,
+    body: Option<&[u8]>,
+) -> Option<RegistrationSession> {
+    parse_json_from_body(headers, Some(body?)).ok()
+}
+
 impl<D> From<ResponseError> for RequestError<RequestVerificationCodeError, D> {
     fn from(value: ResponseError) -> Self {
         value.into_request_error(ALLOW_RATE_LIMIT_CHALLENGES, |value| {
@@ -61,12 +69,18 @@ impl<D> From<ResponseError> for RequestError<RequestVerificationCodeError, D> {
             CustomError::Err(match status.as_u16() {
                 400 => RequestVerificationCodeError::InvalidSessionId,
                 404 => RequestVerificationCodeError::SessionNotFound,
-                409 => RequestVerificationCodeError::NotReadyForVerification,
-                418 => RequestVerificationCodeError::SendFailed,
+                409 => RequestVerificationCodeError::NotReadyForVerification(
+                    session_state_from_json_body(headers, body.as_deref()),
+                ),
+                418 => RequestVerificationCodeError::SendFailed(session_state_from_json_body(
+                    headers,
+                    body.as_deref(),
+                )),
                 440 => {
-                    let Some(not_deliverable) = body.as_deref().and_then(|body| {
-                        VerificationCodeNotDeliverable::from_response(headers, body)
-                    }) else {
+                    let Some(not_deliverable) = body
+                        .as_deref()
+                        .and_then(|body| parse_json_from_body(headers, Some(body)).ok())
+                    else {
                         return CustomError::NoCustomHandling;
                     };
                     RequestVerificationCodeError::CodeNotDeliverable(not_deliverable)
@@ -82,14 +96,88 @@ impl<D> From<ResponseError> for RequestError<RequestVerificationCodeError, D> {
 impl<D> From<ResponseError> for RequestError<SubmitVerificationError, D> {
     fn from(value: ResponseError) -> Self {
         value.into_request_error(ALLOW_RATE_LIMIT_CHALLENGES, |value| {
-            let ChatResponse { status, .. } = value;
+            let ChatResponse {
+                status,
+                message: _,
+                headers,
+                body,
+            } = value;
             CustomError::Err(match status.as_u16() {
                 400 => SubmitVerificationError::InvalidSessionId,
                 404 => SubmitVerificationError::SessionNotFound,
-                409 => SubmitVerificationError::NotReadyForVerification,
+                409 => SubmitVerificationError::NotReadyForVerification(
+                    session_state_from_json_body(headers, body.as_deref()),
+                ),
                 _ => return CustomError::NoCustomHandling,
             })
         })
+    }
+}
+
+/// Recovers session state carried in the body of a failure response whose status
+/// is one of `statuses`.
+///
+/// The status list is explicit rather than "any body that parses" because some
+/// failure bodies (e.g. a 440's [`VerificationCodeNotDeliverable`]) would parse
+/// into an all-default [`RegistrationSession`] and wrongly update the cache.
+///
+/// [`VerificationCodeNotDeliverable`]: crate::api::registration::VerificationCodeNotDeliverable
+fn recover_session_for_statuses(
+    response: &ChatResponse,
+    statuses: &[u16],
+) -> Option<RegistrationSession> {
+    let ChatResponse {
+        status,
+        message: _,
+        headers,
+        body,
+    } = response;
+    statuses
+        .contains(&status.as_u16())
+        .then(|| session_state_from_json_body(headers, body.as_deref()))
+        .flatten()
+}
+
+/// Session state an endpoint may carry in a failure response body.
+///
+/// This covers every status whose body carries session state, both the ones
+/// that turn into a typed error (409, 418) and the ones that come back as a
+/// generic error (429), so the caller can refresh its cache uniformly.
+///
+/// Defaults to none; endpoints whose responses carry it override.
+trait RecoverSession {
+    fn recover_session(_response: &ChatResponse) -> Option<RegistrationSession> {
+        None
+    }
+}
+
+impl RecoverSession for ResumeSessionError {}
+impl RecoverSession for UpdateSessionError {}
+impl RecoverSession for RequestVerificationCodeError {
+    fn recover_session(response: &ChatResponse) -> Option<RegistrationSession> {
+        recover_session_for_statuses(response, &[409, 418, 429])
+    }
+}
+impl RecoverSession for SubmitVerificationError {
+    fn recover_session(response: &ChatResponse) -> Option<RegistrationSession> {
+        recover_session_for_statuses(response, &[409, 429])
+    }
+}
+
+/// Pairs the plain error conversion with any session recovered from the response.
+impl<E: RecoverSession, D> From<ResponseError> for WithRecoveredSession<RequestError<E, D>>
+where
+    RequestError<E, D>: From<ResponseError>,
+{
+    fn from(value: ResponseError) -> Self {
+        let session = match &value {
+            ResponseError::UnrecognizedStatus { response, .. } => E::recover_session(response),
+            _ => None,
+        };
+        WithRecoveredSession {
+            result: value.into(),
+            session,
+        }
     }
 }
 
@@ -120,7 +208,7 @@ impl<D> From<ResponseError> for RequestError<RegisterAccountError, D> {
                 423 => {
                     let Some(registration_lock) = body
                         .as_deref()
-                        .and_then(|body| RegistrationLock::from_response(headers, body))
+                        .and_then(|body| parse_json_from_body(headers, Some(body)).ok())
                     else {
                         return CustomError::NoCustomHandling;
                     };

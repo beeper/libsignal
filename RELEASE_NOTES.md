@@ -1,3 +1,2 @@
-v0.96.2
+v0.97.2
 
-- Expose DonationPermit to clients

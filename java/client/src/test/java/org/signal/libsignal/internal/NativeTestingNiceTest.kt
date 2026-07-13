@@ -13,10 +13,14 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.junit.Test
 import org.signal.libsignal.protocol.ServiceId
+import java.time.Instant
+import java.time.format.DateTimeFormatterBuilder
+import java.util.Arrays
 import java.util.UUID
 import kotlin.io.encoding.Base64
 import kotlin.random.Random
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class NativeTestingNiceTest {
@@ -106,6 +110,26 @@ class NativeTestingNiceTest {
     )
 
   @Test
+  fun data32() =
+    testConversion(
+      sequenceOf(Random.nextBytes(32)),
+      toString = Base64::encode,
+      nativeToString = NativeTestingNice::TESTING_conversion_Data32_to_string,
+      nativeIdentity = NativeTestingNice::TESTING_conversion_Data32_identity,
+      equality = java.util.Arrays::equals,
+    )
+
+  @Test
+  fun data32BridgeVec() =
+    testConversion(
+      (0 until 8).asSequence().map { count -> (0 until count).map { Random.nextBytes(32) } },
+      toString = { it.joinToString("\n", transform = Base64::encode) },
+      nativeToString = NativeTestingNice::TESTING_conversion_BridgeVecData32_to_string,
+      nativeIdentity = NativeTestingNice::TESTING_conversion_BridgeVecData32_identity,
+      equality = { a, b -> a.zip(b).all { (a, b) -> a.contentEquals(b) } },
+    )
+
+  @Test
   fun dataU8() =
     testConversion(
       (0 until 10).asSequence().map({ Random.nextBytes(1 shl it) }),
@@ -113,6 +137,37 @@ class NativeTestingNiceTest {
       nativeToString = NativeTestingNice::TESTING_conversion_Data_VecU8_to_string,
       nativeIdentity = NativeTestingNice::TESTING_conversion_Data_VecU8_identity,
       equality = java.util.Arrays::equals,
+    )
+
+  @Test
+  fun bridgeVecString() =
+    testConversion(
+      listOf(listOf(), listOf("one"), listOf("one", "two"), listOf("one", "two", "three")).asSequence(),
+      toString = { arr -> buildJsonArray { arr.forEach { add(it) } }.toString() },
+      nativeToString = NativeTestingNice::TESTING_conversion_BridgeVecString_to_string,
+      nativeIdentity = NativeTestingNice::TESTING_conversion_BridgeVecString_identity,
+    )
+
+  @Test
+  fun bridgeVecMySimpleTestEnum() =
+    testConversion(
+      listOf(
+        listOf(),
+        listOf(MySimpleTestEnum.A),
+        listOf(MySimpleTestEnum.B),
+        listOf(
+          MySimpleTestEnum.A,
+          MySimpleTestEnum.B,
+        ),
+        listOf(MySimpleTestEnum.A, MySimpleTestEnum.A, MySimpleTestEnum.B),
+        listOf(
+          MySimpleTestEnum.B,
+          MySimpleTestEnum.B,
+        ),
+      ).asSequence(),
+      toString = { arr -> buildJsonArray { arr.forEach { add(it.toString()) } }.toString() },
+      nativeToString = NativeTestingNice::TESTING_MySimpleTestEnum_BridgeVec_to_string,
+      nativeIdentity = NativeTestingNice::TESTING_MySimpleTestEnum_BridgeVec_identity,
     )
 
   @Test
@@ -219,6 +274,67 @@ class NativeTestingNiceTest {
     for (count in listOf(0, 1, 2, 4, 8, 16, 32, 64, 128, 256)) {
       val data = NativeTestingNice.TESTING_TokioAsyncContext_FutureSuccessBytes(tokio, count).get()
       assertEquals(count, data.size)
+    }
+  }
+
+  @Test
+  fun testUuid() {
+    testConversion(
+      sequenceOf(UUID.randomUUID()),
+      toString = Any::toString,
+      nativeToString = NativeTestingNice::TESTING_conversion_Uuid_to_string,
+      nativeIdentity = NativeTestingNice::TESTING_conversion_Uuid_identity,
+    )
+  }
+
+  @Test
+  fun testReturnedError() {
+    val error = NativeTestingNice.TESTING_ReturnIoError()
+    assertIs<java.io.IOException>(error)
+    assertEquals(error.message, "testing")
+
+    val error2 = NativeTestingNice.TESTING_ReturnSomeIoError(present = true)
+    assertIs<java.io.IOException>(error2)
+    assertEquals(error.message, "testing")
+
+    val error3 = NativeTestingNice.TESTING_ReturnSomeIoError(present = false)
+    assertEquals(error3, null)
+  }
+
+  @Test
+  fun testDeviceId() {
+    testConversion(
+      IntRange(1, 127).asSequence(),
+      toString = Any::toString,
+      nativeToString = NativeTestingNice::TESTING_conversion_DeviceId_to_string,
+      nativeIdentity = NativeTestingNice::TESTING_conversion_DeviceId_identity,
+    )
+  }
+
+  @Test
+  fun testTimestamp() {
+    val fmt = DateTimeFormatterBuilder().appendInstant(3).toFormatter()
+
+    fun instant2string(x: Instant): String = "${x.toEpochMilli()}ms ${fmt.format(x)}"
+    testConversion(
+      sequenceOf(
+        Instant.ofEpochMilli(0),
+        Instant.ofEpochMilli(1782938926226),
+      ),
+      toString = { instant2string(it) },
+      nativeToString = NativeTestingNice::TESTING_conversion_Timestamp_to_string,
+      nativeIdentity = NativeTestingNice::TESTING_conversion_Timestamp_identity,
+    )
+    // Our timestamps only store milliseconds, and don't preserve nanoseconds, so we _can't_
+    // roundtrip via identity. Instead, we just validate the string format
+    for (instant in listOf(
+      Instant.ofEpochSecond(
+        1782938926,
+        226 * 100_000,
+      ),
+      Instant.ofEpochSecond(1782938, 738),
+    )) {
+      assertEquals(instant2string(instant), NativeTestingNice.TESTING_conversion_Timestamp_to_string(instant))
     }
   }
 }

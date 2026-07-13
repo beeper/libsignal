@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 use clap::Parser;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use libsignal_bridge_types::ffi::{FFI_ITEMS, SwiftMetadataContext};
+use libsignal_bridge_types::metadata::remove_all_checked;
 use minijinja::context;
 use minijinja::value::DynObject;
 
@@ -25,6 +26,9 @@ struct Cli {
     /// Don't actually overwrite output files, just make sure they're up-to-date.
     #[clap(long)]
     verify: bool,
+    /// Just dump all metadata to JSON on stdout; do nothing else.
+    #[clap(long)]
+    dump_json: bool,
 }
 
 fn preserve_underscores(
@@ -56,6 +60,9 @@ fn main() -> anyhow::Result<()> {
     env.add_filter("return_converter", |ty: String| {
         libsignal_bridge_types::metadata::ffi::names::return_converter(&ty)
     });
+    env.add_filter("fixed_byte_array_helper", |len: usize| {
+        libsignal_bridge_types::metadata::ffi::names::fixed_byte_array_helper(len)
+    });
     env.add_function("enum_has_payload", |e: DynObject| {
         e.get_value_by_str("variants")
             .expect("missing variants")
@@ -86,6 +93,39 @@ fn main() -> anyhow::Result<()> {
             },
         );
     }
+
+    remove_all_checked(
+        &mut testing_ctx.derived_types,
+        &non_testing_ctx.derived_types,
+    );
+    remove_all_checked(
+        &mut testing_ctx.derived_arg_converters,
+        &non_testing_ctx.derived_arg_converters,
+    );
+    remove_all_checked(
+        &mut testing_ctx.derived_return_converters,
+        &non_testing_ctx.derived_return_converters,
+    );
+    remove_all_checked(
+        &mut testing_ctx.ffi_borrowed_slice_cons,
+        &non_testing_ctx.ffi_borrowed_slice_cons,
+    );
+    remove_all_checked(
+        &mut testing_ctx.ffi_owned_buffer_of_max_aligned_project,
+        &non_testing_ctx.ffi_owned_buffer_of_max_aligned_project,
+    );
+
+    if args.dump_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&std::collections::BTreeMap::from_iter([
+                ("testing", &testing_ctx),
+                ("non_testing", &non_testing_ctx),
+            ]))?
+        );
+        return Ok(());
+    }
+
     for testing in [false, true] {
         let code = env.get_template("NativeNice.swift.in")?.render(context! {
             non_testing_ctx => non_testing_ctx,

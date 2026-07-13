@@ -17,7 +17,7 @@ use libsignal_core::try_scoped;
 use libsignal_net::cdsi::LookupResponseEntry;
 use libsignal_net_chat::api::UploadForm;
 use libsignal_net_chat::api::keys::DeviceSpecifier;
-use libsignal_protocol::*;
+use libsignal_net_chat::stream_util::BulkPolledStreamTerminationReason;
 use paste::paste;
 use zkgroup::groups::GroupSendFullToken;
 
@@ -34,8 +34,8 @@ use crate::protocol::storage::{
     JniBridgeSenderKeyStore, JniBridgeSessionStore, JniBridgeSignedPreKeyStore,
 };
 use crate::support::{
-    Array, AsType, BridgeHandleRef, BridgedCallbacks, FixedLengthBincodeSerializable, Serialized,
-    extend_lifetime,
+    Array, AsType, BridgeHandleRef, BridgeVec, BridgedCallbacks, FixedLengthBincodeSerializable,
+    Serialized, extend_lifetime,
 };
 
 #[cfg(feature = "metadata")]
@@ -66,7 +66,7 @@ macro_rules! nice_identity_arg_converter {
                 KtArgConverter {
                     nice_type: $kt.into(),
                     ffi_type: $kt.into(),
-                    ffi_field_type_erased: ffi_field_type_erased::<Self, _>(),
+                    ffi_field_type_erased: ffi_field_type_erased::<Self>(),
                     converter_function: "identity".to_string(),
                 }
             }
@@ -90,11 +90,8 @@ macro_rules! nice_identity_result_converter {
 
 /// A helper function to get the kt_erased_field_type for an argument type.
 #[cfg(feature = "metadata")]
-fn ffi_field_type_erased<'a, 'b: 'a, 'c: 'b, 'd, T: ArgTypeInfo<'a, 'b, 'c>, Raw>() -> String
-where
-    T::ArgType: ConvertibleFromJValue<'d, Raw>,
-{
-    let sig = <<T as ArgTypeInfo>::ArgType as ConvertibleFromJValue<Raw>>::SIGNATURE;
+fn ffi_field_type_erased<'a, 'b: 'a, 'c: 'b, 'd, T: ArgTypeInfo<'a, 'b, 'c>>() -> String {
+    let sig = <<T as ArgTypeInfo>::ArgType as ConvertibleFromJValue>::SIGNATURE;
     match sig.ty() {
         jni::signature::JavaType::Primitive(primitive) => match primitive {
             jni::signature::Primitive::Boolean => "Boolean",
@@ -119,29 +116,23 @@ where
 ///
 /// For primitives (`jint`, `jchar`, etc), this is just the corresponding `TryInto` implementation.
 /// For objects, this is `try_into` (or `into_object`) followed by a downcast.
-///
-/// ## Implementation
-///
-/// The `Raw` argument *ought* to be unnecessary. However, without it the blanket impl on
-/// [`jni::refs::Reference`] conflicts with the implementations for primitives; having an extra
-/// generic argument makes the implementations technically not overlap. This would still be quite
-/// inconvenient...except that the Rust compiler does not *perfectly* enforce coherence: if a type
-/// only has one impl for a trait, the trait's generic arguments can be inferred. Thus, even though
-/// generic uses of `ConvertibleFromJValue` must allow for an extra `Raw` parameter, any concrete
-/// uses will work without explicit typing.
-pub trait ConvertibleFromJValue<'a, Raw>: Sized {
+pub trait ConvertibleFromJValue<'a>: Sized {
     const SIGNATURE: ::jni::signature::FieldSignature<'static>;
     fn try_convert(env: &mut jni::Env<'a>, value: JValueOwned<'a>) -> jni::errors::Result<Self>;
 }
-impl<'a, T: jni::refs::Reference<Kind<'a> = T>> ConvertibleFromJValue<'a, ()> for T {
-    const SIGNATURE: jni::signature::FieldSignature<'static> = jni::jni_sig!(JObject);
-    fn try_convert(env: &mut jni::Env<'a>, value: JValueOwned<'a>) -> jni::errors::Result<Self> {
-        env.cast_local::<Self>(value.into_object()?)
-    }
+macro_rules! convertible_reference {
+    ($($ty:ty),*$(,)?) => {$(
+        impl<'a> ConvertibleFromJValue<'a> for $ty {
+            const SIGNATURE: jni::signature::FieldSignature<'static> = jni::jni_sig!(JObject);
+            fn try_convert(env: &mut jni::Env<'a>, value: JValueOwned<'a>) -> jni::errors::Result<Self> {
+                env.cast_local::<Self>(value.into_object()?)
+            }
+        }
+    )*};
 }
 macro_rules! convertible_primitive {
     ($($ty:ident),*$(,)?) => {$(
-        impl ConvertibleFromJValue<'_, ::jni::sys::$ty> for ::jni::sys::$ty {
+        impl ConvertibleFromJValue<'_> for ::jni::sys::$ty {
             const SIGNATURE: jni::signature::FieldSignature<'static> = jni::jni_sig!($ty);
             fn try_convert(_env: &mut jni::Env<'_>, value: JValueOwned<'_>) -> jni::errors::Result<Self> {
                 value.try_into()
@@ -150,6 +141,14 @@ macro_rules! convertible_primitive {
     )*};
 }
 convertible_primitive!(jboolean, jint, jlong, jbyte, jshort, jfloat, jdouble);
+convertible_reference!(
+    JObject<'a>,
+    JString<'a>,
+    JObjectArray<'a>,
+    JIntArray<'a>,
+    JByteArray<'a>,
+    JLongArray<'a>,
+);
 
 /// Converts arguments from their JNI form to their Rust form.
 ///
@@ -182,7 +181,7 @@ convertible_primitive!(jboolean, jint, jlong, jbyte, jshort, jfloat, jdouble);
 /// Implementers should also see the `jni_arg_type` macro in `convert.rs`.
 pub trait ArgTypeInfo<'storage, 'param: 'storage, 'context: 'param>: Sized {
     /// The JNI form of the argument (e.g. `jni::jint`).
-    type ArgType: 'param;
+    type ArgType: ConvertibleFromJValue<'context> + 'param;
     /// Local storage for the argument (ideally borrowed rather than copied).
     type StoredType: 'storage;
     /// "Borrows" the data in `foreign`, usually to establish a local lifetime or owning type.
@@ -219,7 +218,7 @@ pub trait ArgTypeInfo<'storage, 'param: 'storage, 'context: 'param>: Sized {
 /// However, some types do need the full flexibility of `ArgTypeInfo`.
 pub trait SimpleArgTypeInfo<'a>: Sized {
     /// The JNI form of the argument (e.g. `jint`).
-    type ArgType: 'a;
+    type ArgType: ConvertibleFromJValue<'a> + 'a;
     /// Converts the data in `foreign` to the Rust type.
     fn convert_from(
         env: &mut jni::Env<'a>,
@@ -373,6 +372,17 @@ impl SimpleArgTypeInfo<'_> for crate::protocol::Timestamp {
         Ok(Self::from_epoch_millis(*foreign as u64))
     }
 }
+#[cfg(feature = "metadata")]
+impl NiceArgConverter for crate::protocol::Timestamp {
+    fn register_kt_arg_converter(_ctx: &mut KtMetadataContext) -> KtArgConverter {
+        KtArgConverter {
+            nice_type: "java.time.Instant".to_string(),
+            ffi_type: "Long".to_string(),
+            ffi_field_type_erased: ffi_field_type_erased::<Self>(),
+            converter_function: "(java.time.Instant::toEpochMilli)".to_string(),
+        }
+    }
+}
 
 impl SimpleArgTypeInfo<'_> for RandomNumberGenerator {
     type ArgType = jlong;
@@ -390,7 +400,7 @@ impl NiceArgConverter for RandomNumberGenerator {
             nice_type: "org.signal.libsignal.net.DeterministicRandomSeedUseOnlyForTesting?"
                 .to_string(),
             ffi_type: "Long".to_string(),
-            ffi_field_type_erased: ffi_field_type_erased::<Self, _>(),
+            ffi_field_type_erased: ffi_field_type_erased::<Self>(),
             converter_function:
                 "org.signal.libsignal.net.DeterministicRandomSeedUseOnlyForTesting.toFfi"
                     .to_string(),
@@ -435,6 +445,19 @@ impl SimpleArgTypeInfo<'_> for DeviceSpecifier {
         }
     }
 }
+
+impl<'a> SimpleArgTypeInfo<'a> for DeviceId {
+    type ArgType = <u8 as SimpleArgTypeInfo<'a>>::ArgType;
+    fn convert_from(
+        env: &mut jni::Env<'a>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self, BridgeLayerError> {
+        let foreign = <u8 as SimpleArgTypeInfo<'a>>::convert_from(env, foreign)?;
+        DeviceId::new(foreign)
+            .map_err(|_| BridgeLayerError::BadArgument("Invalid DeviceId".to_string()))
+    }
+}
+nice_identity_arg_converter!(DeviceId, "org.signal.libsignal.protocol.DeviceId");
 
 /// Supports all valid byte values `0..=255`.
 impl SimpleArgTypeInfo<'_> for u8 {
@@ -497,6 +520,7 @@ impl<'a> SimpleArgTypeInfo<'a> for uuid::Uuid {
         Ok(uuid::Uuid::from_bytes(bytes))
     }
 }
+nice_identity_arg_converter!(uuid::Uuid, "java.util.UUID");
 
 impl<'a> SimpleArgTypeInfo<'a> for libsignal_core::E164 {
     type ArgType = <String as SimpleArgTypeInfo<'a>>::ArgType;
@@ -605,7 +629,7 @@ macro_rules! zkgroup_serialize_type {
                 KtArgConverter {
                     nice_type: $cls.to_string(),
                     ffi_type: "ByteArray".to_string(),
-                    ffi_field_type_erased: ffi_field_type_erased::<Self, _>(),
+                    ffi_field_type_erased: ffi_field_type_erased::<Self>(),
                     converter_function: format!("({}::getInternalContentsForJNI)", $cls),
                 }
             }
@@ -895,6 +919,59 @@ impl<'a> SimpleArgTypeInfo<'a> for Vec<Vec<u8>> {
     }
 }
 
+impl<'storage, 'param: 'storage, 'context: 'param, T: ArgTypeInfo<'storage, 'param, 'context>>
+    ArgTypeInfo<'storage, 'param, 'context> for BridgeVec<T>
+where
+    // TODO: support primitives later
+    T::ArgType: Reference<Kind<'param> = T::ArgType> + Into<JObject<'param>>,
+{
+    type ArgType = JavaArrayStar<'context>;
+    type StoredType = Vec<T::StoredType>;
+
+    fn borrow(
+        env: &mut jni::Env<'context>,
+        foreign: &Self::ArgType,
+    ) -> Result<Self::StoredType, BridgeLayerError> {
+        let (foreign, len) = env
+            .as_cast::<JObjectArray>(foreign)
+            .and_then(|foreign| {
+                let len = foreign.len(env)?;
+                Ok((foreign, len))
+            })
+            .check_exceptions(env, "BridgeVec::borrow")?;
+        let mut stored = Vec::with_capacity(len);
+        for i in 0..len {
+            let elem = Auto::<T::ArgType>::new(
+                foreign
+                    .get_element(env, i)
+                    .and_then(|obj| env.cast_local::<T::ArgType>(obj))
+                    .check_exceptions(env, "BridgeVec::borrow")?,
+            );
+            stored.push(T::borrow(env, elem.deref())?);
+        }
+        Ok(stored)
+    }
+
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        BridgeVec(stored.iter_mut().map(T::load_from).collect())
+    }
+}
+#[cfg(feature = "metadata")]
+impl<T: NiceArgConverter> NiceArgConverter for BridgeVec<T> {
+    fn register_kt_arg_converter(ctx: &mut KtMetadataContext) -> KtArgConverter {
+        let t = T::register_kt_arg_converter(ctx);
+        KtArgConverter {
+            nice_type: format!("List<{}>", t.nice_type),
+            ffi_type: "Array<*>".to_string(),
+            ffi_field_type_erased: "Any?".to_string(),
+            converter_function: format!(
+                "mapBridgeVecArg<{}, {}>({{ {}(it) }})",
+                t.ffi_type, t.nice_type, t.converter_function
+            ),
+        }
+    }
+}
+
 impl<
     'storage,
     'param: 'storage,
@@ -932,7 +1009,7 @@ impl<T: 'static + Send + Sync + BridgeHandleWrapperClass> NiceArgConverter
         KtArgConverter {
             nice_type: T::WRAPPER_CLASS.into(),
             ffi_type: T::WRAPPER_CLASS.into(),
-            ffi_field_type_erased: ffi_field_type_erased::<Self, _>(),
+            ffi_field_type_erased: ffi_field_type_erased::<Self>(),
             converter_function: "identity".to_string(),
         }
     }
@@ -1408,6 +1485,16 @@ impl ResultTypeInfo<'_> for crate::protocol::Timestamp {
         Ok(self.epoch_millis() as jlong)
     }
 }
+#[cfg(feature = "metadata")]
+impl NiceResultConverter for crate::protocol::Timestamp {
+    fn register_kt_result_converter(_ctx: &mut KtMetadataContext) -> KtReturnConverter {
+        KtReturnConverter {
+            nice_type: "java.time.Instant".to_string(),
+            ffi_type: "Long".to_string(),
+            converter_function: "(java.time.Instant::ofEpochMilli)".to_string(),
+        }
+    }
+}
 
 /// Reinterprets the bits of the `u64` as a Java `long`. Returns `-1` for `None`.
 ///
@@ -1467,6 +1554,14 @@ impl<'a> ResultTypeInfo<'a> for Option<&str> {
         }
     }
 }
+
+impl<'a> ResultTypeInfo<'a> for DeviceId {
+    type ResultType = <u8 as ResultTypeInfo<'a>>::ResultType;
+    fn convert_into(self, env: &mut jni::Env<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        u8::from(self).convert_into(env)
+    }
+}
+nice_identity_result_converter!(DeviceId, "org.signal.libsignal.protocol.DeviceId");
 
 impl<'a> ResultTypeInfo<'a> for &[u8] {
     type ResultType = JByteArray<'a>;
@@ -1529,6 +1624,17 @@ impl<'a, const LEN: usize> SimpleArgTypeInfo<'a> for [u8; LEN] {
             .copied()
     }
 }
+#[cfg(feature = "metadata")]
+impl<const LEN: usize> NiceArgConverter for [u8; LEN] {
+    fn register_kt_arg_converter(_ctx: &mut KtMetadataContext) -> KtArgConverter {
+        KtArgConverter {
+            nice_type: "ByteArray".to_string(),
+            ffi_type: "ByteArray".to_string(),
+            ffi_field_type_erased: ffi_field_type_erased::<Self>(),
+            converter_function: "identity".to_string(),
+        }
+    }
+}
 
 impl<'storage, 'param: 'storage, 'context: 'param, const LEN: usize>
     ArgTypeInfo<'storage, 'param, 'context> for &'storage [u8; LEN]
@@ -1589,6 +1695,16 @@ impl<'a, const LEN: usize> ResultTypeInfo<'a> for [u8; LEN] {
         self.as_ref().convert_into(env)
     }
 }
+#[cfg(feature = "metadata")]
+impl<const LEN: usize> NiceResultConverter for [u8; LEN] {
+    fn register_kt_result_converter(_ctx: &mut KtMetadataContext) -> KtReturnConverter {
+        KtReturnConverter {
+            nice_type: "ByteArray".to_string(),
+            ffi_type: "ByteArray".to_string(),
+            converter_function: "identity".to_string(),
+        }
+    }
+}
 
 impl<'a> ResultTypeInfo<'a> for uuid::Uuid {
     const JNI_SIGNATURE: &'static str = jni_sig_str!(java.util.UUID);
@@ -1606,6 +1722,7 @@ impl<'a> ResultTypeInfo<'a> for uuid::Uuid {
         )
     }
 }
+nice_identity_result_converter!(uuid::Uuid, "java.util.UUID");
 
 impl<'a> ResultTypeInfo<'a> for Option<uuid::Uuid> {
     type ResultType = JObject<'a>;
@@ -2148,7 +2265,7 @@ impl NiceArgConverter for ServiceId {
         KtArgConverter {
             nice_type: "org.signal.libsignal.protocol.ServiceId".to_string(),
             ffi_type: "ByteArray".to_string(),
-            ffi_field_type_erased: ffi_field_type_erased::<Self, _>(),
+            ffi_field_type_erased: ffi_field_type_erased::<Self>(),
             converter_function:
                 "(org.signal.libsignal.protocol.ServiceId::toServiceIdFixedWidthBinary)".to_string(),
         }
@@ -2709,14 +2826,85 @@ impl<'a> ResultTypeInfo<'a>
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for libsignal_net::chat::server_requests::DisconnectCause {
+impl<'a, T: JniError + Send + 'static> ResultTypeInfo<'a> for crate::support::BridgedError<T> {
     type ResultType = JThrowable<'a>;
     const JNI_SIGNATURE: &'static str = jni_sig_str!(java.lang.Throwable);
 
     fn convert_into(self, env: &mut jni::Env<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        Some(self).convert_into(env)
+    }
+}
+#[cfg(feature = "metadata")]
+impl<T> NiceResultConverter for crate::support::BridgedError<T> {
+    fn register_kt_result_converter(_ctx: &mut KtMetadataContext) -> KtReturnConverter {
+        KtReturnConverter {
+            nice_type: "Throwable".to_string(),
+            ffi_type: "Throwable".to_string(),
+            converter_function: "identity".to_string(),
+        }
+    }
+}
+
+impl<'a, T: JniError + Send + 'static> ResultTypeInfo<'a>
+    for Option<crate::support::BridgedError<T>>
+{
+    type ResultType = Nullable<JThrowable<'a>>;
+    const JNI_SIGNATURE: &'static str = jni_sig_str!(java.lang.Throwable);
+
+    fn convert_into(self, env: &mut jni::Env<'a>) -> Result<Self::ResultType, BridgeLayerError> {
         match self {
-            Self::LocalDisconnect => Ok(JThrowable::null()),
-            Self::Error(err) => SignalJniError::from(err).to_throwable(env),
+            None => Ok(JThrowable::null()),
+            Some(crate::support::BridgedError(e)) => SignalJniError::from(e).to_throwable(env),
+        }
+    }
+}
+#[cfg(feature = "metadata")]
+impl<T> NiceResultConverter for Option<crate::support::BridgedError<T>> {
+    fn register_kt_result_converter(_ctx: &mut KtMetadataContext) -> KtReturnConverter {
+        KtReturnConverter {
+            nice_type: "Throwable?".to_string(),
+            ffi_type: "Throwable?".to_string(),
+            converter_function: "identity".to_string(),
+        }
+    }
+}
+
+impl<'a, T: JniError + Send + 'static> ResultTypeInfo<'a>
+    for Option<BulkPolledStreamTerminationReason<T>>
+{
+    type ResultType = Nullable<JObject<'a>>;
+    const JNI_SIGNATURE: &'static str = jni_sig_str!(java.lang.Object);
+
+    fn convert_into(self, env: &mut jni::Env<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        match self {
+            Some(BulkPolledStreamTerminationReason::Error(e)) => crate::support::BridgedError(e)
+                .convert_into(env)
+                .map(JObject::from),
+            Some(BulkPolledStreamTerminationReason::Finished) => {
+                find_class(env, ClassName("kotlin.Unit"))
+                    .and_then(|unit_class| {
+                        env.get_static_field(
+                            unit_class,
+                            jni_str!("INSTANCE"),
+                            jni_sig!(kotlin.Unit),
+                        )
+                    })
+                    .and_then(JValueOwned::into_object)
+                    .check_exceptions(env, "kotlin.Unit")
+            }
+            None => Ok(JObject::null()),
+        }
+    }
+}
+#[cfg(feature = "metadata")]
+impl<T> NiceResultConverter for Option<BulkPolledStreamTerminationReason<T>> {
+    fn register_kt_result_converter(_ctx: &mut KtMetadataContext) -> KtReturnConverter {
+        // Kotlin doesn't have a union type `(Unit | Throwable)`; we'll leave it to consumers to
+        // deal with.
+        KtReturnConverter {
+            nice_type: "Any?".to_string(),
+            ffi_type: "Object?".to_string(),
+            converter_function: "identity".to_string(),
         }
     }
 }
@@ -2763,7 +2951,7 @@ impl<'a> ResultTypeInfo<'a> for PreKeysResponse {
 
 /// Converts each element of `it` to a Java object by invoking `map(env, item)`, storing the result
 /// in an array.
-fn make_object_array_mapped<'a, It, Map>(
+pub fn make_object_array_mapped<'a, It, Map>(
     env: &mut jni::Env<'a>,
     element_type: &JClass<'a>,
     it: It,
@@ -2813,6 +3001,34 @@ where
     make_object_array_mapped(env, &element_type, it, |env, x| {
         Ok(x.convert_into(env)?.into())
     })
+}
+
+impl<'a, T: ResultTypeInfo<'a>> ResultTypeInfo<'a> for BridgeVec<T> {
+    type ResultType = JavaArrayStar<'a>;
+
+    fn convert_into(self, env: &mut jni::Env<'a>) -> Result<Self::ResultType, BridgeLayerError> {
+        // TODO: in the future, use a fully correct array type
+        let element_class = JObject::lookup_class(env, &loader_context().unwrap_or_default())
+            .check_exceptions(env, "BridgeVec::convert_into")?;
+        make_object_array_mapped(env, &element_class, self.0, |env, value| {
+            let value = value.convert_into(env)?;
+            box_primitive_if_needed(env, value.into())
+        })
+    }
+}
+#[cfg(feature = "metadata")]
+impl<T: NiceResultConverter> NiceResultConverter for BridgeVec<T> {
+    fn register_kt_result_converter(ctx: &mut KtMetadataContext) -> KtReturnConverter {
+        let t = T::register_kt_result_converter(ctx);
+        KtReturnConverter {
+            nice_type: format!("List<{}>", t.nice_type),
+            ffi_type: "Array<*>".to_string(),
+            converter_function: format!(
+                "mapBridgeVecReturn<{}, {}>({{ {}(it) }})",
+                t.ffi_type, t.nice_type, t.converter_function
+            ),
+        }
+    }
 }
 
 impl<'a> ResultTypeInfo<'a> for Box<[String]> {
@@ -2981,6 +3197,21 @@ impl ResultTypeInfo<'_> for i32 {
 nice_identity_result_converter!(i32, "Int");
 nice_identity_arg_converter!(i32, "Int");
 
+impl SimpleArgTypeInfo<'_> for i64 {
+    type ArgType = Self;
+    fn convert_from(_env: &mut jni::Env, foreign: &Self) -> Result<Self, BridgeLayerError> {
+        Ok(*foreign)
+    }
+}
+impl ResultTypeInfo<'_> for i64 {
+    type ResultType = Self;
+    fn convert_into(self, _env: &mut jni::Env) -> Result<Self, BridgeLayerError> {
+        Ok(self)
+    }
+}
+nice_identity_result_converter!(i64, "Long");
+nice_identity_arg_converter!(i64, "Long");
+
 /// Syntactically translates `bridge_fn` argument types to JNI types for `cbindgen` and
 /// `gen_java_decl.py`.
 ///
@@ -3049,6 +3280,9 @@ macro_rules! jni_arg_type {
     };
     (SignedPublicPreKey) => {
         jni::JavaSignedPublicPreKey<'local>
+    };
+    (DeviceId) => {
+        ::jni::sys::jint
     };
     (&mut [u8]) => {
         ::jni::objects::JByteArray<'local>
@@ -3171,6 +3405,9 @@ macro_rules! jni_arg_type {
     (DeviceSpecifier) => {
         ::jni::sys::jint
     };
+    (BridgeVec<$ty:ty>) => {
+        $crate::jni::JavaArrayStar<'local>
+    };
 
     (Ignored<$typ:ty>) => (::jni::objects::JObject<'local>);
 
@@ -3272,6 +3509,9 @@ macro_rules! jni_result_type {
     (u64) => {
         ::jni::sys::jlong
     };
+    (DeviceId) => {
+        ::jni::sys::jint
+    };
     (&str) => {
         ::jni::objects::JString<'local>
     };
@@ -3365,12 +3605,35 @@ macro_rules! jni_result_type {
     (CdnCredentials) => {
         ::jni::objects::JObjectArray<'local>
     };
+    (BridgeVec<$ty:ty>) => {
+        $crate::jni::JavaArrayStar<'local>
+    };
+    (BridgedError<$typ:ty>) => {
+        ::jni::objects::JThrowable<'local>
+    };
+    (Option<BridgedError<$typ:ty> >) => {
+        $crate::jni::Nullable<::jni::objects::JThrowable<'local>>
+    };
+    (Option<BulkPolledStreamTerminationReason<$typ:ty> >) => {
+        $crate::jni::Nullable<::jni::objects::JObject<'local>>
+    };
+
+    (GrpcTestCases<$a:ty, $b:ty>) => {
+        ::jni::objects::JObjectArray<'local>
+    };
 
     // Derived types
+    (BridgeCopyBackupMediaItem) => {::jni::objects::JObject<'local>};
+    (BridgeCopyBackupMediaOutcome) => {::jni::objects::JObject<'local>};
+    (BridgeCopyBackupMediaResult) => {::jni::objects::JObject<'local>};
+    (CopyBackupMediaNextChunk) => {::jni::objects::JObject<'local>};
+
+    // Testing derived types
     (MySimpleTestEnum) => {::jni::objects::JObject<'local>};
     (MyTestEnum) => {::jni::objects::JObject<'local>};
     (MyTestPoint) => {::jni::objects::JObject<'local>};
     (MyTestStruct) => {::jni::objects::JObject<'local>};
+    (TestStreamChunk) => {::jni::objects::JObject<'local>};
 
     ( $handle:ty ) => {
         $crate::jni::ObjectHandle
