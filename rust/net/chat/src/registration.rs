@@ -309,7 +309,7 @@ pub async fn reregister_account(
     keys: ForServiceIds<AccountKeys<'_>>,
     account_password: &str,
 ) -> Result<RegisterAccountResponse, RequestError<RegisterAccountError>> {
-    log::info!("sending regregister account request");
+    log::info!("sending re-register account request");
 
     let connection = RegistrationConnection::connect(connect_chat).await?;
     let response = Registration(&connection)
@@ -324,7 +324,7 @@ pub async fn reregister_account(
         )
         .await?;
 
-    log::info!("reregister account request succeded");
+    log::info!("reregister account request succeeded");
     Ok(response)
 }
 
@@ -361,6 +361,7 @@ mod testutil {
             T: Send + 'static,
         {
             Box::new(move |event| match event {
+                ListenerEvent::ServerTimestamp(_) => {}
                 ListenerEvent::ReceivedAlerts(alerts) => {
                     if !alerts.is_empty() {
                         unreachable!("unexpected alerts: {alerts:?}")

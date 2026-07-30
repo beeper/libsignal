@@ -258,6 +258,58 @@ class UnauthBackupsServiceTests: UnauthChatServiceTestBase<any UnauthBackupsServ
         }
     }
 
+    func testGetMessageBackupInfo() async throws {
+        signal_testing_enable_deterministic_rng_for_testing()
+        try await testGrpcCases(
+            try NativeTestingNice.TESTING_GetMessageBackupInfoTests(),
+            invoke: { api, _ in
+                try await api.getMessageBackupInfo(auth: TEST_AUTH, rngForTesting: 0)
+            },
+            check: { expected, actual in
+                switch expected {
+                case .success(let expected):
+                    XCTAssertEqual(MessageBackupInfo.fromInternal(expected), try actual.get())
+                case .credentialRejected:
+                    do {
+                        _ = try actual.get()
+                        XCTFail("Expected exception")
+                    } catch SignalError.requestUnauthorized(_) {}
+                case .missingResponse:
+                    do {
+                        _ = try actual.get()
+                        XCTFail("Expected exception")
+                    } catch SignalError.networkProtocolError(_) {}
+                }
+            }
+        )
+    }
+
+    func testGetMediaBackupInfo() async throws {
+        signal_testing_enable_deterministic_rng_for_testing()
+        try await testGrpcCases(
+            try NativeTestingNice.TESTING_GetMediaBackupInfoTests(),
+            invoke: { api, _ in
+                try await api.getMediaBackupInfo(auth: TEST_AUTH, rngForTesting: 0)
+            },
+            check: { expected, actual in
+                switch expected {
+                case .success(let expected):
+                    XCTAssertEqual(MediaBackupInfo.fromInternal(expected), try actual.get())
+                case .credentialRejected:
+                    do {
+                        _ = try actual.get()
+                        XCTFail("Expected exception")
+                    } catch SignalError.requestUnauthorized(_) {}
+                case .missingResponse:
+                    do {
+                        _ = try actual.get()
+                        XCTFail("Expected exception")
+                    } catch SignalError.networkProtocolError(_) {}
+                }
+            }
+        )
+    }
+
     func testGetSvrBCredentials() async throws {
         let credentials: Auth = try await testSimpleGrpcRequest(
             requestName: "org.signal.chat.backup.GetSvrBCredentialsRequest",
@@ -341,6 +393,46 @@ class UnauthBackupsServiceTests: UnauthChatServiceTestBase<any UnauthBackupsServ
                     case .item(let nextItem):
                         let actualItem: CopyBackupMediaOutcome = actualItems.removeFirst()
                         XCTAssertEqual(CopyBackupMediaOutcome(nextItem), actualItem)
+                    case .invalidDataInStream:
+                        if case SignalError.networkProtocolError(_)? = maybeError {
+                        } else {
+                            XCTFail("expected error not seen: \(maybeError, default: "<none>")")
+                        }
+                    case .credentialRejected:
+                        if case SignalError.requestUnauthorized(_)? = maybeError {
+                        } else {
+                            XCTFail("expected error not seen: \(maybeError, default: "<none>")")
+                        }
+                    case .credentialRejectedWithoutAppropriateServerInfo:
+                        if case SignalError.networkProtocolError(_)? = maybeError {
+                        } else {
+                            XCTFail("expected error not seen: \(maybeError, default: "<none>")")
+                        }
+                    }
+                }
+                XCTAssertEqual(actualItems, [])
+            }
+        )
+    }
+
+    func testDeleteMedia() async throws {
+        signal_testing_enable_deterministic_rng_for_testing()
+        try await testGrpcCases(
+            try NativeTestingNice.TESTING_DeleteBackupMediaTests(),
+            invoke: { (api, args: [BridgeDeleteBackupMediaItem]) in
+                let items = args.map {
+                    DeleteBackupMediaItem($0)
+                }
+                return try await api.deleteBackupMedia(auth: TEST_AUTH, items: items, rngForTesting: 0)
+                    .collectUntilError()
+            },
+            check: { (expected: [DeleteBackupMediaOut], actual) in
+                var (actualItems, maybeError) = try! actual.get()
+                for nextExpected in expected {
+                    switch nextExpected {
+                    case .item(let nextItem):
+                        let actualItem: DeleteBackupMediaItem = actualItems.removeFirst()
+                        XCTAssertEqual(DeleteBackupMediaItem(nextItem), actualItem)
                     case .invalidDataInStream:
                         if case SignalError.networkProtocolError(_)? = maybeError {
                         } else {

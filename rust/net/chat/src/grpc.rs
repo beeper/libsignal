@@ -6,6 +6,7 @@
 //! The `grpc` module and its submodules implement a chat server based on the gRPC messages from
 //! [libsignal-net-grpc](libsignal_net_grpc).
 
+pub mod accounts;
 pub mod backups;
 pub mod devices;
 mod messages;
@@ -30,6 +31,7 @@ use tonic::codegen::StdError;
 
 use crate::api::{ChallengeOption, DisconnectedError, RateLimitChallenge, RequestError};
 use crate::logging::{DebugAsStrOrBytes, Redact, RedactHex};
+use crate::stream_util::take_until_first_error;
 
 /// Marker type for use in [`crate::api`] traits.
 pub enum OverGrpc {}
@@ -339,6 +341,59 @@ where
     fn log_safe_description(&self) -> String {
         Redact(self).to_string()
     }
+}
+
+/// Splits `items` into chunks and makes a separate request for each of them.
+///
+/// Designed for requests that have a `repeated Item items` field: up to `chunk_size` items will be
+/// peeled off the iterator, transformed using `transform_item`, and collected in a `Vec`, which
+/// `make_request` can then embed directly into its request proto.
+///
+/// `make_request` will need to capture any parameters that don't change between requests, including
+/// the service or service provider itself. See existing callers for details.
+fn chunk_request<T, TProto, R: 'static, E: 'static, S>(
+    operation: &'static str,
+    chunk_size: usize,
+    items: impl IntoIterator<Item = T, IntoIter: ExactSizeIterator + 'static>,
+    mut transform_item: impl FnMut(T) -> TProto + 'static,
+    mut make_request: impl FnMut(Vec<TProto>) -> S + 'static,
+) -> impl Stream<Item = Result<R, E>> + 'static
+where
+    S: Stream<Item = Result<R, E>> + 'static,
+{
+    let mut items = items.into_iter();
+
+    // Keep track of progress if we're going to make more than one request.
+    let total_count = items.len();
+    let mut cumulative_count_for_logs = (total_count > chunk_size).then_some(0);
+
+    let streams = std::iter::from_fn(move || {
+        // We have to do this conversion outside of the call to `make_request` to avoid Rust
+        // thinking we're capturing the outer iterator.
+        let next_chunk: Vec<_> = items
+            .by_ref()
+            .take(chunk_size)
+            .map(&mut transform_item)
+            .collect();
+        if next_chunk.is_empty() {
+            return None;
+        }
+        if let Some(cumulative_count_for_logs) = cumulative_count_for_logs.as_mut() {
+            let prev_count = *cumulative_count_for_logs;
+            *cumulative_count_for_logs += next_chunk.len();
+            // Use Swift/Kotlin half-open range syntax "..<", it's less ambiguous across languages.
+            log::info!(
+                "{operation}: processing items {}..<{} of {}",
+                prev_count,
+                cumulative_count_for_logs,
+                total_count
+            );
+        }
+        Some(make_request(next_chunk))
+    });
+    // Explicitly end the stream after the first error so that we don't go on to make another
+    // request.
+    take_until_first_error(futures_util::stream::iter(streams).flatten())
 }
 
 impl<E> RequestError<E> {
@@ -1052,6 +1107,35 @@ pub(crate) mod testutil {
         }
     }
 
+    #[derive(Clone)]
+    pub(crate) struct FnValidator(
+        #[allow(clippy::type_complexity)]
+        pub  Arc<
+            dyn Fn(
+                    http::Request<tonic::body::Body>,
+                ) -> http::Response<BoxBody<bytes::Bytes, Infallible>>
+                + Send
+                + Sync,
+        >,
+    );
+
+    impl tower_service::Service<http::Request<tonic::body::Body>> for FnValidator {
+        type Response = http::Response<BoxBody<bytes::Bytes, Infallible>>;
+        type Error = hyper::Error;
+        type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+        fn poll_ready(
+            &mut self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, req: http::Request<tonic::body::Body>) -> Self::Future {
+            std::future::ready(Ok((self.0)(req)))
+        }
+    }
+
     /// A protoscope-like helper type for decoding arbitrary protobuf messages.
     ///
     /// Always succeeds as long as the input is not malformed. Only intended for debugging.
@@ -1069,7 +1153,7 @@ pub(crate) mod testutil {
         Nested(DynMessage),
     }
 
-    trait MessageExt: Sized {
+    pub(crate) trait MessageExt: Sized {
         fn decode_single_grpc_body(
             body: impl bytes::Buf + Send + 'static,
         ) -> Result<Self, tonic::Status>;
@@ -1190,23 +1274,6 @@ pub(crate) mod testutil {
             }
         }
     }
-
-    pub(crate) fn collect_up_to_and_including_first_error<S, T, E>(
-        stream: S,
-    ) -> impl Future<Output = Vec<S::Item>>
-    where
-        S: Stream<Item = Result<T, E>>,
-    {
-        // We want to emulate the behavior of "take up to the first error", but then also check the
-        // error. Neither a simple `take_while` nor `try_collect` quite captures this, so we need a
-        // little extra state.
-        let mut stream_is_ok = true;
-        stream
-            .take_while(move |next| {
-                std::future::ready(std::mem::replace(&mut stream_is_ok, next.is_ok()))
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -1228,7 +1295,7 @@ mod test {
     use crate::grpc::test_case_util::{
         GRPC_STATUS_DETAILS_HEADER, GRPC_STATUS_HEADER, status_for_server_side_error,
     };
-    use crate::grpc::testutil::collect_up_to_and_including_first_error;
+    use crate::stream_util::collect_up_to_and_including_first_error;
 
     #[test]
     fn test_extract_server_side_error() {
@@ -1732,5 +1799,124 @@ mod test {
                 Err(RequestError::Other(TestError::Expected))
             ]
         );
+    }
+
+    #[test]
+    fn test_chunking() {
+        testing_logger::setup();
+
+        let contents: Vec<u8> = chunk_request(
+            "test",
+            5,
+            0..24, // deliberately short on the last chunk
+            |i| i * 10,
+            |items| futures_util::stream::iter(items.into_iter().rev().map(Ok::<u8, Infallible>)),
+        )
+        .try_collect()
+        .now_or_never()
+        .expect("not actually async")
+        .expect("no failures");
+        assert_eq!(
+            &contents[..],
+            const_str::concat_bytes!(
+                [40, 30, 20, 10, 0],
+                [90, 80, 70, 60, 50],
+                [140, 130, 120, 110, 100],
+                [190, 180, 170, 160, 150],
+                [230, 220, 210, 200]
+            )
+        );
+
+        testing_logger::validate(|logs| {
+            assert_eq!(
+                logs.iter().map(|log| &log.body).collect_vec(),
+                [
+                    "test: processing items 0..<5 of 24",
+                    "test: processing items 5..<10 of 24",
+                    "test: processing items 10..<15 of 24",
+                    "test: processing items 15..<20 of 24",
+                    "test: processing items 20..<24 of 24",
+                ]
+            )
+        });
+    }
+
+    #[test]
+    fn test_single_chunk() {
+        testing_logger::setup();
+
+        let contents: Vec<u8> = chunk_request(
+            "test",
+            100,
+            0..24,
+            |i| i * 10,
+            |items| futures_util::stream::iter(items.into_iter().rev().map(Ok::<u8, Infallible>)),
+        )
+        .try_collect()
+        .now_or_never()
+        .expect("not actually async")
+        .expect("no failures");
+        assert_eq!(
+            &contents[..],
+            [
+                230, 220, 210, 200, 190, 180, 170, 160, 150, 140, 130, 120, 110, 100, 90, 80, 70,
+                60, 50, 40, 30, 20, 10, 0
+            ],
+        );
+
+        testing_logger::validate(|logs| {
+            assert_eq!(
+                logs.iter().map(|log| &log.body).collect_vec(),
+                &[] as &[&str]
+            )
+        });
+    }
+
+    #[test]
+    fn test_chunking_early_exit() {
+        testing_logger::setup();
+
+        let contents: Vec<_> = chunk_request(
+            "test",
+            5,
+            0..24, // deliberately short on the last chunk
+            |i| i * 10,
+            |items| {
+                assert!(
+                    items.first().copied().unwrap_or_default() < 150,
+                    "previous chunk should have failed in the middle"
+                );
+                futures_util::stream::iter(
+                    items
+                        .into_iter()
+                        .rev()
+                        .map(|i| if i != 120 { Ok(i) } else { Err(i) }),
+                )
+            },
+        )
+        .collect()
+        .now_or_never()
+        .expect("not actually async");
+
+        let (failure, successes) = contents.split_last().expect("non-empty");
+        assert_eq!(
+            successes
+                .iter()
+                .map(|x| *x.as_ref().expect("success"))
+                .collect_vec(),
+            const_str::concat_bytes!([40, 30, 20, 10, 0], [90, 80, 70, 60, 50], [140, 130])
+        );
+        assert_eq!(*failure, Err(120));
+
+        testing_logger::validate(|logs| {
+            assert_eq!(
+                logs.iter().map(|log| &log.body).collect_vec(),
+                [
+                    "test: processing items 0..<5 of 24",
+                    "test: processing items 5..<10 of 24",
+                    "test: processing items 10..<15 of 24",
+                ]
+            )
+        });
     }
 }

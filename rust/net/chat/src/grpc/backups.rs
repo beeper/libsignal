@@ -4,7 +4,7 @@
 //
 
 use async_trait::async_trait;
-use futures_util::Stream;
+use futures_util::{Stream, TryFutureExt as _};
 use libsignal_account_keys::{
     MEDIA_ENCRYPTION_AES_KEY_LEN, MEDIA_ENCRYPTION_HMAC_KEY_LEN, MEDIA_ENCRYPTION_KEY_LEN,
     MEDIA_ID_LEN,
@@ -15,16 +15,18 @@ use libsignal_net_grpc::proto::chat::backup::get_upload_form_request::{
 };
 use libsignal_net_grpc::proto::chat::backup::{
     BackupStreamClosed, CopyMediaRequest, CopyMediaResponse, DeleteAllRequest, DeleteAllResponse,
-    DeleteMediaItem, DeleteMediaRequest, DeleteMediaResponse, GetCdnCredentialsRequest,
-    GetCdnCredentialsResponse, GetSvrBCredentialsRequest, GetSvrBCredentialsResponse,
+    DeleteMediaItem, DeleteMediaRequest, DeleteMediaResponse, GetBackupInfoRequest,
+    GetCdnCredentialsRequest, GetCdnCredentialsResponse, GetMediaBackupInfoResponse,
+    GetMessageBackupInfoResponse, GetSvrBCredentialsRequest, GetSvrBCredentialsResponse,
     GetUploadFormRequest, GetUploadFormResponse, RefreshRequest, RefreshResponse,
     SetPublicKeyRequest, SetPublicKeyResponse, SignedPresentation, backup_stream_closed,
     copy_media_response, delete_all_response, get_cdn_credentials_response,
+    get_media_backup_info_response, get_message_backup_info_response,
     get_svr_b_credentials_response, get_upload_form_response, refresh_response,
     set_public_key_response,
 };
-use libsignal_net_grpc::proto::chat::common;
 use libsignal_net_grpc::proto::chat::errors::{FailedPrecondition, FailedZkAuthentication};
+use libsignal_net_grpc::proto::chat::{backup as proto, common};
 
 use super::{
     GrpcServiceProvider, OverGrpc, StreamResult, log_and_send,
@@ -35,6 +37,7 @@ use crate::api::backups::{
     GetUploadFormFailure,
 };
 use crate::api::{RequestError, Unauth, UploadForm};
+use crate::grpc::chunk_request;
 use crate::logging::{DebugByCalling, Redact};
 
 impl From<BackupAuthPresentation> for SignedPresentation {
@@ -108,6 +111,43 @@ impl DeleteBackupMediaItem {
             media_id: media_id.to_vec(),
         }
     }
+}
+
+/// Information about the currently stored message backup.
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct MessageBackupInfo {
+    /// The base directory of the backup data on the CDN.
+    ///
+    /// Always non-empty, even if a backup has not actually been stored to the CDN. If a backup was
+    /// previously uploaded and has not expired, it can be found in [`Self::cdn`] at
+    /// `/backup_dir/backup_name`.
+    pub backup_dir: String,
+    /// The CDN type where the message backup is stored. Media may be stored elsewhere.
+    pub cdn: u32,
+    /// The location of the message backup on the CDN.
+    ///
+    /// Always non-empty, even if a backup has not actually been stored to the CDN.
+    pub backup_name: String,
+}
+
+/// Information about the currently stored media backup.
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct MediaBackupInfo {
+    /// The base directory of the backup data on the CDN.
+    ///
+    /// Always non-empty, even if no media has been stored to the CDN or the credential is for a
+    /// tier that does not support media.
+    pub backup_dir: String,
+    /// The prefix path component for media objects on a CDN.
+    ///
+    /// Stored media for a `media_id` can be found at `/backup_dir/media_dir/media_id`, where the
+    /// `media_id` is encoded in unpadded url-safe base64. Always non-empty, even if no media has
+    /// been stored to the CDN or the credential is for a tier that does not support media.
+    pub media_dir: String,
+    /// The amount of space used to store media, in bytes.
+    pub used_space: u64,
 }
 
 #[async_trait]
@@ -341,6 +381,112 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         }
     }
 
+    /// Retrieves information about the currently stored message backup.
+    ///
+    /// The `auth` should be for a messages credential.
+    ///
+    /// Note that the server does not distinguish an invalid credential from a backup-id that has
+    /// never been provisioned: if [`set_backup_public_key`](Self::set_backup_public_key) has never
+    /// been called for this backup-id, this request also fails with
+    /// [`BackupAuthCredentialRejected`]. Callers using this to check whether a backup exists
+    /// should treat that case as "backups not set up" rather than as a fatal error.
+    pub async fn get_message_backup_info(
+        &self,
+        auth: &BackupAuth<'_>,
+        rng: &mut (dyn rand::CryptoRng + Send),
+    ) -> Result<MessageBackupInfo, RequestError<BackupAuthCredentialRejected>> {
+        let mut backup_service = BackupsAnonymousClient::new(self.0.service());
+
+        let auth = auth.present(rng)?;
+
+        let request = GetBackupInfoRequest {
+            signed_presentation: Some(auth.into()),
+        };
+        let log_safe_description = Redact(&request).to_string();
+        let response: GetMessageBackupInfoResponse =
+            log_and_send("unauth", &log_safe_description, || {
+                backup_service.get_message_backup_info(request)
+            })
+            .await?
+            .into_inner();
+
+        let response = response.response.ok_or_else(|| RequestError::Unexpected {
+            log_safe: "missing response".to_owned(),
+        })?;
+        match response {
+            get_message_backup_info_response::Response::BackupInfo(
+                get_message_backup_info_response::MessageBackupInfo {
+                    backup_dir,
+                    cdn,
+                    backup_name,
+                },
+            ) => Ok(MessageBackupInfo {
+                backup_dir,
+                cdn,
+                backup_name,
+            }),
+            get_message_backup_info_response::Response::FailedAuthentication(
+                FailedZkAuthentication { description },
+            ) => {
+                log::warn!("failed zk auth: {description}");
+                Err(RequestError::Other(BackupAuthCredentialRejected))
+            }
+        }
+    }
+
+    /// Retrieves information about the currently stored media backup.
+    ///
+    /// The `auth` should be for a media credential.
+    ///
+    /// Note that the server does not distinguish an invalid credential from a backup-id that has
+    /// never been provisioned: if [`set_backup_public_key`](Self::set_backup_public_key) has never
+    /// been called for this backup-id, this request also fails with
+    /// [`BackupAuthCredentialRejected`]. Callers using this to check whether a backup exists
+    /// should treat that case as "backups not set up" rather than as a fatal error.
+    pub async fn get_media_backup_info(
+        &self,
+        auth: &BackupAuth<'_>,
+        rng: &mut (dyn rand::CryptoRng + Send),
+    ) -> Result<MediaBackupInfo, RequestError<BackupAuthCredentialRejected>> {
+        let mut backup_service = BackupsAnonymousClient::new(self.0.service());
+
+        let auth = auth.present(rng)?;
+
+        let request = GetBackupInfoRequest {
+            signed_presentation: Some(auth.into()),
+        };
+        let log_safe_description = Redact(&request).to_string();
+        let response: GetMediaBackupInfoResponse =
+            log_and_send("unauth", &log_safe_description, || {
+                backup_service.get_media_backup_info(request)
+            })
+            .await?
+            .into_inner();
+
+        let response = response.response.ok_or_else(|| RequestError::Unexpected {
+            log_safe: "missing response".to_owned(),
+        })?;
+        match response {
+            get_media_backup_info_response::Response::BackupInfo(
+                get_media_backup_info_response::MediaBackupInfo {
+                    backup_dir,
+                    media_dir,
+                    used_space,
+                },
+            ) => Ok(MediaBackupInfo {
+                backup_dir,
+                media_dir,
+                used_space,
+            }),
+            get_media_backup_info_response::Response::FailedAuthentication(
+                FailedZkAuthentication { description },
+            ) => {
+                log::warn!("failed zk auth: {description}");
+                Err(RequestError::Other(BackupAuthCredentialRejected))
+            }
+        }
+    }
+
     pub fn copy_backup_media(
         &self,
         auth: &BackupAuth<'_>,
@@ -348,16 +494,55 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         rng: &mut (dyn rand::CryptoRng + Send),
     ) -> impl Stream<Item = StreamResult<CopyBackupMediaOutcome, BackupAuthCredentialRejected>> + 'static
     where
+        T: Clone + 'static,
+        T::Service: 'static,
+    {
+        // From the definition of CopyMediaRequest in backups.proto.
+        const MAX_CHUNK_SIZE: usize = 1000;
+
+        // Since we might make multiple requests, we need to hang on to the server provider for
+        // later.
+        let service_provider = self.0.clone();
+        // Note that we *are* reusing presentations across the batched requests, which is normally a
+        // privacy leak...but it has our backup ID in it anyway; it's already linkable.
+        let auth = auth.present::<BackupAuthCredentialRejected>(rng);
+
+        // We don't actually need the async here; we just want the auth Err case to end up in the
+        // stream, and try_flatten_stream is a convenient way to do that.
+        async move {
+            let auth: SignedPresentation = auth?.into();
+            Ok(chunk_request(
+                "copy_backup_media",
+                MAX_CHUNK_SIZE,
+                items,
+                Into::into,
+                move |next_chunk| {
+                    Self::copy_backup_media_chunk(
+                        service_provider.service(),
+                        auth.clone(),
+                        next_chunk,
+                    )
+                },
+            ))
+        }
+        .try_flatten_stream()
+    }
+
+    fn copy_backup_media_chunk(
+        service: T::Service,
+        auth_presentation: SignedPresentation,
+        items: Vec<proto::CopyMediaItem>,
+    ) -> impl Stream<Item = StreamResult<CopyBackupMediaOutcome, BackupAuthCredentialRejected>> + 'static
+    where
         T::Service: 'static,
     {
         send_request_with_streaming_response(
             "unauth",
-            self.0.service(),
+            service,
             || {
-                let auth = auth.present(rng)?;
                 Ok(CopyMediaRequest {
-                    signed_presentation: Some(auth.into()),
-                    items: items.into_iter().map(Into::into).collect(),
+                    signed_presentation: Some(auth_presentation),
+                    items,
                 })
             },
             |service, request| async move {
@@ -418,20 +603,59 @@ impl<T: GrpcServiceProvider> Unauth<T> {
     pub fn delete_backup_media(
         &self,
         auth: &BackupAuth<'_>,
-        items: &[DeleteBackupMediaItem],
+        items: Vec<DeleteBackupMediaItem>,
         rng: &mut (dyn rand::CryptoRng + Send),
+    ) -> impl Stream<Item = StreamResult<DeleteBackupMediaItem, BackupAuthCredentialRejected>> + 'static
+    where
+        T: Clone + 'static,
+        T::Service: 'static,
+    {
+        // From the definition of DeleteMediaRequest in backups.proto.
+        const MAX_CHUNK_SIZE: usize = 1000;
+
+        // Since we might make multiple requests, we need to hang on to the server provider for
+        // later.
+        let service_provider = self.0.clone();
+        // Note that we *are* reusing presentations across the batched requests, which is normally a
+        // privacy leak...but it has our backup ID in it anyway; it's already linkable.
+        let auth = auth.present::<BackupAuthCredentialRejected>(rng);
+
+        // We don't actually need the async here; we just want the auth Err case to end up in the
+        // stream, and try_flatten_stream is a convenient way to do that.
+        async move {
+            let auth: SignedPresentation = auth?.into();
+            Ok(chunk_request(
+                "delete_backup_media",
+                MAX_CHUNK_SIZE,
+                items,
+                |item| item.to_proto(),
+                move |next_chunk| {
+                    Self::delete_backup_media_chunk(
+                        service_provider.service(),
+                        auth.clone(),
+                        next_chunk,
+                    )
+                },
+            ))
+        }
+        .try_flatten_stream()
+    }
+
+    pub fn delete_backup_media_chunk(
+        service: T::Service,
+        auth: SignedPresentation,
+        items: Vec<proto::DeleteMediaItem>,
     ) -> impl Stream<Item = StreamResult<DeleteBackupMediaItem, BackupAuthCredentialRejected>> + 'static
     where
         T::Service: 'static,
     {
         send_request_with_streaming_response(
             "unauth",
-            self.0.service(),
+            service,
             || {
-                let auth = auth.present(rng)?;
                 Ok(DeleteMediaRequest {
-                    signed_presentation: Some(auth.into()),
-                    items: items.iter().map(|item| item.to_proto()).collect(),
+                    signed_presentation: Some(auth),
+                    items,
                 })
             },
             |service, request| async move {
@@ -606,6 +830,7 @@ macro_rules! redact_no_arg_backup_request {
 }
 
 redact_no_arg_backup_request!(GetSvrBCredentialsRequest);
+redact_no_arg_backup_request!(GetBackupInfoRequest);
 redact_no_arg_backup_request!(RefreshRequest);
 redact_no_arg_backup_request!(DeleteAllRequest);
 
@@ -948,7 +1173,149 @@ pub mod test_cases {
         ]
     }
 
-    fn backup_stream_unauthorized(include_stream_closed_info: bool) -> tonic::Status {
+    /// The presentation produced by [`BackupAuth::generate_for_testing`] with a `Media` credential
+    /// and a fixed-seed RNG.
+    ///
+    /// This is always the Media credential, even for tests of requests that would use a Messages
+    /// credential in production, because it's the one precomputed fixture we have. Our tests
+    /// never actually verify these presentations, so it works.
+    fn test_signed_presentation() -> SignedPresentation {
+        SignedPresentation {
+            presentation: BackupAuth::EXPECTED_TEST_PRESENTATION.to_vec(),
+            presentation_signature: BackupAuth::EXPECTED_TEST_SIGNATURE.to_vec(),
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum GetMessageBackupInfoOut {
+        Success(MessageBackupInfo),
+        CredentialRejected,
+        MissingResponse,
+    }
+
+    pub fn get_message_backup_info_test_cases() -> Vec<
+        GrpcTestCase<
+            (),
+            GetBackupInfoRequest,
+            GetMessageBackupInfoResponse,
+            GetMessageBackupInfoOut,
+        >,
+    > {
+        let method = "/org.signal.chat.backup.BackupsAnonymous/GetMessageBackupInfo";
+        let request_grpc = GetBackupInfoRequest {
+            signed_presentation: Some(test_signed_presentation()),
+        };
+        vec![
+            GrpcTestCase {
+                name: "success".to_owned(),
+                method: method.to_owned(),
+                request: (),
+                request_grpc: request_grpc.clone(),
+                response_grpc: GetMessageBackupInfoResponse {
+                    response: Some(get_message_backup_info_response::Response::BackupInfo(
+                        get_message_backup_info_response::MessageBackupInfo {
+                            backup_dir: "backup-dir".to_owned(),
+                            cdn: 3,
+                            backup_name: "backup-name".to_owned(),
+                        },
+                    )),
+                },
+                response: GetMessageBackupInfoOut::Success(MessageBackupInfo {
+                    backup_dir: "backup-dir".to_owned(),
+                    cdn: 3,
+                    backup_name: "backup-name".to_owned(),
+                }),
+            },
+            GrpcTestCase {
+                name: "credential rejected".to_owned(),
+                method: method.to_owned(),
+                request: (),
+                request_grpc: request_grpc.clone(),
+                response_grpc: GetMessageBackupInfoResponse {
+                    response: Some(
+                        get_message_backup_info_response::Response::FailedAuthentication(
+                            FailedZkAuthentication {
+                                description: "bad!".to_owned(),
+                            },
+                        ),
+                    ),
+                },
+                response: GetMessageBackupInfoOut::CredentialRejected,
+            },
+            GrpcTestCase {
+                name: "missing response".to_owned(),
+                method: method.to_owned(),
+                request: (),
+                request_grpc,
+                response_grpc: GetMessageBackupInfoResponse { response: None },
+                response: GetMessageBackupInfoOut::MissingResponse,
+            },
+        ]
+    }
+
+    #[derive(Debug)]
+    pub enum GetMediaBackupInfoOut {
+        Success(MediaBackupInfo),
+        CredentialRejected,
+        MissingResponse,
+    }
+
+    pub fn get_media_backup_info_test_cases() -> Vec<
+        GrpcTestCase<(), GetBackupInfoRequest, GetMediaBackupInfoResponse, GetMediaBackupInfoOut>,
+    > {
+        let method = "/org.signal.chat.backup.BackupsAnonymous/GetMediaBackupInfo";
+        let request_grpc = GetBackupInfoRequest {
+            signed_presentation: Some(test_signed_presentation()),
+        };
+        vec![
+            GrpcTestCase {
+                name: "success".to_owned(),
+                method: method.to_owned(),
+                request: (),
+                request_grpc: request_grpc.clone(),
+                response_grpc: GetMediaBackupInfoResponse {
+                    response: Some(get_media_backup_info_response::Response::BackupInfo(
+                        get_media_backup_info_response::MediaBackupInfo {
+                            backup_dir: "backup-dir".to_owned(),
+                            media_dir: "media-dir".to_owned(),
+                            used_space: 123456789,
+                        },
+                    )),
+                },
+                response: GetMediaBackupInfoOut::Success(MediaBackupInfo {
+                    backup_dir: "backup-dir".to_owned(),
+                    media_dir: "media-dir".to_owned(),
+                    used_space: 123456789,
+                }),
+            },
+            GrpcTestCase {
+                name: "credential rejected".to_owned(),
+                method: method.to_owned(),
+                request: (),
+                request_grpc: request_grpc.clone(),
+                response_grpc: GetMediaBackupInfoResponse {
+                    response: Some(
+                        get_media_backup_info_response::Response::FailedAuthentication(
+                            FailedZkAuthentication {
+                                description: "bad!".to_owned(),
+                            },
+                        ),
+                    ),
+                },
+                response: GetMediaBackupInfoOut::CredentialRejected,
+            },
+            GrpcTestCase {
+                name: "missing response".to_owned(),
+                method: method.to_owned(),
+                request: (),
+                request_grpc,
+                response_grpc: GetMediaBackupInfoResponse { response: None },
+                response: GetMediaBackupInfoOut::MissingResponse,
+            },
+        ]
+    }
+
+    pub(crate) fn backup_stream_unauthorized(include_stream_closed_info: bool) -> tonic::Status {
         let backup_info = if include_stream_closed_info {
             vec![BackupStreamClosed {
                 reason: Some(backup_stream_closed::Reason::FailedAuthentication(
@@ -968,20 +1335,26 @@ pub mod test_cases {
 mod test {
     use std::collections::HashMap;
     use std::fmt::Debug;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU32;
 
     use assert_matches::assert_matches;
-    use futures_util::FutureExt as _;
-    use libsignal_net::chat::fake::BodyWithTrailers;
+    use futures_util::{FutureExt as _, StreamExt};
+    use http_body_util::BodyExt;
+    use libsignal_net::chat::fake::{BodyWithTrailers, IntoHttpBody};
     use libsignal_net_grpc::proto::chat::services;
     use test_case::test_case;
 
+    use super::test_cases::backup_stream_unauthorized;
     use super::*;
     use crate::api::backups::UnauthenticatedChatApi;
     use crate::api::testutil::fixed_seed_test_rng;
+    use crate::grpc::test_case_util::stream;
     use crate::grpc::testutil::{
-        GrpcOverrideRequestValidator, RequestValidator, collect_up_to_and_including_first_error,
-        err, ok, req, run_tests_with_generic_responses,
+        FnValidator, GrpcOverrideRequestValidator, MessageExt as _, RequestValidator, err, ok, req,
+        run_tests, run_tests_with_generic_responses,
     };
+    use crate::stream_util::collect_up_to_and_including_first_error;
 
     /// A variation of `==` that ignores header order, since the gRPC encoding of this type uses a
     /// protobuf map for the headers, which is not guaranteed to preserve order.
@@ -1344,6 +1717,76 @@ mod test {
     }
 
     #[test]
+    fn test_get_message_backup_info() {
+        use super::test_cases::*;
+        run_tests(
+            get_message_backup_info_test_cases(),
+            |chat: Unauth<_>, ()| async move {
+                chat.get_message_backup_info(
+                    &BackupAuth::generate_for_testing(
+                        zkgroup::backups::BackupCredentialType::Media,
+                        &mut fixed_seed_test_rng(),
+                    ),
+                    &mut fixed_seed_test_rng(),
+                )
+                .await
+            },
+            |resp, result| match resp {
+                GetMessageBackupInfoOut::Success(expected) => {
+                    assert_eq!(expected, result.expect("success"))
+                }
+                GetMessageBackupInfoOut::CredentialRejected => {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Other(BackupAuthCredentialRejected))
+                    )
+                }
+                GetMessageBackupInfoOut::MissingResponse => {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Unexpected { log_safe }) if log_safe == "missing response"
+                    )
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_get_media_backup_info() {
+        use super::test_cases::*;
+        run_tests(
+            get_media_backup_info_test_cases(),
+            |chat: Unauth<_>, ()| async move {
+                chat.get_media_backup_info(
+                    &BackupAuth::generate_for_testing(
+                        zkgroup::backups::BackupCredentialType::Media,
+                        &mut fixed_seed_test_rng(),
+                    ),
+                    &mut fixed_seed_test_rng(),
+                )
+                .await
+            },
+            |resp, result| match resp {
+                GetMediaBackupInfoOut::Success(expected) => {
+                    assert_eq!(expected, result.expect("success"))
+                }
+                GetMediaBackupInfoOut::CredentialRejected => {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Other(BackupAuthCredentialRejected))
+                    )
+                }
+                GetMediaBackupInfoOut::MissingResponse => {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Unexpected { log_safe }) if log_safe == "missing response"
+                    )
+                }
+            },
+        );
+    }
+
+    #[test]
     fn test_copy_media() {
         use super::test_cases::*;
         run_tests_with_generic_responses(
@@ -1403,6 +1846,156 @@ mod test {
     }
 
     #[test]
+    fn test_copy_media_in_several_chunks() {
+        let validator = FnValidator(Arc::new(|req| {
+            let req_body = CopyMediaRequest::decode_single_grpc_body(
+                req.into_body()
+                    .collect()
+                    .now_or_never()
+                    .expect("full body available")
+                    .expect("valid")
+                    .aggregate(),
+            )
+            .unwrap_or_else(|e| panic!("body is not valid: {}", e));
+
+            assert_eq!(
+                req_body.signed_presentation,
+                Some(SignedPresentation {
+                    presentation: BackupAuth::EXPECTED_TEST_PRESENTATION.to_vec(),
+                    presentation_signature: BackupAuth::EXPECTED_TEST_SIGNATURE.to_vec(),
+                })
+            );
+
+            assert!(req_body.items.len() == 1000 || req_body.items.len() == 20);
+
+            let response_items = req_body.items.into_iter().map(|next| CopyMediaResponse {
+                media_id: next.media_id,
+                response: Some(copy_media_response::Response::Success(
+                    copy_media_response::CopySuccess { cdn: 3 },
+                )),
+            });
+
+            stream(response_items.collect(), None).map(IntoHttpBody::into_http_body)
+        }));
+
+        let media_id_from_index = |i: u32| {
+            let mut id = [0; MEDIA_ID_LEN];
+            id[..4].copy_from_slice(&i.to_le_bytes());
+            id
+        };
+        let items = (0..2020).map(|i| CopyBackupMediaItem {
+            source_attachment_cdn: 2,
+            source_key: "key".to_owned(),
+            object_length: 5,
+            media_id: media_id_from_index(i),
+            encryption_key: [0; MEDIA_ENCRYPTION_KEY_LEN],
+        });
+
+        let result: Vec<_> = Unauth(validator)
+            .copy_backup_media(
+                &BackupAuth::generate_for_testing(
+                    zkgroup::backups::BackupCredentialType::Media,
+                    &mut fixed_seed_test_rng(),
+                ),
+                items.collect(),
+                &mut fixed_seed_test_rng(),
+            )
+            .collect()
+            .now_or_never()
+            .expect("sync");
+        assert_eq!(result.len(), 2020);
+        for (i, next) in (0..2020).zip(result) {
+            assert_eq!(next.expect("success").media_id, media_id_from_index(i));
+        }
+    }
+
+    #[test]
+    fn test_copy_media_in_several_chunks_but_second_chunk_fails() {
+        let requests_seen = Arc::new(AtomicU32::new(0));
+        let requests_seen_for_validator = requests_seen.clone();
+
+        let validator = FnValidator(Arc::new(move |req| {
+            let requests_seen =
+                requests_seen_for_validator.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if requests_seen > 0 {
+                return stream(Vec::<()>::new(), Some(backup_stream_unauthorized(true)))
+                    .map(IntoHttpBody::into_http_body);
+            }
+
+            let req_body = CopyMediaRequest::decode_single_grpc_body(
+                req.into_body()
+                    .collect()
+                    .now_or_never()
+                    .expect("full body available")
+                    .expect("valid")
+                    .aggregate(),
+            )
+            .unwrap_or_else(|e| panic!("body is not valid: {}", e));
+
+            assert_eq!(
+                req_body.signed_presentation,
+                Some(SignedPresentation {
+                    presentation: BackupAuth::EXPECTED_TEST_PRESENTATION.to_vec(),
+                    presentation_signature: BackupAuth::EXPECTED_TEST_SIGNATURE.to_vec(),
+                })
+            );
+
+            assert!(req_body.items.len() == 1000);
+
+            let response_items = req_body.items.into_iter().map(|next| CopyMediaResponse {
+                media_id: next.media_id,
+                response: Some(copy_media_response::Response::Success(
+                    copy_media_response::CopySuccess { cdn: 3 },
+                )),
+            });
+
+            stream(response_items.collect(), None).map(IntoHttpBody::into_http_body)
+        }));
+
+        let media_id_from_index = |i: u32| {
+            let mut id = [0; MEDIA_ID_LEN];
+            id[..4].copy_from_slice(&i.to_le_bytes());
+            id
+        };
+        let items = (0..2020).map(|i| CopyBackupMediaItem {
+            source_attachment_cdn: 2,
+            source_key: "key".to_owned(),
+            object_length: 5,
+            media_id: media_id_from_index(i),
+            encryption_key: [0; MEDIA_ENCRYPTION_KEY_LEN],
+        });
+
+        let result: Vec<_> = Unauth(validator)
+            .copy_backup_media(
+                &BackupAuth::generate_for_testing(
+                    zkgroup::backups::BackupCredentialType::Media,
+                    &mut fixed_seed_test_rng(),
+                ),
+                items.collect(),
+                &mut fixed_seed_test_rng(),
+            )
+            .collect()
+            .now_or_never()
+            .expect("sync");
+        assert_eq!(requests_seen.load(std::sync::atomic::Ordering::Relaxed), 2);
+        assert_eq!(result.len(), 1001);
+        for (i, next) in (0..1000).zip(&result) {
+            assert_eq!(
+                next.as_ref().expect("success").media_id,
+                media_id_from_index(i)
+            );
+        }
+        assert_matches!(
+            result
+                .last()
+                .expect("non-empty")
+                .as_ref()
+                .expect_err("should have failed"),
+            RequestError::Other(BackupAuthCredentialRejected)
+        );
+    }
+
+    #[test]
     fn test_delete_media() {
         use super::test_cases::*;
         run_tests_with_generic_responses(
@@ -1413,7 +2006,7 @@ mod test {
                         zkgroup::backups::BackupCredentialType::Media,
                         &mut fixed_seed_test_rng(),
                     ),
-                    &items,
+                    items,
                     &mut fixed_seed_test_rng(),
                 ))
                 .await
@@ -1458,6 +2051,144 @@ mod test {
                     }
                 }
             },
+        );
+    }
+
+    #[test]
+    fn test_delete_media_in_several_chunks() {
+        let validator = FnValidator(Arc::new(|req| {
+            let req_body = DeleteMediaRequest::decode_single_grpc_body(
+                req.into_body()
+                    .collect()
+                    .now_or_never()
+                    .expect("full body available")
+                    .expect("valid")
+                    .aggregate(),
+            )
+            .unwrap_or_else(|e| panic!("body is not valid: {}", e));
+
+            assert_eq!(
+                req_body.signed_presentation,
+                Some(SignedPresentation {
+                    presentation: BackupAuth::EXPECTED_TEST_PRESENTATION.to_vec(),
+                    presentation_signature: BackupAuth::EXPECTED_TEST_SIGNATURE.to_vec(),
+                })
+            );
+
+            assert!(req_body.items.len() == 1000 || req_body.items.len() == 20);
+
+            let response_items = req_body.items.into_iter().map(|next| DeleteMediaResponse {
+                deleted_item: Some(next),
+            });
+
+            stream(response_items.collect(), None).map(IntoHttpBody::into_http_body)
+        }));
+
+        let media_id_from_index = |i: u32| {
+            let mut id = [0; MEDIA_ID_LEN];
+            id[..4].copy_from_slice(&i.to_le_bytes());
+            id
+        };
+        let items = (0..2020).map(|i| DeleteBackupMediaItem {
+            media_id: media_id_from_index(i),
+            cdn: 3,
+        });
+
+        let result: Vec<_> = Unauth(validator)
+            .delete_backup_media(
+                &BackupAuth::generate_for_testing(
+                    zkgroup::backups::BackupCredentialType::Media,
+                    &mut fixed_seed_test_rng(),
+                ),
+                items.collect(),
+                &mut fixed_seed_test_rng(),
+            )
+            .collect()
+            .now_or_never()
+            .expect("sync");
+        assert_eq!(result.len(), 2020);
+        for (i, next) in (0..2020).zip(result) {
+            assert_eq!(next.expect("success").media_id, media_id_from_index(i));
+        }
+    }
+
+    #[test]
+    fn test_delete_media_in_several_chunks_but_second_chunk_fails() {
+        let requests_seen = Arc::new(AtomicU32::new(0));
+        let requests_seen_for_validator = requests_seen.clone();
+
+        let validator = FnValidator(Arc::new(move |req| {
+            let requests_seen =
+                requests_seen_for_validator.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if requests_seen > 0 {
+                return stream(Vec::<()>::new(), Some(backup_stream_unauthorized(true)))
+                    .map(IntoHttpBody::into_http_body);
+            }
+
+            let req_body = DeleteMediaRequest::decode_single_grpc_body(
+                req.into_body()
+                    .collect()
+                    .now_or_never()
+                    .expect("full body available")
+                    .expect("valid")
+                    .aggregate(),
+            )
+            .unwrap_or_else(|e| panic!("body is not valid: {}", e));
+
+            assert_eq!(
+                req_body.signed_presentation,
+                Some(SignedPresentation {
+                    presentation: BackupAuth::EXPECTED_TEST_PRESENTATION.to_vec(),
+                    presentation_signature: BackupAuth::EXPECTED_TEST_SIGNATURE.to_vec(),
+                })
+            );
+
+            assert!(req_body.items.len() == 1000);
+
+            let response_items = req_body.items.into_iter().map(|next| DeleteMediaResponse {
+                deleted_item: Some(next),
+            });
+
+            stream(response_items.collect(), None).map(IntoHttpBody::into_http_body)
+        }));
+
+        let media_id_from_index = |i: u32| {
+            let mut id = [0; MEDIA_ID_LEN];
+            id[..4].copy_from_slice(&i.to_le_bytes());
+            id
+        };
+        let items = (0..2020).map(|i| DeleteBackupMediaItem {
+            media_id: media_id_from_index(i),
+            cdn: 3,
+        });
+
+        let result: Vec<_> = Unauth(validator)
+            .delete_backup_media(
+                &BackupAuth::generate_for_testing(
+                    zkgroup::backups::BackupCredentialType::Media,
+                    &mut fixed_seed_test_rng(),
+                ),
+                items.collect(),
+                &mut fixed_seed_test_rng(),
+            )
+            .collect()
+            .now_or_never()
+            .expect("sync");
+        assert_eq!(requests_seen.load(std::sync::atomic::Ordering::Relaxed), 2);
+        assert_eq!(result.len(), 1001);
+        for (i, next) in (0..1000).zip(&result) {
+            assert_eq!(
+                next.as_ref().expect("success").media_id,
+                media_id_from_index(i)
+            );
+        }
+        assert_matches!(
+            result
+                .last()
+                .expect("non-empty")
+                .as_ref()
+                .expect_err("should have failed"),
+            RequestError::Other(BackupAuthCredentialRejected)
         );
     }
 }

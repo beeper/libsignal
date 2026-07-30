@@ -38,7 +38,8 @@ use libsignal_net::infra::{EnableDomainFronting, EnforceMinimumTls, OverrideNagl
 use libsignal_net_chat::api::backups::BackupAuthCredentialRejected;
 use libsignal_net_chat::api::{Auth as AuthConn, RequestError, Unauth};
 use libsignal_net_chat::grpc::backups::{
-    CopyBackupMediaFailure, CopyBackupMediaItem, CopyBackupMediaOutcome,
+    CopyBackupMediaFailure, CopyBackupMediaItem, CopyBackupMediaOutcome, DeleteBackupMediaItem,
+    MediaBackupInfo, MessageBackupInfo,
 };
 use libsignal_net_chat::stream_util::{
     BulkPolledStream, BulkPolledStreamChunk, BulkPolledStreamTerminationReason,
@@ -172,7 +173,7 @@ impl UnauthenticatedChatConnection {
 
     pub fn blocking_require_grpc(
         &self,
-    ) -> Unauth<impl libsignal_net_chat::grpc::GrpcServiceProvider + 'static> {
+    ) -> Unauth<impl libsignal_net_chat::grpc::GrpcServiceProvider + Clone + 'static> {
         let guard = self.as_ref().blocking_read();
         let MaybeChatConnection::Running(inner) = &*guard else {
             panic!("listener was not set")
@@ -437,7 +438,9 @@ pub(crate) async fn connect_registration_chat(
     let mut on_disconnect = Some(drop_on_disconnect);
     let listener = move |event| match event {
         ListenerEvent::Finished(_) => drop(on_disconnect.take()),
-        ListenerEvent::ReceivedAlerts(_) | ListenerEvent::ReceivedMessage(_, _) => (),
+        ListenerEvent::ServerTimestamp(_)
+        | ListenerEvent::ReceivedAlerts(_)
+        | ListenerEvent::ReceivedMessage(_, _) => (),
     };
 
     Ok(Unauth(ChatConnection::finish_connect(
@@ -717,6 +720,7 @@ pub trait ChatListener: Send {
     );
     fn received_queue_empty(&mut self);
     fn received_alerts(&mut self, alerts: Box<[String]>);
+    fn received_server_timestamp(&mut self, timestamp: Timestamp);
     fn connection_interrupted(&mut self, disconnect_cause: Option<BridgedError<SendError>>);
 }
 
@@ -738,6 +742,9 @@ impl dyn ChatListener {
             chat::server_requests::ServerEvent::QueueEmpty => self.received_queue_empty(),
             chat::server_requests::ServerEvent::Alerts(alerts) => {
                 self.received_alerts(alerts.into_boxed_slice())
+            }
+            chat::server_requests::ServerEvent::ServerTimestamp(timestamp) => {
+                self.received_server_timestamp(timestamp)
             }
             chat::server_requests::ServerEvent::Stopped(error) => {
                 self.connection_interrupted(match error {
@@ -801,6 +808,9 @@ impl dyn ProvisioningListener {
     /// trait.
     fn received_server_request(&mut self, request: chat::server_requests::ProvisioningEvent) {
         match request {
+            chat::server_requests::ProvisioningEvent::ServerTimestamp(_) => {
+                // For now, we don't expose this to the apps.
+            }
             chat::server_requests::ProvisioningEvent::ReceivedAddress { address, send_ack } => {
                 self.received_address(address, ServerMessageAck::new(send_ack))
             }
@@ -861,6 +871,46 @@ pub struct BridgeCopyBackupMediaItem {
     pub object_length: i64,
     pub media_id: [u8; MEDIA_ID_LEN],
     pub encryption_key: [u8; MEDIA_ENCRYPTION_KEY_LEN],
+}
+
+// TODO: This can go away when we implement u32 and u64 Nice bridging to Kotlin.
+#[derive(BridgedAsValue)]
+#[bridge(arg = false)]
+pub struct BridgeMessageBackupInfo {
+    pub backup_dir: String,
+    pub cdn: i32,
+    pub backup_name: String,
+}
+
+impl From<MessageBackupInfo> for BridgeMessageBackupInfo {
+    fn from(value: MessageBackupInfo) -> Self {
+        Self {
+            backup_dir: value.backup_dir,
+            cdn: value.cdn.try_into().expect("CDN numbers are small"),
+            backup_name: value.backup_name,
+        }
+    }
+}
+
+#[derive(BridgedAsValue)]
+#[bridge(arg = false)]
+pub struct BridgeMediaBackupInfo {
+    pub backup_dir: String,
+    pub media_dir: String,
+    pub used_space: i64,
+}
+
+impl From<MediaBackupInfo> for BridgeMediaBackupInfo {
+    fn from(value: MediaBackupInfo) -> Self {
+        Self {
+            backup_dir: value.backup_dir,
+            media_dir: value.media_dir,
+            used_space: value
+                .used_space
+                .try_into()
+                .expect("space measurements fit in i64"),
+        }
+    }
 }
 
 impl From<CopyBackupMediaItem> for BridgeCopyBackupMediaItem {
@@ -1018,6 +1068,40 @@ bridge_as_handle!(
     CopyBackupMediaStream,
     swift_type = "CopyBackupMediaStream",
     jni_class = "org.signal.libsignal.net.internal.CopyBackupMediaStream",
+);
+
+#[derive(BridgedAsValue)]
+pub struct BridgeDeleteBackupMediaItem {
+    pub media_id: [u8; MEDIA_ID_LEN],
+    pub cdn: i32,
+}
+
+impl From<DeleteBackupMediaItem> for BridgeDeleteBackupMediaItem {
+    fn from(value: DeleteBackupMediaItem) -> Self {
+        Self {
+            media_id: value.media_id,
+            cdn: value.cdn.try_into().expect("CDN numbers are small"),
+        }
+    }
+}
+
+#[derive(BridgedAsValue)]
+#[bridge(arg = false)]
+pub struct DeleteBackupMediaNextChunk {
+    pub chunk: BridgeVec<BridgeDeleteBackupMediaItem>,
+    pub termination:
+        Option<BulkPolledStreamTerminationReason<RequestError<BackupAuthCredentialRejected>>>,
+}
+
+#[derive(derive_more::From, derive_more::Deref)]
+pub struct DeleteBackupMediaStream(
+    BridgeBulkPolledStream<BridgeDeleteBackupMediaItem, RequestError<BackupAuthCredentialRejected>>,
+);
+
+bridge_as_handle!(
+    DeleteBackupMediaStream,
+    swift_type = "DeleteBackupMediaStream",
+    jni_class = "org.signal.libsignal.net.internal.DeleteBackupMediaStream",
 );
 
 pub mod remote_derives {

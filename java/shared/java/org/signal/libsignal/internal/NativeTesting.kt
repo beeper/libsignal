@@ -106,13 +106,23 @@ public object NativeTesting {
   @JvmStatic
   public external fun TESTING_ClearPushTokenTests(): Array<Object>
   @JvmStatic
+  public external fun TESTING_ClearRegistrationLockTests(): Array<Object>
+  @JvmStatic
   public external fun TESTING_ConnectionManager_isUsingProxy(manager: ObjectHandle): Int
   @JvmStatic
   public external fun TESTING_ConvertOptionalUuid(present: Boolean): UUID?
   @JvmStatic
+  public external fun TESTING_CopyBackupMediaTests(): Array<Object>
+  @JvmStatic
   public external fun TESTING_CreateOTP(username: String, secret: ByteArray): String
   @JvmStatic
   public external fun TESTING_CreateOTPFromBase64(username: String, secret: String): String
+  @JvmStatic
+  public external fun TESTING_DeleteBackupMediaTests(): Array<Object>
+  @JvmStatic
+  public external fun TESTING_DeleteUsernameHashTests(): Array<Object>
+  @JvmStatic
+  public external fun TESTING_DeleteUsernameLinkTests(): Array<Object>
   @JvmStatic
   public external fun TESTING_EnableDeterministicRngForTesting(): Unit
   @JvmStatic
@@ -191,6 +201,10 @@ public object NativeTesting {
   public external fun TESTING_FutureThrowsPoisonErrorType(asyncRuntime: ObjectHandle): CompletableFuture<Void?>
   @JvmStatic
   public external fun TESTING_GetDevicesTests(): Array<Object>
+  @JvmStatic
+  public external fun TESTING_GetMediaBackupInfoTests(): Array<Object>
+  @JvmStatic
+  public external fun TESTING_GetMessageBackupInfoTests(): Array<Object>
   @JvmStatic
   public external fun TESTING_InputStreamReadIntoZeroLengthSlice(capsAlphabetInput: InputStream): ByteArray
   @JvmStatic
@@ -298,11 +312,15 @@ public object NativeTesting {
   @JvmStatic
   public external fun TESTING_RoundTripU8(input: Int): Int
   @JvmStatic
-  public external fun TESTING_ServerPublicParams_CreateExpiringProfileKeyCredentialPresentationVersionedDeterministic(serverPublicParams: ObjectHandle, randomness: ByteArray, groupSecretParams: ByteArray, profileKeyCredential: ByteArray, newVersion: Boolean): ByteArray
-  @JvmStatic
   public external fun TESTING_SetDeviceNameTests(): Array<Object>
   @JvmStatic
+  public external fun TESTING_SetDiscoverableByPhoneNumberTests(): Array<Object>
+  @JvmStatic
   public external fun TESTING_SetPushTokenFcmTests(): Array<Object>
+  @JvmStatic
+  public external fun TESTING_SetRegistrationLockTests(): Array<Object>
+  @JvmStatic
+  public external fun TESTING_SetRegistrationRecoveryPasswordTests(): Array<Object>
   @JvmStatic
   public external fun TESTING_SetUsernameLinkTests(): Array<Object>
   @JvmStatic

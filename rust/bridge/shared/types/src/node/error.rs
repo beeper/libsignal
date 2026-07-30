@@ -265,6 +265,8 @@ impl SignalNodeError for libsignal_net::svr2::Error {
                 )
             }
             Self::DataMissing => (Some("SvrDataMissing"), None),
+            Self::DecryptionError => (Some("SvrInvalidData"), None),
+            Self::DataMismatch => (Some("SvrDataMismatch"), None),
         };
 
         let message = self.to_string();
@@ -883,7 +885,7 @@ mod registration {
                 }
                 Self::RegistrationLock(RegistrationLock {
                     time_remaining,
-                    svr2_credentials: Auth { username, password },
+                    svr2_credentials,
                 }) => {
                     let secs = time_remaining.as_secs();
                     return new_js_error(
@@ -897,10 +899,20 @@ mod registration {
                             props
                                 .prop(cx, "timeRemainingSeconds")
                                 .set(time_remaining_seconds)?;
-                            let svr2_username = cx.string(username);
-                            props.prop(cx, "svr2Username").set(svr2_username)?;
-                            let svr2_password = cx.string(password);
-                            props.prop(cx, "svr2Password").set(svr2_password)?;
+                            match &svr2_credentials {
+                                Some(Auth { username, password }) => {
+                                    let svr2_username = cx.string(username);
+                                    props.prop(cx, "svr2Username").set(svr2_username)?;
+                                    let svr2_password = cx.string(password);
+                                    props.prop(cx, "svr2Password").set(svr2_password)?;
+                                }
+                                None => {
+                                    let null = cx.null();
+                                    props.prop(cx, "svr2Username").set(null)?;
+                                    let null = cx.null();
+                                    props.prop(cx, "svr2Password").set(null)?;
+                                }
+                            }
                             Ok(props.upcast())
                         },
                     );

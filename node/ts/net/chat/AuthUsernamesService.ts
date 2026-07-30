@@ -5,12 +5,12 @@
 
 import { RequestOptions, AuthenticatedChatConnection } from '../Chat.js';
 import * as NativeNice from '../../NativeNice.js';
-import {
-  type UsernameNotAvailable,
-  type UsernameNotSet,
-  type StandardNetworkError,
+import type {
+  UsernameNotAvailable,
+  UsernameNotSet,
+  StandardNetworkError,
 } from '../../Errors.js';
-import { type Uuid } from '../../uuid.js';
+import type { Uuid } from '../../uuid.js';
 
 declare module '../Chat' {
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -58,6 +58,27 @@ export interface AuthUsernamesService {
     },
     options?: RequestOptions
   ) => Promise<Uuid>;
+  /**
+   * Clears the current username hash, ciphertext, and link for the
+   * authenticated account.
+   *
+   * This also succeeds if the account has no username set, so a caller
+   * retrying a deletion sees the same result as the original call.
+   *
+   * @throws {StandardNetworkError}
+   */
+  deleteUsernameHash: (options?: RequestOptions) => Promise<void>;
+  /**
+   * Clears any username link associated with the authenticated account.
+   *
+   * The previously stored encrypted username is deleted and the link handle is
+   * deactivated; the account's username hash (if any) is left in place. This
+   * also succeeds if the account has no username link, so a caller retrying a
+   * deletion sees the same result as the original call.
+   *
+   * @throws {StandardNetworkError}
+   */
+  deleteUsernameLink: (options?: RequestOptions) => Promise<void>;
 }
 
 AuthenticatedChatConnection.prototype.reserveUsernameHash = async function (
@@ -92,5 +113,25 @@ AuthenticatedChatConnection.prototype.setUsernameLink = async function (
     chat: this.chatService,
     usernameCiphertext,
     keepLinkHandle,
+  });
+};
+
+AuthenticatedChatConnection.prototype.deleteUsernameHash = async function (
+  options?: RequestOptions
+): Promise<void> {
+  return await NativeNice.AuthenticatedChatConnection_delete_username_hash({
+    asyncContext: this.asyncContext,
+    abortSignal: options?.abortSignal,
+    chat: this.chatService,
+  });
+};
+
+AuthenticatedChatConnection.prototype.deleteUsernameLink = async function (
+  options?: RequestOptions
+): Promise<void> {
+  return await NativeNice.AuthenticatedChatConnection_delete_username_link({
+    asyncContext: this.asyncContext,
+    abortSignal: options?.abortSignal,
+    chat: this.chatService,
   });
 };
