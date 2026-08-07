@@ -27,10 +27,18 @@ import type {
   ReturnFfiCopyBackupMediaOut,
   ReturnFfiDeleteBackupMediaNextChunk,
   ReturnFfiDeleteBackupMediaOut,
+  ReturnFfiGetCdnCredentialsOut,
   ReturnFfiGetDevicesOut,
   ReturnFfiGetMediaBackupInfoOut,
   ReturnFfiGetMessageBackupInfoOut,
+  ReturnFfiGetSvrBCredentialsOut,
   ReturnFfiLinkedDeviceInternal,
+  ReturnFfiListMediaArgs,
+  ReturnFfiListMediaItem,
+  ReturnFfiListMediaOut,
+  ReturnFfiListMediaResponse,
+  ReturnFfiLookUpUsernameLinkArgs,
+  ReturnFfiLookUpUsernameLinkOut,
   ReturnFfiMyRemoteDeriveEnum,
   ReturnFfiMyRemoteDeriveStruct,
   ReturnFfiMySimpleTestEnum,
@@ -45,6 +53,7 @@ import type {
   ReturnFfiSetDeviceNameOut,
   ReturnFfiSetUsernameLinkArgs,
   ReturnFfiSetUsernameLinkOut,
+  ReturnFfiSimpleBackupTestOut,
   ReturnFfiTestStreamChunk,
   /* eslint-enable @typescript-eslint/no-unused-vars */
 } from './Native.js';
@@ -131,6 +140,13 @@ export type DeleteBackupMediaOut =
   | 'credentialRejected'
   | 'credentialRejectedWithoutAppropriateServerInfo';
 
+export type GetCdnCredentialsOut =
+  | {
+      success: CdnCredentials;
+    }
+  | 'credentialRejected'
+  | 'missingResponse';
+
 export type GetDevicesOut = {
   devices: Array<LinkedDeviceInternal>;
 };
@@ -149,6 +165,16 @@ export type GetMessageBackupInfoOut =
   | 'credentialRejected'
   | 'missingResponse';
 
+export type GetSvrBCredentialsOut =
+  | {
+      success: {
+        username: string;
+        password: string;
+      };
+    }
+  | 'credentialRejected'
+  | 'missingResponse';
+
 export type LinkedDeviceInternal = {
   id: DeviceId;
   encryptedName: Uint8Array<ArrayBuffer>;
@@ -156,6 +182,45 @@ export type LinkedDeviceInternal = {
   registrationId: number;
   createdAtCiphertext: Uint8Array<ArrayBuffer>;
 };
+
+export type ListMediaArgs = {
+  cursor: string | null;
+  limit: number;
+};
+
+export type ListMediaItem = {
+  cdn: number;
+  mediaId: Uint8Array<ArrayBuffer>;
+  objectLength: bigint;
+};
+
+export type ListMediaOut =
+  | {
+      page: ListMediaResponse;
+    }
+  | 'malformedMediaId'
+  | 'credentialRejected'
+  | 'missingResponse';
+
+export type ListMediaResponse = {
+  items: Array<ListMediaItem>;
+  backupDir: string;
+  mediaDir: string;
+  cursor: string | null;
+};
+
+export type LookUpUsernameLinkArgs = {
+  uuid: uuid.Uuid;
+  entropy: Uint8Array<ArrayBuffer>;
+};
+
+export type LookUpUsernameLinkOut =
+  | {
+      success: string;
+    }
+  | 'notFound'
+  | 'linkDataTooShort'
+  | 'missingResponse';
 
 export type MyRemoteDeriveEnum =
   | 'unit'
@@ -236,6 +301,11 @@ export type SetUsernameLinkOut =
       success: uuid.Uuid;
     }
   | 'usernameNotSet';
+
+export type SimpleBackupTestOut =
+  | 'success'
+  | 'credentialRejected'
+  | 'missingResponse';
 
 export type TestStreamChunk = {
   chunk: Array<string>;
@@ -321,7 +391,9 @@ export function returnConverterCopyBackupMediaNextChunk(
   return {
     chunk: ((arr: Array<ReturnFfiBridgeCopyBackupMediaOutcome>) =>
       arr.map(returnConverterBridgeCopyBackupMediaOutcome))(ffiInput.chunk),
-    termination: identity(ffiInput.termination),
+    termination: ((a) => (a === null ? null : identity(a)))(
+      ffiInput.termination
+    ),
   };
 }
 
@@ -352,7 +424,9 @@ export function returnConverterDeleteBackupMediaNextChunk(
   return {
     chunk: ((arr: Array<ReturnFfiBridgeDeleteBackupMediaItem>) =>
       arr.map(returnConverterBridgeDeleteBackupMediaItem))(ffiInput.chunk),
-    termination: identity(ffiInput.termination),
+    termination: ((a) => (a === null ? null : identity(a)))(
+      ffiInput.termination
+    ),
   };
 }
 
@@ -374,6 +448,25 @@ export function returnConverterDeleteBackupMediaOut(
     default:
       ffiInput satisfies never;
       throw new Error('Unknown FFI return enum type for DeleteBackupMediaOut');
+  }
+}
+
+export function returnConverterGetCdnCredentialsOut(
+  ffiInput: Native.ReturnFfiGetCdnCredentialsOut
+): GetCdnCredentialsOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return {
+        success: cdnCredentialReturnConverter(ffiInput._0),
+      };
+    case 1:
+      return 'credentialRejected';
+    case 2:
+      return 'missingResponse';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for GetCdnCredentialsOut');
   }
 }
 
@@ -426,6 +519,28 @@ export function returnConverterGetMessageBackupInfoOut(
   }
 }
 
+export function returnConverterGetSvrBCredentialsOut(
+  ffiInput: Native.ReturnFfiGetSvrBCredentialsOut
+): GetSvrBCredentialsOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return {
+        success: {
+          username: identity(ffiInput.username),
+          password: identity(ffiInput.password),
+        },
+      };
+    case 1:
+      return 'credentialRejected';
+    case 2:
+      return 'missingResponse';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for GetSvrBCredentialsOut');
+  }
+}
+
 export function returnConverterLinkedDeviceInternal(
   ffiInput: Native.ReturnFfiLinkedDeviceInternal
 ): LinkedDeviceInternal {
@@ -436,6 +551,88 @@ export function returnConverterLinkedDeviceInternal(
     registrationId: identity(ffiInput.registration_id),
     createdAtCiphertext: identity(ffiInput.created_at_ciphertext),
   };
+}
+
+export function returnConverterListMediaArgs(
+  ffiInput: Native.ReturnFfiListMediaArgs
+): ListMediaArgs {
+  return {
+    cursor: ((a) => (a === null ? null : identity(a)))(ffiInput.cursor),
+    limit: identity(ffiInput.limit),
+  };
+}
+
+export function returnConverterListMediaItem(
+  ffiInput: Native.ReturnFfiListMediaItem
+): ListMediaItem {
+  return {
+    cdn: identity(ffiInput.cdn),
+    mediaId: identity(ffiInput.media_id),
+    objectLength: identity(ffiInput.object_length),
+  };
+}
+
+export function returnConverterListMediaOut(
+  ffiInput: Native.ReturnFfiListMediaOut
+): ListMediaOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return {
+        page: returnConverterListMediaResponse(ffiInput._0),
+      };
+    case 1:
+      return 'malformedMediaId';
+    case 2:
+      return 'credentialRejected';
+    case 3:
+      return 'missingResponse';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for ListMediaOut');
+  }
+}
+
+export function returnConverterListMediaResponse(
+  ffiInput: Native.ReturnFfiListMediaResponse
+): ListMediaResponse {
+  return {
+    items: ((arr: Array<ReturnFfiListMediaItem>) =>
+      arr.map(returnConverterListMediaItem))(ffiInput.items),
+    backupDir: identity(ffiInput.backup_dir),
+    mediaDir: identity(ffiInput.media_dir),
+    cursor: ((a) => (a === null ? null : identity(a)))(ffiInput.cursor),
+  };
+}
+
+export function returnConverterLookUpUsernameLinkArgs(
+  ffiInput: Native.ReturnFfiLookUpUsernameLinkArgs
+): LookUpUsernameLinkArgs {
+  return {
+    uuid: uuid.stringify(ffiInput.uuid),
+    entropy: identity(ffiInput.entropy),
+  };
+}
+
+export function returnConverterLookUpUsernameLinkOut(
+  ffiInput: Native.ReturnFfiLookUpUsernameLinkOut
+): LookUpUsernameLinkOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return {
+        success: identity(ffiInput._0),
+      };
+    case 1:
+      return 'notFound';
+    case 2:
+      return 'linkDataTooShort';
+    case 3:
+      return 'missingResponse';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for LookUpUsernameLinkOut');
+  }
 }
 
 export function returnConverterMyRemoteDeriveEnum(
@@ -633,12 +830,31 @@ export function returnConverterSetUsernameLinkOut(
   }
 }
 
+export function returnConverterSimpleBackupTestOut(
+  ffiInput: Native.ReturnFfiSimpleBackupTestOut
+): SimpleBackupTestOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return 'success';
+    case 1:
+      return 'credentialRejected';
+    case 2:
+      return 'missingResponse';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for SimpleBackupTestOut');
+  }
+}
+
 export function returnConverterTestStreamChunk(
   ffiInput: Native.ReturnFfiTestStreamChunk
 ): TestStreamChunk {
   return {
     chunk: ((arr: Array<string>) => arr.map(identity))(ffiInput.chunk),
-    termination: identity(ffiInput.termination),
+    termination: ((a) => (a === null ? null : identity(a)))(
+      ffiInput.termination
+    ),
   };
 }
 
@@ -1112,6 +1328,42 @@ export function SvrKey_DeriveStorageServiceKey({
   return identity(Native.SvrKey_DeriveStorageServiceKey(identity(svr_key)));
 }
 
+export function TESTING_BackupDeleteAllTests(): Array<
+  GrpcTestCase<void, SimpleBackupTestOut>
+> {
+  return grpcTestCaseConverter(
+    identity,
+    returnConverterSimpleBackupTestOut
+  )(Native.TESTING_BackupDeleteAllTests());
+}
+
+export function TESTING_BackupListMediaTests(): Array<
+  GrpcTestCase<ListMediaArgs, ListMediaOut>
+> {
+  return grpcTestCaseConverter(
+    returnConverterListMediaArgs,
+    returnConverterListMediaOut
+  )(Native.TESTING_BackupListMediaTests());
+}
+
+export function TESTING_BackupRefreshTests(): Array<
+  GrpcTestCase<void, SimpleBackupTestOut>
+> {
+  return grpcTestCaseConverter(
+    identity,
+    returnConverterSimpleBackupTestOut
+  )(Native.TESTING_BackupRefreshTests());
+}
+
+export function TESTING_BackupSetPublicKeyTests(): Array<
+  GrpcTestCase<void, SimpleBackupTestOut>
+> {
+  return grpcTestCaseConverter(
+    identity,
+    returnConverterSimpleBackupTestOut
+  )(Native.TESTING_BackupSetPublicKeyTests());
+}
+
 export function TESTING_ClearPushTokenTests(): Array<GrpcTestCase<void, void>> {
   return grpcTestCaseConverter(
     identity,
@@ -1168,6 +1420,24 @@ export function TESTING_DeleteUsernameLinkTests(): Array<
   )(Native.TESTING_DeleteUsernameLinkTests());
 }
 
+export function TESTING_GetBackupCdnCredentialsTests(): Array<
+  GrpcTestCase<number, GetCdnCredentialsOut>
+> {
+  return grpcTestCaseConverter(
+    identity,
+    returnConverterGetCdnCredentialsOut
+  )(Native.TESTING_GetBackupCdnCredentialsTests());
+}
+
+export function TESTING_GetBackupSvrBCredentialsTests(): Array<
+  GrpcTestCase<void, GetSvrBCredentialsOut>
+> {
+  return grpcTestCaseConverter(
+    identity,
+    returnConverterGetSvrBCredentialsOut
+  )(Native.TESTING_GetBackupSvrBCredentialsTests());
+}
+
 export function TESTING_GetDevicesTests(): Array<
   GrpcTestCase<void, GetDevicesOut>
 > {
@@ -1193,6 +1463,15 @@ export function TESTING_GetMessageBackupInfoTests(): Array<
     identity,
     returnConverterGetMessageBackupInfoOut
   )(Native.TESTING_GetMessageBackupInfoTests());
+}
+
+export function TESTING_LookUpUsernameLinkTests(): Array<
+  GrpcTestCase<LookUpUsernameLinkArgs, LookUpUsernameLinkOut>
+> {
+  return grpcTestCaseConverter(
+    returnConverterLookUpUsernameLinkArgs,
+    returnConverterLookUpUsernameLinkOut
+  )(Native.TESTING_LookUpUsernameLinkTests());
 }
 
 export function TESTING_MyRemoteDeriveEnum_identity({
@@ -1452,7 +1731,9 @@ export function TESTING_ReturnSomeIoError({
 }: {
   present: boolean;
 }): Error | null {
-  return identity(Native.TESTING_ReturnSomeIoError(identity(present)));
+  return ((a) => (a === null ? null : identity(a)))(
+    Native.TESTING_ReturnSomeIoError(identity(present))
+  );
 }
 
 export function TESTING_SetDeviceNameTests(): Array<
@@ -2210,6 +2491,43 @@ export async function UnauthenticatedChatConnection_backup_get_svrb_credentials(
         ByteArray.prototype.getContents.call(credential),
         ByteArray.prototype.getContents.call(server_keys),
         identity(signing_key),
+        ((__rng) => __rng?.__deterministicRngSeedForTesting ?? -1)(rng)
+      )
+    )
+  );
+}
+export async function UnauthenticatedChatConnection_backup_list_media({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+  credential: credential,
+  serverKeys: server_keys,
+  signingKey: signing_key,
+  cursor: cursor,
+  limit: limit,
+  rng: rng,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.UnauthenticatedChatConnection>;
+  credential: zkgroup.BackupAuthCredential;
+  serverKeys: zkgroup.GenericServerPublicParams;
+  signingKey: Native.Wrapper<Native.PrivateKey>;
+  cursor: string;
+  limit: number;
+  rng: Rng | undefined;
+}): Promise<ListMediaResponse> {
+  return returnConverterListMediaResponse(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.UnauthenticatedChatConnection_backup_list_media(
+        asyncContext,
+        identity(chat),
+        ByteArray.prototype.getContents.call(credential),
+        ByteArray.prototype.getContents.call(server_keys),
+        identity(signing_key),
+        identity(cursor),
+        identity(limit),
         ((__rng) => __rng?.__deterministicRngSeedForTesting ?? -1)(rng)
       )
     )

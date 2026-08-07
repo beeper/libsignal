@@ -238,6 +238,18 @@ export type ReturnFfiDeleteBackupMediaOut =
       __type: 3;
     };
 
+export type ReturnFfiGetCdnCredentialsOut =
+  | {
+      __type: 0;
+      _0: [[string, string]];
+    }
+  | {
+      __type: 1;
+    }
+  | {
+      __type: 2;
+    };
+
 export type ReturnFfiGetDevicesOut = {
   devices: Array<ReturnFfiLinkedDeviceInternal>;
 };
@@ -266,6 +278,19 @@ export type ReturnFfiGetMessageBackupInfoOut =
       __type: 2;
     };
 
+export type ReturnFfiGetSvrBCredentialsOut =
+  | {
+      __type: 0;
+      username: string;
+      password: string;
+    }
+  | {
+      __type: 1;
+    }
+  | {
+      __type: 2;
+    };
+
 export type ReturnFfiLinkedDeviceInternal = {
   id: number;
   encrypted_name: Uint8Array<ArrayBuffer>;
@@ -273,6 +298,59 @@ export type ReturnFfiLinkedDeviceInternal = {
   registration_id: number;
   created_at_ciphertext: Uint8Array<ArrayBuffer>;
 };
+
+export type ReturnFfiListMediaArgs = {
+  cursor: string | null;
+  limit: number;
+};
+
+export type ReturnFfiListMediaItem = {
+  cdn: number;
+  media_id: Uint8Array<ArrayBuffer>;
+  object_length: bigint;
+};
+
+export type ReturnFfiListMediaOut =
+  | {
+      __type: 0;
+      _0: ReturnFfiListMediaResponse;
+    }
+  | {
+      __type: 1;
+    }
+  | {
+      __type: 2;
+    }
+  | {
+      __type: 3;
+    };
+
+export type ReturnFfiListMediaResponse = {
+  items: Array<ReturnFfiListMediaItem>;
+  backup_dir: string;
+  media_dir: string;
+  cursor: string | null;
+};
+
+export type ReturnFfiLookUpUsernameLinkArgs = {
+  uuid: Uint8Array<ArrayBuffer>;
+  entropy: Uint8Array<ArrayBuffer>;
+};
+
+export type ReturnFfiLookUpUsernameLinkOut =
+  | {
+      __type: 0;
+      _0: string;
+    }
+  | {
+      __type: 1;
+    }
+  | {
+      __type: 2;
+    }
+  | {
+      __type: 3;
+    };
 
 export type ReturnFfiMyRemoteDeriveEnum =
   | {
@@ -383,6 +461,17 @@ export type ReturnFfiSetUsernameLinkOut =
     }
   | {
       __type: 1;
+    };
+
+export type ReturnFfiSimpleBackupTestOut =
+  | {
+      __type: 0;
+    }
+  | {
+      __type: 1;
+    }
+  | {
+      __type: 2;
     };
 
 export type ReturnFfiTestStreamChunk = {
@@ -2078,6 +2167,13 @@ type NativeFunctions = {
     redemption_time: Timestamp,
     auth_credential_with_pni_response_bytes: Uint8Array<ArrayBuffer>
   ) => Uint8Array<ArrayBuffer>;
+  ServerPublicParams_ReceiveAuthCredentialZkcWithoutPni: (
+    params: Wrapper<ServerPublicParams>,
+    aci: Uint8Array<ArrayBuffer>,
+    salt: Uint8Array<ArrayBuffer>,
+    redemption_time: Timestamp,
+    auth_credential_with_pni_response_bytes: Uint8Array<ArrayBuffer>
+  ) => Uint8Array<ArrayBuffer>;
   ServerPublicParams_ReceiveExpiringProfileKeyCredential: (
     server_public_params: Wrapper<ServerPublicParams>,
     request_context: Serialized<ProfileKeyCredentialRequestContext>,
@@ -2111,6 +2207,13 @@ type NativeFunctions = {
     randomness: Uint8Array<ArrayBuffer>,
     aci: Uint8Array<ArrayBuffer>,
     pni: Uint8Array<ArrayBuffer>,
+    redemption_time: Timestamp
+  ) => Uint8Array<ArrayBuffer>;
+  ServerSecretParams_IssueAuthCredentialZkcWithoutPniDeterministic: (
+    server_secret_params: Wrapper<ServerSecretParams>,
+    randomness: Uint8Array<ArrayBuffer>,
+    aci: Uint8Array<ArrayBuffer>,
+    salt: Uint8Array<ArrayBuffer>,
     redemption_time: Timestamp
   ) => Uint8Array<ArrayBuffer>;
   ServerSecretParams_IssueExpiringProfileKeyCredentialDeterministic: (
@@ -2210,7 +2313,6 @@ type NativeFunctions = {
   ) => number;
   SessionRecord_HasUsableSenderChain: (
     s: Wrapper<SessionRecord>,
-    require_pq_ratio: number,
     now: Timestamp
   ) => boolean;
   SessionRecord_Serialize: (
@@ -2280,6 +2382,12 @@ type NativeFunctions = {
   ) => SignedPreKeyRecord;
   SignedPreKeyRecord_Serialize: (
     obj: Wrapper<SignedPreKeyRecord>
+  ) => Uint8Array<ArrayBuffer>;
+  Svr2BackupSession_Deserialize: (
+    bytes: Uint8Array<ArrayBuffer>
+  ) => Svr2BackupSession;
+  Svr2BackupSession_Serialize: (
+    session: Wrapper<Svr2BackupSession>
   ) => Uint8Array<ArrayBuffer>;
   Svr2Client_New: (
     mrenclave: Uint8Array<ArrayBuffer>,
@@ -2362,6 +2470,18 @@ type NativeFunctions = {
   SvrKey_DeriveStorageServiceKey: (
     svr_key: Uint8Array<ArrayBuffer>
   ) => Uint8Array<ArrayBuffer>;
+  TESTING_BackupDeleteAllTests: () => Array<
+    GrpcTestCaseFfi<void, ReturnFfiSimpleBackupTestOut>
+  >;
+  TESTING_BackupListMediaTests: () => Array<
+    GrpcTestCaseFfi<ReturnFfiListMediaArgs, ReturnFfiListMediaOut>
+  >;
+  TESTING_BackupRefreshTests: () => Array<
+    GrpcTestCaseFfi<void, ReturnFfiSimpleBackupTestOut>
+  >;
+  TESTING_BackupSetPublicKeyTests: () => Array<
+    GrpcTestCaseFfi<void, ReturnFfiSimpleBackupTestOut>
+  >;
   TESTING_BridgedStringMap_dump_to_json: (
     map: Wrapper<BridgedStringMap>
   ) => string;
@@ -2462,20 +2582,12 @@ type NativeFunctions = {
   TESTING_FakeChatConnection_TakeUnauthenticatedChat: (
     chat: Wrapper<FakeChatConnection>
   ) => UnauthenticatedChatConnection;
-  TESTING_FakeChatRemoteEnd_BinprotoToJson: (
-    name: string,
-    input: Uint8Array<ArrayBuffer>
-  ) => string;
   TESTING_FakeChatRemoteEnd_GrpcFrameForMessageLength: (
     len: number
   ) => Uint8Array<ArrayBuffer>;
   TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted: (
     chat: Wrapper<FakeChatRemoteEnd>
   ) => void;
-  TESTING_FakeChatRemoteEnd_JsonToBinproto: (
-    name: string,
-    input: string
-  ) => Uint8Array<ArrayBuffer>;
   TESTING_FakeChatRemoteEnd_NextGrpcMessage: (
     input: Uint8Array<ArrayBuffer>,
     offset: number
@@ -2556,6 +2668,12 @@ type NativeFunctions = {
     asyncRuntime: Wrapper<NonSuspendingBackgroundThreadRuntime>,
     input: number
   ) => CancellablePromise<number>;
+  TESTING_GetBackupCdnCredentialsTests: () => Array<
+    GrpcTestCaseFfi<number, ReturnFfiGetCdnCredentialsOut>
+  >;
+  TESTING_GetBackupSvrBCredentialsTests: () => Array<
+    GrpcTestCaseFfi<void, ReturnFfiGetSvrBCredentialsOut>
+  >;
   TESTING_GetDevicesTests: () => Array<
     GrpcTestCaseFfi<void, ReturnFfiGetDevicesOut>
   >;
@@ -2573,6 +2691,12 @@ type NativeFunctions = {
   TESTING_KeyTransFatalVerificationFailure: () => void;
   TESTING_KeyTransNonFatalVerificationFailure: () => void;
   TESTING_KeyTransStoredAccountData: () => Uint8Array<ArrayBuffer>;
+  TESTING_LookUpUsernameLinkTests: () => Array<
+    GrpcTestCaseFfi<
+      ReturnFfiLookUpUsernameLinkArgs,
+      ReturnFfiLookUpUsernameLinkOut
+    >
+  >;
   TESTING_MyRemoteDeriveEnum_identity: (
     x: ArgFfiMyRemoteDeriveEnum
   ) => ReturnFfiMyRemoteDeriveEnum;
@@ -2917,6 +3041,16 @@ type NativeFunctions = {
     upload_size: bigint,
     rng: RandomNumberGenerator
   ) => CancellablePromise<UploadForm>;
+  UnauthenticatedChatConnection_backup_list_media: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    chat: Wrapper<UnauthenticatedChatConnection>,
+    credential: Uint8Array<ArrayBuffer>,
+    server_keys: Uint8Array<ArrayBuffer>,
+    signing_key: Wrapper<PrivateKey>,
+    cursor: string,
+    limit: number,
+    rng: RandomNumberGenerator
+  ) => CancellablePromise<ReturnFfiListMediaResponse>;
   UnauthenticatedChatConnection_backup_refresh: (
     asyncRuntime: Wrapper<TokioAsyncContext>,
     chat: Wrapper<UnauthenticatedChatConnection>,
@@ -3535,6 +3669,7 @@ const {
   ServerPublicParams_Deserialize,
   ServerPublicParams_GetEndorsementPublicKey,
   ServerPublicParams_ReceiveAuthCredentialWithPniAsServiceId,
+  ServerPublicParams_ReceiveAuthCredentialZkcWithoutPni,
   ServerPublicParams_ReceiveExpiringProfileKeyCredential,
   ServerPublicParams_ReceiveReceiptCredential,
   ServerPublicParams_Serialize,
@@ -3543,6 +3678,7 @@ const {
   ServerSecretParams_GenerateDeterministic,
   ServerSecretParams_GetPublicParams,
   ServerSecretParams_IssueAuthCredentialWithPniZkcDeterministic,
+  ServerSecretParams_IssueAuthCredentialZkcWithoutPniDeterministic,
   ServerSecretParams_IssueExpiringProfileKeyCredentialDeterministic,
   ServerSecretParams_IssueReceiptCredentialDeterministic,
   ServerSecretParams_Serialize,
@@ -3586,6 +3722,8 @@ const {
   SignedPreKeyRecord_GetTimestamp,
   SignedPreKeyRecord_New,
   SignedPreKeyRecord_Serialize,
+  Svr2BackupSession_Deserialize,
+  Svr2BackupSession_Serialize,
   Svr2Client_New,
   Svr2MigrationSession_Deserialize,
   Svr2MigrationSession_IsComplete,
@@ -3601,6 +3739,10 @@ const {
   SvrKey_DeriveRegistrationLock,
   SvrKey_DeriveRegistrationRecoveryPassword,
   SvrKey_DeriveStorageServiceKey,
+  TESTING_BackupDeleteAllTests,
+  TESTING_BackupListMediaTests,
+  TESTING_BackupRefreshTests,
+  TESTING_BackupSetPublicKeyTests,
   TESTING_BridgedStringMap_dump_to_json,
   TESTING_BulkPullFromStream_Cancel,
   TESTING_BulkPullFromStream_New,
@@ -3639,10 +3781,8 @@ const {
   TESTING_FakeChatConnection_TakeProvisioningChat,
   TESTING_FakeChatConnection_TakeRemote,
   TESTING_FakeChatConnection_TakeUnauthenticatedChat,
-  TESTING_FakeChatRemoteEnd_BinprotoToJson,
   TESTING_FakeChatRemoteEnd_GrpcFrameForMessageLength,
   TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted,
-  TESTING_FakeChatRemoteEnd_JsonToBinproto,
   TESTING_FakeChatRemoteEnd_NextGrpcMessage,
   TESTING_FakeChatRemoteEnd_ReceiveIncomingGrpcRequest,
   TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest,
@@ -3662,6 +3802,8 @@ const {
   TESTING_FutureProducesOtherPointerType,
   TESTING_FutureProducesPointerType,
   TESTING_FutureSuccess,
+  TESTING_GetBackupCdnCredentialsTests,
+  TESTING_GetBackupSvrBCredentialsTests,
   TESTING_GetDevicesTests,
   TESTING_GetMediaBackupInfoTests,
   TESTING_GetMessageBackupInfoTests,
@@ -3671,6 +3813,7 @@ const {
   TESTING_KeyTransFatalVerificationFailure,
   TESTING_KeyTransNonFatalVerificationFailure,
   TESTING_KeyTransStoredAccountData,
+  TESTING_LookUpUsernameLinkTests,
   TESTING_MyRemoteDeriveEnum_identity,
   TESTING_MyRemoteDeriveStruct_identity,
   TESTING_MySimpleTestEnum_BridgeVec_identity,
@@ -3793,6 +3936,7 @@ const {
   UnauthenticatedChatConnection_backup_get_message_backup_info,
   UnauthenticatedChatConnection_backup_get_svrb_credentials,
   UnauthenticatedChatConnection_backup_get_upload_form,
+  UnauthenticatedChatConnection_backup_list_media,
   UnauthenticatedChatConnection_backup_refresh,
   UnauthenticatedChatConnection_backup_set_public_key,
   UnauthenticatedChatConnection_connect,
@@ -4270,6 +4414,7 @@ export {
   ServerPublicParams_Deserialize,
   ServerPublicParams_GetEndorsementPublicKey,
   ServerPublicParams_ReceiveAuthCredentialWithPniAsServiceId,
+  ServerPublicParams_ReceiveAuthCredentialZkcWithoutPni,
   ServerPublicParams_ReceiveExpiringProfileKeyCredential,
   ServerPublicParams_ReceiveReceiptCredential,
   ServerPublicParams_Serialize,
@@ -4278,6 +4423,7 @@ export {
   ServerSecretParams_GenerateDeterministic,
   ServerSecretParams_GetPublicParams,
   ServerSecretParams_IssueAuthCredentialWithPniZkcDeterministic,
+  ServerSecretParams_IssueAuthCredentialZkcWithoutPniDeterministic,
   ServerSecretParams_IssueExpiringProfileKeyCredentialDeterministic,
   ServerSecretParams_IssueReceiptCredentialDeterministic,
   ServerSecretParams_Serialize,
@@ -4321,6 +4467,8 @@ export {
   SignedPreKeyRecord_GetTimestamp,
   SignedPreKeyRecord_New,
   SignedPreKeyRecord_Serialize,
+  Svr2BackupSession_Deserialize,
+  Svr2BackupSession_Serialize,
   Svr2Client_New,
   Svr2MigrationSession_Deserialize,
   Svr2MigrationSession_IsComplete,
@@ -4336,6 +4484,10 @@ export {
   SvrKey_DeriveRegistrationLock,
   SvrKey_DeriveRegistrationRecoveryPassword,
   SvrKey_DeriveStorageServiceKey,
+  TESTING_BackupDeleteAllTests,
+  TESTING_BackupListMediaTests,
+  TESTING_BackupRefreshTests,
+  TESTING_BackupSetPublicKeyTests,
   TESTING_BridgedStringMap_dump_to_json,
   TESTING_BulkPullFromStream_Cancel,
   TESTING_BulkPullFromStream_New,
@@ -4374,10 +4526,8 @@ export {
   TESTING_FakeChatConnection_TakeProvisioningChat,
   TESTING_FakeChatConnection_TakeRemote,
   TESTING_FakeChatConnection_TakeUnauthenticatedChat,
-  TESTING_FakeChatRemoteEnd_BinprotoToJson,
   TESTING_FakeChatRemoteEnd_GrpcFrameForMessageLength,
   TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted,
-  TESTING_FakeChatRemoteEnd_JsonToBinproto,
   TESTING_FakeChatRemoteEnd_NextGrpcMessage,
   TESTING_FakeChatRemoteEnd_ReceiveIncomingGrpcRequest,
   TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest,
@@ -4397,6 +4547,8 @@ export {
   TESTING_FutureProducesOtherPointerType,
   TESTING_FutureProducesPointerType,
   TESTING_FutureSuccess,
+  TESTING_GetBackupCdnCredentialsTests,
+  TESTING_GetBackupSvrBCredentialsTests,
   TESTING_GetDevicesTests,
   TESTING_GetMediaBackupInfoTests,
   TESTING_GetMessageBackupInfoTests,
@@ -4406,6 +4558,7 @@ export {
   TESTING_KeyTransFatalVerificationFailure,
   TESTING_KeyTransNonFatalVerificationFailure,
   TESTING_KeyTransStoredAccountData,
+  TESTING_LookUpUsernameLinkTests,
   TESTING_MyRemoteDeriveEnum_identity,
   TESTING_MyRemoteDeriveStruct_identity,
   TESTING_MySimpleTestEnum_BridgeVec_identity,
@@ -4528,6 +4681,7 @@ export {
   UnauthenticatedChatConnection_backup_get_message_backup_info,
   UnauthenticatedChatConnection_backup_get_svrb_credentials,
   UnauthenticatedChatConnection_backup_get_upload_form,
+  UnauthenticatedChatConnection_backup_list_media,
   UnauthenticatedChatConnection_backup_refresh,
   UnauthenticatedChatConnection_backup_set_public_key,
   UnauthenticatedChatConnection_connect,

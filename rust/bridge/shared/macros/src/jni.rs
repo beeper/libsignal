@@ -26,6 +26,7 @@ pub(crate) fn bridge_fn(
     // Scroll down to the end of the function to see the quote template.
     // This is the best way to understand what we're trying to produce.
 
+    let krate = crates::libsignal_bridge_types();
     let wrapper_name = format_ident!("__bridge_fn_jni_{}", name);
     let orig_name = &sig.ident;
 
@@ -34,6 +35,16 @@ pub(crate) fn bridge_fn(
     let input_args = input_names_and_types
         .iter()
         .map(|(name, ty)| quote!(#name: jni_arg_type!(#ty)));
+
+    let mut jni_function_args = input_names_and_types
+        .iter()
+        .map(|(name, arg)| {
+            quote!((
+                stringify!(#name).to_string(),
+                <jni_arg_type!(#arg) as #krate::jni::HasKtSpelling>::register_kt_spelling(ctx),
+            ))
+        })
+        .collect_vec();
 
     // "Support" async operations by requiring them to complete synchronously.
     let async_runtime_if_needed = match bridging_kind {
@@ -45,14 +56,20 @@ pub(crate) fn bridge_fn(
                     format_args!("non-async function '{}' cannot use #[bridge_io]", sig.ident),
                 ));
             }
+            jni_function_args.insert(0, quote!((
+                "async_runtime".to_string(),
+                <jni_arg_type!(&#runtime) as #krate::jni::HasKtSpelling>::register_kt_spelling(ctx),
+            )));
             quote!(async_runtime: jni_arg_type!(&#runtime),) // Note the trailing comma!
         }
     };
 
     let output = result_type(&sig.output);
+    let mut is_throwing = ResultInfo::from(&sig.output).failable;
     let result_ty = match bridging_kind {
         BridgingKind::Regular => quote!(jni_result_type!(#output)),
         BridgingKind::Io { .. } => {
+            is_throwing = false;
             quote!(jni::JavaCompletableFuture<'local, jni_result_type!(#output)>)
         }
     };
@@ -63,7 +80,7 @@ pub(crate) fn bridge_fn(
         }
         BridgingKind::Io { runtime } => bridge_io_body(orig_name, &input_names_and_types, runtime),
     };
-    let metadata = nice_metadata(
+    let nice_metadata = nice_metadata(
         &orig_name.to_string(),
         sig.asyncness.is_some(),
         &input_names_and_types,
@@ -76,7 +93,10 @@ pub(crate) fn bridge_fn(
             register_result_converter: format_ident!("register_kt_result_converter"),
         },
     );
+    let jni_metadata_name = format_ident!("_BRIDGE_JNI_FN_METADATA_{name}");
+    let kt_name = name.replace("_1", "_");
     Ok(quote! {
+        #nice_metadata
         #[cfg(feature = "jni")]
         #[unsafe(export_name = concat!(env!("LIBSIGNAL_BRIDGE_FN_PREFIX_JNI"), #name))]
         #[allow(non_snake_case)]
@@ -90,7 +110,30 @@ pub(crate) fn bridge_fn(
             let _trace = libsignal_debug::trace_block!(concat!("bridge::", #name));
             #body
         }
-        #metadata
+        #[cfg(all(feature = "jni", feature = "metadata"))]
+        #[#krate::metadata::linkme::distributed_slice(#krate::metadata::jni::JNI_ITEMS)]
+        #[linkme(crate = #krate::metadata::linkme)]
+        static #jni_metadata_name: #krate::metadata::FnWithModule<#krate::metadata::jni::KtMetadataContext> =
+            #krate::metadata::FnWithModule {
+                module_path: module_path!(),
+                apply: |ctx| {
+                    // We need to provide a lifetime named 'local to support jni_arg_type! et al
+                    fn inner<'local>(ctx: &mut #krate::metadata::jni::KtMetadataContext) {
+                        let args = vec![#(#jni_function_args),*];
+                        let result = <#result_ty as #krate::jni::HasKtSpelling>::register_kt_spelling(ctx);
+                        #krate::metadata::insert_checked(
+                            &mut ctx.jni_functions,
+                            #kt_name.to_string(),
+                            #krate::metadata::jni::JniFunction {
+                                is_throwing: #is_throwing,
+                                args,
+                                result,
+                            },
+                        );
+                    }
+                    inner(ctx);
+                },
+            };
     })
 }
 
@@ -218,6 +261,7 @@ pub(crate) fn bridge_trait(
         )
     })?;
 
+    let krate = crates::libsignal_bridge_types();
     let trait_name = &trait_to_bridge.ident;
     let object_alias_name = format_ident!("Java{}", java_class_name);
     let wrapper_name = format_ident!("Jni{}", trait_to_bridge.ident);
@@ -231,7 +275,10 @@ pub(crate) fn bridge_trait(
 
     Ok(quote! {
         #[cfg(feature = "jni")]
-        pub type #object_alias_name<'a> = jni::JObject<'a>;
+        #krate::jni_custom_spellings! {
+            #[kt = #java_class_name]
+            pub struct #object_alias_name<'a>(pub ::jni::objects::JObject<'a>);
+        }
 
         #[cfg(feature = "jni")]
         pub struct #wrapper_name(jni::GlobalAndVM);
@@ -240,7 +287,7 @@ pub(crate) fn bridge_trait(
         impl #wrapper_name {
             pub fn new<'a>(
                 env: &mut ::jni::Env<'a>,
-                object: &#object_alias_name<'a>,
+                #object_alias_name(object): &#object_alias_name<'a>,
             ) -> Result<Self, jni::BridgeLayerError> {
                 Ok(Self(jni::GlobalAndVM::new(env, object, jni::ClassName(#java_class_path))?))
             }
@@ -397,7 +444,7 @@ pub(crate) fn derive_bridged_as_value(
         return Err(syn::Error::new_spanned(input, "Unions aren't supported"));
     }
     let ident = &input.ident;
-    let base_class = quote!(org.signal.libsignal.internal.#ident);
+    let base_class = format!("org.signal.libsignal.internal.{ident}");
     let result = options
         .result
         .then(|| derive_bridged_as_value_return(input, target, &base_class))
@@ -415,7 +462,7 @@ pub(crate) fn derive_bridged_as_value(
 fn derive_bridged_as_value_arg(
     input: &DeriveInput,
     target: &syn::Path,
-    base_class: &TokenStream2,
+    base_class: &str,
 ) -> syn::Result<TokenStream2> {
     let krate = crates::libsignal_bridge_types();
     let ident = &input.ident;
@@ -467,10 +514,10 @@ fn derive_bridged_as_value_arg(
     // This macro operates similarly to the other nice derive ArgTypeInfo impls. It determines
     // which variant is being provided via a series of instanceof checks.
     let classes = match &input.data {
-        Data::Struct(_) => vec![quote!(#base_class::FfiArgType)],
+        Data::Struct(_) => vec![format!("{base_class}_FfiArgType")],
         Data::Enum(_) => variant_names
             .iter()
-            .map(|variant| quote!(#base_class::#variant::FfiArgType))
+            .map(|variant| format!("{base_class}_{variant}_FfiArgType"))
             .collect_vec(),
         Data::Union(_) => unreachable!(),
     };
@@ -535,7 +582,7 @@ fn derive_bridged_as_value_arg(
                     }
                 )*
                 Err(#krate::jni::BridgeLayerError::BadArgument(
-                    concat!("Invalid variant for enum ", stringify!(#base_class)).to_string()
+                    concat!("Invalid variant for enum ", #base_class).to_string()
                 ))
             }
             fn load_from(stored_arg: &'storage mut Self::StoredType) -> Self {
@@ -555,10 +602,10 @@ fn derive_bridged_as_value_arg(
                 #register_kt_nice_type
                 #register_kt_arg_converter
                 #krate::metadata::jni::KtArgConverter {
-                    nice_type: stringify!(#base_class).to_string(),
+                    nice_type: #base_class.to_string(),
                     ffi_type: "Object".to_string(),
                     ffi_field_type_erased: "Any?".to_string(),
-                    converter_function: concat!("(", stringify!(#base_class), "::toFfiArgTypeObject)").to_string()
+                    converter_function: concat!("(", #base_class, "::toFfiArgTypeObject)").to_string()
                 }
             }
         }
@@ -568,10 +615,9 @@ fn derive_bridged_as_value_arg(
 fn derive_bridged_as_value_return(
     input: &DeriveInput,
     target: &syn::Path,
-    base_class: &TokenStream2,
+    base_class: &str,
 ) -> syn::Result<TokenStream2> {
     let krate = crates::libsignal_bridge_types();
-    let ident = &input.ident;
     let mut impl_nice_result_converter = Impl::new(
         input,
         target,
@@ -614,19 +660,22 @@ fn derive_bridged_as_value_return(
             .flatten()
             .map(|ty| parse_quote!(#ty: #krate::jni::ResultTypeInfo<'jni_context>)),
     );
-    // To produce the right nice type, the macro invokes #ident.#variant.fromNative(native args)
+    // To produce the right nice type, the macro invokes #ident_#variant_ReturnConverter.fromNative(native args)
     // Unlike with other client languages, fromNative invokes the underlying return converters
     // directly (and so the final return converter for this derived type will be 'identity').
-    let (class_names, classes) = match &input.data {
-        Data::Struct(_) => (vec![base_class.to_string()], vec![base_class.clone()]),
+    let (return_converters, variant_classes) = match &input.data {
+        Data::Struct(_) => (
+            vec![format!("{base_class}_ReturnConverter")],
+            vec![base_class.to_string()],
+        ),
         Data::Enum(_) => (
             variant_names
                 .iter()
-                .map(|variant| format!("org.signal.libsignal.internal.{ident}${variant}"))
+                .map(|variant| format!("{base_class}_{variant}_ReturnConverter"))
                 .collect_vec(),
             variant_names
                 .iter()
-                .map(|variant| quote!(org.signal.libsignal.internal.#ident::#variant))
+                .map(|variant| format!("{base_class}${variant}"))
                 .collect_vec(),
         ),
         Data::Union(_) => unreachable!(),
@@ -645,8 +694,10 @@ fn derive_bridged_as_value_return(
                 match self {
                     #(#patterns => {
                         #(let #fields = #krate::jni::ResultTypeInfo::convert_into(#fields, jni_env)?;)*
-                        let class = #krate::jni::find_class(jni_env, #krate::jni::ClassName(#class_names))
-                            .check_exceptions(jni_env, CONTEXT_STR)?;
+                        let class = #krate::jni::find_class(
+                            jni_env,
+                            #krate::jni::ClassName(#return_converters)
+                        ).check_exceptions(jni_env, CONTEXT_STR)?;
                         #(let #fields = #krate::jni::box_primitive_if_needed(jni_env, #fields.into())?;)*
                         #krate::jni::call_static_method_checked(
                             jni_env,
@@ -658,7 +709,7 @@ fn derive_bridged_as_value_return(
                                     // change it, but for now, let's just box everything into an
                                     // object.
                                     #(#fields => java.lang.Object,)*
-                                ) -> #classes
+                                ) -> #variant_classes
                             ),
                         )
                     })*
@@ -673,9 +724,9 @@ fn derive_bridged_as_value_return(
                 #register_kt_result_converter
                 #register_kt_nice_type
                 #krate::jni::KtReturnConverter {
-                    nice_type: stringify!(#base_class).to_string(),
+                    nice_type: #base_class.to_string(),
                     ffi_type: "Object".to_string(),
-                    converter_function: concat!("downcastFromObject<", stringify!(#base_class), ">").to_string(),
+                    converter_function: concat!("downcastFromObject<", #base_class, ">").to_string(),
                 }
             }
         }

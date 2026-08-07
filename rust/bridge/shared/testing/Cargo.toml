@@ -25,8 +25,9 @@ libsignal-keytrans = { workspace = true }
 libsignal-message-backup = { workspace = true, features = ["json"] }
 libsignal-net = { workspace = true }
 libsignal-net-chat = { workspace = true }
-libsignal-net-grpc = { workspace = true, features = ["json"] }
+libsignal-net-grpc = { workspace = true }
 libsignal-protocol = { workspace = true }
+usernames = { workspace = true }
 
 base64 = { workspace = true }
 boring-signal = { workspace = true }

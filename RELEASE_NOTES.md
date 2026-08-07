@@ -1,4 +1,6 @@
-v0.99.1
+v0.100.0
 
-- node: Support SVR2 enclave migration.
-- Swift, Node: Don't log an error about unexpected server timestamps on unauthenticated connections.
+- New typed APIs:
+  - `UnauthBackupsService.listBackupMedia`
+
+- SPQR: Remove requirePqRatio argument for sessions, instead requiring for all sessions.
