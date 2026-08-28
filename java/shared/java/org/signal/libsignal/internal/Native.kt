@@ -282,6 +282,15 @@ internal object Native {
   ): CompletableFuture<Void?>
 
   @JvmStatic
+  public external fun AuthenticatedChatConnection_confirm_username(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    username: String,
+    usernameCiphertext: ByteArray,
+    rng: Long,
+  ): CompletableFuture<UUID>
+
+  @JvmStatic
   public external fun AuthenticatedChatConnection_connect(
     asyncRuntime: ObjectHandle,
     connectionManager: ObjectHandle,
@@ -332,6 +341,13 @@ internal object Native {
   public external fun AuthenticatedChatConnection_preconnect(
     asyncRuntime: ObjectHandle,
     connectionManager: ObjectHandle,
+  ): CompletableFuture<Void?>
+
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_redeem_backup_receipt(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    presentation: ByteArray,
   ): CompletableFuture<Void?>
 
   @JvmStatic
@@ -3268,6 +3284,13 @@ internal object Native {
     method: String,
     payload: ByteArray,
   ): CompletableFuture<ByteArray>
+
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_submit_call_quality_survey(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    survey: Object,
+  ): CompletableFuture<Void?>
 
   @JvmStatic
   @Throws(Exception::class)

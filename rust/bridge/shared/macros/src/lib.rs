@@ -137,29 +137,26 @@
 //!
 //! # Adding new argument and result types
 //!
-//! If your argument or result type is a Rust value being wrapped in an opaque box, declare it using
-//! the `bridge_as_handle` macro alongside other such types. Otherwise, there are two steps:
+//! - If your argument or result type is a Rust value being wrapped in an opaque box, declare it using
+//!   the `bridge_as_handle` macro alongside other such types.
 //!
-//! 1. Argument and result types for FFI and JNI are determined by macros `ffi_arg_type`,
-//!    `ffi_result_type`, `jni_arg_type`, and `jni_result_type`. You may need to add your new type
-//!    there. JNI types also undergo some additional transformation in the scripts
-//!    `gen_java_decl.py`, which you may need to tweak as well. Node types are generated as Strings
-//!    via the `gen_ts_ffi()` methods on `node::{AsyncArg, Arg, Result}TypeInfo`.
+//! - If your argument or result type is a Rust composite type (struct or enum) that should be passed
+//!   by its fields to a corresponding client-language type, use the [`BridgedAsValue`] derive macro.
 //!
-//! 2. Argument types conform to one or more of the following bridge-specific traits:
+//! - For custom bridging, arguments should implement one or more of the following bridge-specific traits:
 //!
-//!     - `ffi::ArgTypeInfo`
-//!     - `jni::ArgTypeInfo`
-//!     - `node::ArgTypeInfo` and/or `node::AsyncArgTypeInfo`
+//!   - `ffi::ArgTypeInfo`
+//!   - `jni::ArgTypeInfo`
+//!   - `node::ArgTypeInfo` and/or `node::AsyncArgTypeInfo`
 //!
-//!     Similarly, result types conform to one or more of the following:
+//!   Similarly, result types conform to one or more of the following:
 //!
-//!     - `ffi::ResultTypeInfo`
-//!     - `jni::ResultTypeInfo`
-//!     - `node::ResultTypeInfo`
+//!   - `ffi::ResultTypeInfo`
+//!   - `jni::ResultTypeInfo`
+//!   - `node::ResultTypeInfo`
 //!
-//!    These traits define how to convert between the bridge type and the Rust type used in the
-//!    function as written. See each individual trait for more info on how to add a new type.
+//!   These traits define how to convert between the bridge type and the Rust type used in the
+//!   function as written. See each individual trait for more info on how to add a new type.
 //!
 //! # Callbacks
 //!
@@ -609,6 +606,8 @@ fn derive_bridged_as_value_inner(item: DeriveInput) -> syn::Result<proc_macro2::
     let mut node = true;
     let mut ffi = true;
     let mut jni = true;
+    let mut ffi_nice_type = None;
+    let mut jni_nice_type = None;
     let mut remote: Option<syn::Path> = None;
     let mut options = util::BridgeAsValueOptions::default();
     for attr in &item.attrs {
@@ -625,9 +624,17 @@ fn derive_bridged_as_value_inner(item: DeriveInput) -> syn::Result<proc_macro2::
                     let flag: LitBool = meta.value()?.parse()?;
                     ffi = flag.value();
                     Ok(())
+                } else if meta.path.is_ident("ffi_nice_type") {
+                    let name: LitStr = meta.value()?.parse()?;
+                    ffi_nice_type = Some(name.value());
+                    Ok(())
                 } else if meta.path.is_ident("jni") {
                     let flag: LitBool = meta.value()?.parse()?;
                     jni = flag.value();
+                    Ok(())
+                } else if meta.path.is_ident("jni_nice_type") {
+                    let name: LitStr = meta.value()?.parse()?;
+                    jni_nice_type = Some(name.value());
                     Ok(())
                 } else if meta.path.is_ident("remote") {
                     remote = Some(meta.value()?.parse()?);
@@ -654,12 +661,22 @@ fn derive_bridged_as_value_inner(item: DeriveInput) -> syn::Result<proc_macro2::
         None
     };
     let ffi = if ffi {
-        Some(ffi::derive_bridged_as_value(&item, &target, &options)?)
+        Some(ffi::derive_bridged_as_value(
+            &item,
+            &target,
+            ffi_nice_type.as_deref(),
+            &options,
+        )?)
     } else {
         None
     };
     let jni = if jni {
-        Some(jni::derive_bridged_as_value(&item, &target, &options)?)
+        Some(jni::derive_bridged_as_value(
+            &item,
+            &target,
+            jni_nice_type.as_deref(),
+            &options,
+        )?)
     } else {
         None
     };
@@ -766,20 +783,21 @@ pub fn derive_bridged_as_value(item: TokenStream) -> TokenStream {
 
 fn derive_structural_from_inner(item: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let mut from: Option<syn::Path> = None;
+    let mut impl_into = false;
     for attr in &item.attrs {
         if attr.path().is_ident("structural_from") {
             attr.parse_nested_meta(|meta| {
-                from = Some(meta.path);
+                if meta.path.is_ident("into") {
+                    impl_into = true;
+                } else {
+                    from = Some(meta.path);
+                }
                 Ok(())
             })?;
         }
     }
+    let ident = &item.ident;
     let from = from.ok_or_else(|| syn::Error::new_spanned(&item, "Missing structural_from()"))?;
-    let impl_ = util::Impl::new(
-        &item,
-        &item.ident.clone().into(),
-        Some(parse_quote!(From<#from>)),
-    );
     let util::DeriveInputInfo {
         patterns: to_patterns,
         field_names,
@@ -790,8 +808,24 @@ fn derive_structural_from_inner(item: DeriveInput) -> syn::Result<proc_macro2::T
         patterns: from_patterns,
         ..
     } = util::DeriveInputInfo::new(&item, &from);
+    let into_impl = if impl_into {
+        Some(quote! {
+            impl From<#ident> for #from {
+                fn from(from_value: #ident) -> Self {
+                    match from_value {
+                        #(#to_patterns => {
+                            #(let #field_names = #field_names.into();)*
+                            #from_patterns
+                        })*
+                    }
+                }
+            }
+        })
+    } else {
+        None
+    };
     Ok(quote! {
-        #impl_ {
+        impl From<#from> for #ident {
             fn from(from_value: #from) -> Self {
                 match from_value {
                     #(#from_patterns => {
@@ -801,6 +835,7 @@ fn derive_structural_from_inner(item: DeriveInput) -> syn::Result<proc_macro2::T
                 }
             }
         }
+        #into_impl
     })
 }
 

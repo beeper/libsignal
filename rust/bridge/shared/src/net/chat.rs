@@ -15,7 +15,9 @@ use itertools::Itertools as _;
 use libsignal_account_keys::SvrKey;
 use libsignal_bridge_macros::{bridge_fn, bridge_io};
 use libsignal_bridge_types::crypto::RandomNumberGenerator;
-use libsignal_bridge_types::net::chat::remote_derives::ListMediaResponse;
+use libsignal_bridge_types::net::chat::remote_derives::{
+    CallQualitySurveyInternal, ListMediaResponse,
+};
 use libsignal_bridge_types::net::chat::*;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
 use libsignal_bridge_types::support::AsType;
@@ -36,8 +38,9 @@ use libsignal_net_chat::api::messages::{
 use libsignal_net_chat::api::profiles::UnauthenticatedAccountExistenceApi;
 use libsignal_net_chat::api::usernames::UnauthenticatedChatApi as _;
 use libsignal_net_chat::api::{RequestError, UploadForm, UserBasedAuthorization};
+use libsignal_net_chat::grpc::backups::RedeemBackupReceiptFailure;
 use libsignal_net_chat::grpc::devices::{DeviceIdNotFoundInAccount, LinkedDevice};
-use libsignal_net_chat::grpc::usernames::UsernameNotAvailable;
+use libsignal_net_chat::grpc::usernames::{ConfirmUsernameError, UsernameNotAvailable};
 use libsignal_net_chat::stream_util::{BulkPolledStreamChunk, BulkPolledStreamTerminationReason};
 use libsignal_net_chat::ws::OverWs;
 use libsignal_protocol::{CiphertextMessage, Timestamp};
@@ -834,6 +837,24 @@ async fn AuthenticatedChatConnection_reserve_username_hash(
         .await
 }
 
+// We bridge the username as a String, but we expect it to have been produced by the `usernames`
+// crate.
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_confirm_username(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    username: String,
+    username_ciphertext: Vec<u8>,
+    rng: RandomNumberGenerator,
+) -> Result<Uuid, RequestError<ConfirmUsernameError>> {
+    let username = ::usernames::Username::new(&username)
+        .expect("should only be called with an already-validated username");
+    let mut rng = rng.create();
+    chat.require_grpc()
+        .await
+        .confirm_username(&username, username_ciphertext, &mut rng)
+        .await
+}
+
 #[allow(clippy::too_many_arguments)]
 #[bridge_io(TokioAsyncContext, jni = false)]
 async fn AuthenticatedChatConnection_send_message(
@@ -1081,4 +1102,26 @@ async fn AuthenticatedChatConnection_clear_push_token(
     chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
 ) -> Result<(), RequestError<Infallible>> {
     chat.require_grpc().await.clear_push_token().await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_submit_call_quality_survey(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    survey: CallQualitySurveyInternal,
+) -> Result<(), RequestError<core::convert::Infallible>> {
+    chat.require_grpc()
+        .await
+        .submit_call_quality_survey(survey.into())
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_redeem_backup_receipt(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    presentation: Serialized<::zkgroup::receipts::ReceiptCredentialPresentation>,
+) -> Result<(), RequestError<RedeemBackupReceiptFailure>> {
+    chat.require_grpc()
+        .await
+        .redeem_backup_receipt(presentation.into_inner())
+        .await
 }

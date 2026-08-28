@@ -152,6 +152,9 @@ public object NativeTesting {
   public external fun TESTING_ClearRegistrationLockTests(): Array<Object>
 
   @JvmStatic
+  public external fun TESTING_ConfirmUsernameTests(): Array<Object>
+
+  @JvmStatic
   public external fun TESTING_ConnectionManager_isUsingProxy(manager: ObjectHandle): Int
 
   @JvmStatic
@@ -405,6 +408,24 @@ public object NativeTesting {
   public external fun TESTING_LookUpUsernameLinkTests(): Array<Object>
 
   @JvmStatic
+  public external fun TESTING_MyNiceTypeEnum_identity(x: Object): Object
+
+  @JvmStatic
+  public external fun TESTING_MyNiceTypeEnum_to_string(x: Object): String
+
+  @JvmStatic
+  public external fun TESTING_MyNiceTypeSimpleEnum_identity(x: Object): Object
+
+  @JvmStatic
+  public external fun TESTING_MyNiceTypeSimpleEnum_to_string(x: Object): String
+
+  @JvmStatic
+  public external fun TESTING_MyNiceTypeStruct_identity(x: Object): Object
+
+  @JvmStatic
+  public external fun TESTING_MyNiceTypeStruct_to_string(x: Object): String
+
+  @JvmStatic
   public external fun TESTING_MySimpleTestEnum_BridgeVec_identity(x: Array<*>): Array<*>
 
   @JvmStatic
@@ -502,6 +523,9 @@ public object NativeTesting {
   public external fun TESTING_ProcessBytestringArray(input: Array<ByteBuffer>): Array<ByteArray>
 
   @JvmStatic
+  public external fun TESTING_RedeemBackupReceiptTests(): Array<Object>
+
+  @JvmStatic
   public external fun TESTING_RegisterAccountResponse_CreateTestValue(): ObjectHandle
 
   @JvmStatic
@@ -596,6 +620,9 @@ public object NativeTesting {
   ): Unit
 
   @JvmStatic
+  public external fun TESTING_SubmitCallQualitySurveyTests(): Array<Object>
+
+  @JvmStatic
   public external fun TESTING_TestStreamChunk_return(): Object
 
   @JvmStatic
@@ -663,6 +690,30 @@ public object NativeTesting {
 
   @JvmStatic
   public external fun TESTING_conversion_DeviceId_to_string(x: Int): String
+
+  @JvmStatic
+  public external fun TESTING_conversion_Float_identity(x: Float): Float
+
+  @JvmStatic
+  public external fun TESTING_conversion_Float_to_string(x: Float): String
+
+  @JvmStatic
+  public external fun TESTING_conversion_OptionalBytes_identity(x: ByteArray?): ByteArray?
+
+  @JvmStatic
+  public external fun TESTING_conversion_OptionalBytes_to_string(x: ByteArray?): String
+
+  @JvmStatic
+  public external fun TESTING_conversion_OptionalFloat_identity(x: Float?): Float?
+
+  @JvmStatic
+  public external fun TESTING_conversion_OptionalFloat_to_string(x: Float?): String
+
+  @JvmStatic
+  public external fun TESTING_conversion_OptionalString_identity(x: String?): String?
+
+  @JvmStatic
+  public external fun TESTING_conversion_OptionalString_to_string(x: String?): String
 
   @JvmStatic
   public external fun TESTING_conversion_ServiceId_identity(x: ByteArray): ByteArray

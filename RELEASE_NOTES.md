@@ -1,6 +1,5 @@
-v0.100.0
+v0.101.2
 
-- New typed APIs:
-  - `UnauthBackupsService.listBackupMedia`
-
-- SPQR: Remove requirePqRatio argument for sessions, instead requiring for all sessions.
+- SVR: new staging releases for SVRB and SVR2 in staging
+- Typed APIs:
+  - AuthBackupsService.redeemBackupReceipt

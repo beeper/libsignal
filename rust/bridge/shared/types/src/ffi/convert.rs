@@ -22,7 +22,8 @@ use zkgroup::groups::GroupSendFullToken;
 use super::*;
 use crate::crypto::RandomNumberGenerator;
 use crate::ffi;
-use crate::io::{InputStream, SyncInputStream};
+use crate::ffi::FfiInputStreamStruct;
+use crate::io::{FfiSyncInputStreamStruct, InputStream, SyncInputStream};
 use crate::net::chat::{
     ChatListener, FfiChatListenerStruct, FfiProvisioningListenerStruct, PreKeysResponse,
     ProvisioningListener,
@@ -35,7 +36,7 @@ use crate::protocol::storage::{
     FfiSenderKeyStoreStruct, FfiSessionStoreStruct, FfiSignedPreKeyStoreStruct,
 };
 use crate::support::{
-    AsType, BridgeHandleRef, BridgeVec, BridgedCallbacks, FixedLengthBincodeSerializable,
+    Array, AsType, BridgeHandleRef, BridgeVec, BridgedCallbacks, FixedLengthBincodeSerializable,
     IllegalArgumentError, Serialized, extend_lifetime,
 };
 
@@ -219,8 +220,6 @@ impl CallbackResultTypeInfo for () {
 /// #     Ok(())
 /// # }
 /// ```
-///
-/// Implementers should also see the `ffi_result_type` macro in `convert.rs`.
 pub trait ResultTypeInfo: Sized {
     /// The FFI form of the result (e.g. `std::ffi::c_uchar`).
     type ResultType: IsCType;
@@ -378,27 +377,12 @@ impl<T: NiceArgConverter + ArgTypeInfo<'static>> NiceArgConverter for BridgeVec<
     fn register_swift_arg_converter(ctx: &mut SwiftMetadataContext) -> SwiftArgConverter {
         let t = T::register_swift_arg_converter(ctx);
         let borrowed_slice = <BorrowedSliceOf<T::ArgType> as IsCType>::register_c_type(ctx);
-        let borrowed_slice = &borrowed_slice.type_name;
-        let borrowed_slice_cons = format!(
-            "FfiBorrowedSliceConstructor_{borrowed_slice}_{}",
-            t.converter_type
-                .chars()
-                .filter(|x| x.is_alphanumeric() || *x == '_')
-                .join("")
-        );
-        crate::metadata::insert_checked(
-            &mut ctx.ffi_borrowed_slice_cons,
-            borrowed_slice_cons.clone(),
-            FfiBorrowedSliceConstructor {
-                converter_type: t.converter_type.clone(),
-                borrowed_slice: borrowed_slice.clone(),
-            },
-        );
         SwiftArgConverter {
             nice_type: format!("[{}]", t.nice_type),
             converter_type: format!(
-                "ArrayArgConverter<{}, {borrowed_slice_cons}>",
-                t.converter_type
+                "ArrayArgConverter<{}, {}>",
+                t.converter_type,
+                borrowed_slice.swift_name(),
             ),
         }
     }
@@ -462,26 +446,14 @@ impl<T: ResultTypeInfo> ResultTypeInfo for BridgeVec<T> {
 impl<T: NiceResultConverter + ResultTypeInfo> NiceResultConverter for BridgeVec<T> {
     fn register_swift_result_converter(ctx: &mut SwiftMetadataContext) -> SwiftReturnConverter {
         let t = T::register_swift_result_converter(ctx);
-        let mangled = <OwnedBufferOfMaxAligned<T::ResultType> as IsCType>::register_c_type(ctx);
-        let mangled = &mangled.type_name;
-        let proj = format!(
-            "FfiOwnedBufferOfMaxAlignedProject_{mangled}_{}",
-            t.converter_type
-                .chars()
-                .filter(|x| x.is_alphanumeric() || *x == '_')
-                .join("")
-        );
-        crate::metadata::insert_checked(
-            &mut ctx.ffi_owned_buffer_of_max_aligned_project,
-            proj.clone(),
-            FfiOwnedBufferOfMaxAlignedProject {
-                converter_type: t.converter_type.clone(),
-                buffer_type: mangled.clone(),
-            },
-        );
+        let buffer = <OwnedBufferOfMaxAligned<T::ResultType> as IsCType>::register_c_type(ctx);
         SwiftReturnConverter {
             nice_type: format!("[{}]", t.nice_type),
-            converter_type: format!("ArrayReturnConverter<{}, {proj}>", t.converter_type),
+            converter_type: format!(
+                "ArrayReturnConverter<{}, {}>",
+                t.converter_type,
+                buffer.swift_name()
+            ),
         }
     }
 }
@@ -556,6 +528,15 @@ impl SimpleArgTypeInfo for Option<String> {
             Ok(None)
         } else {
             String::convert_from(foreign).map(Some)
+        }
+    }
+}
+#[cfg(feature = "metadata")]
+impl NiceArgConverter for Option<String> {
+    fn register_swift_arg_converter(_ctx: &mut SwiftMetadataContext) -> SwiftArgConverter {
+        SwiftArgConverter {
+            nice_type: "String?".to_string(),
+            converter_type: "OptionalStringConverter".to_string(),
         }
     }
 }
@@ -730,16 +711,15 @@ impl SimpleArgTypeInfo for libsignal_net_chat::api::messages::MultiRecipientSend
 }
 
 macro_rules! zkgroup_serialize_type {
-    ($ty:ty, $swift_ty:expr) => {
+    ($ty:ty, $deser:expr, $swift_ty:expr) => {
         impl SimpleArgTypeInfo for $ty {
             type ArgType = BorrowedSliceOf<c_uchar>;
 
             fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
                 let slice = unsafe { foreign.as_slice()? };
-                let token =
-                    zkgroup::deserialize(slice).map_err(|_: ZkGroupDeserializationFailure| {
-                        IllegalArgumentError::new(concat!("bad ", stringify!($ty)))
-                    })?;
+                let token = ($deser)(slice).map_err(|_: ZkGroupDeserializationFailure| {
+                    IllegalArgumentError::new(concat!("bad ", stringify!($ty)))
+                })?;
                 Ok(token)
             }
         }
@@ -753,6 +733,9 @@ macro_rules! zkgroup_serialize_type {
             }
         }
     };
+    ($ty:ty, $swift_ty:expr) => {
+        zkgroup_serialize_type!($ty, zkgroup::deserialize, $swift_ty);
+    };
 }
 zkgroup_serialize_type!(GroupSendFullToken, "GroupSendFullToken");
 zkgroup_serialize_type!(
@@ -761,6 +744,7 @@ zkgroup_serialize_type!(
 );
 zkgroup_serialize_type!(
     zkgroup::generic_server_params::GenericServerPublicParams,
+    TryFrom::try_from,
     "GenericServerPublicParams"
 );
 
@@ -1594,6 +1578,24 @@ where
     }
 }
 
+#[cfg(feature = "metadata")]
+impl<T> NiceArgConverter for Serialized<T>
+where
+    T: FixedLengthBincodeSerializable,
+{
+    fn register_swift_arg_converter(ctx: &mut SwiftMetadataContext) -> SwiftArgConverter {
+        ctx.fixed_byte_array_lengths.insert(T::Array::LEN);
+        let name = T::name();
+        SwiftArgConverter {
+            converter_type: format!(
+                "FixedLengthSerializedConverter<{name}, {}>",
+                names::fixed_byte_array_helper(T::Array::LEN)
+            ),
+            nice_type: name,
+        }
+    }
+}
+
 impl<T, P> SimpleArgTypeInfo for AsType<T, P>
 where
     P: TryInto<T, Error: Display> + SimpleArgTypeInfo,
@@ -2040,6 +2042,67 @@ trivial!(i64, "Int64");
 trivial!(usize, "UInt");
 trivial!(bool, "Bool");
 trivial!(f64, "Double");
+trivial!(f32, "Float");
+
+macro_rules! simple_optional {
+    ($ty:ty) => {
+        impl SimpleArgTypeInfo for Option<$ty> {
+            type ArgType = OptionalOf<<$ty as SimpleArgTypeInfo>::ArgType>;
+
+            fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+                Ok(if foreign.present {
+                    Some(<$ty as SimpleArgTypeInfo>::convert_from(unsafe {
+                        foreign.value.assume_init_read()
+                    })?)
+                } else {
+                    None
+                })
+            }
+        }
+        #[cfg(feature = "metadata")]
+        impl NiceArgConverter for Option<$ty> {
+            fn register_swift_arg_converter(ctx: &mut SwiftMetadataContext) -> SwiftArgConverter {
+                let opt = <OptionalOf<<$ty as SimpleArgTypeInfo>::ArgType>>::register_c_type(ctx);
+                let opt = opt.swift_name();
+                let ty = <$ty as NiceArgConverter>::register_swift_arg_converter(ctx);
+                SwiftArgConverter {
+                    nice_type: format!("{}?", ty.nice_type),
+                    converter_type: format!("OptionalArgConverter<{}, {opt}>", ty.converter_type),
+                }
+            }
+        }
+        impl ResultTypeInfo for Option<$ty> {
+            type ResultType = OptionalOf<<$ty as ResultTypeInfo>::ResultType>;
+
+            fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
+                Ok(if let Some(x) = self {
+                    OptionalOf::some(x.convert_into()?)
+                } else {
+                    OptionalOf::NONE
+                })
+            }
+        }
+        #[cfg(feature = "metadata")]
+        impl NiceResultConverter for Option<$ty> {
+            fn register_swift_result_converter(
+                ctx: &mut SwiftMetadataContext,
+            ) -> SwiftReturnConverter {
+                let opt = OptionalOf::<<$ty as ResultTypeInfo>::ResultType>::register_c_type(ctx);
+                let opt = opt.swift_name();
+                let ty = <$ty as NiceResultConverter>::register_swift_result_converter(ctx);
+                SwiftReturnConverter {
+                    nice_type: format!("{}?", ty.nice_type),
+                    converter_type: format!(
+                        "OptionalReturnConverter<{}, {opt}>",
+                        ty.converter_type
+                    ),
+                }
+            }
+        }
+    };
+}
+simple_optional!(f32);
+simple_optional!(Vec<u8>);
 
 #[cfg(test)]
 mod test {

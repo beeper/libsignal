@@ -95,6 +95,10 @@ export enum ErrorCode {
 
   UsernameNotAvailable,
   UsernameNotSet,
+  UsernameReservationNotFound,
+
+  InvalidReceipt,
+  MissingBackupId,
 }
 
 /** Called out as a separate type so it's not confused with a normal ServiceIdBinary. */
@@ -506,9 +510,23 @@ export type StandardNetworkError =
   | ChatServiceInactive
   | IoError
   | RateLimitedError;
+
 export type UsernameNotSet = LibSignalErrorCommon & {
   code: ErrorCode.UsernameNotSet;
 };
+
+export type UsernameReservationNotFound = LibSignalErrorCommon & {
+  code: ErrorCode.UsernameReservationNotFound;
+};
+
+export type InvalidReceiptError = LibSignalErrorCommon & {
+  code: ErrorCode.InvalidReceipt;
+};
+
+export type MissingBackupId = LibSignalErrorCommon & {
+  code: ErrorCode.MissingBackupId;
+};
+
 export type LibSignalError =
   | GenericError
   | DuplicatedMessageError
@@ -575,4 +593,7 @@ export type LibSignalError =
   | RegistrationCredentialsCouldNotBeParsedError
   | DeviceIdNotFound
   | UsernameNotAvailable
-  | UsernameNotSet;
+  | UsernameNotSet
+  | UsernameReservationNotFound
+  | InvalidReceiptError
+  | MissingBackupId;

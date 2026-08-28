@@ -9,13 +9,13 @@ import org.signal.libsignal.internal.CalledFromNative
 import java.io.IOException
 
 /**
- * None of the candidate usernames were available.
+ * The requested username (or every requested candidate) was not available.
  *
  * See the specific request docs for more information.
  */
 public class UsernameNotAvailableException :
   IOException,
-  BadRequestError {
+  ConfirmUsernameError {
   @CalledFromNative
   public constructor(message: String) : super(message) {
   }

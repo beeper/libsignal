@@ -1,6 +1,6 @@
 {
   "name": "@signalapp/libsignal-client",
-  "version": "0.100.0",
+  "version": "0.101.2",
   "repository": "github:signalapp/libsignal",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -71,7 +71,7 @@
     "sinon": "^21.0.0",
     "sinon-chai": "^4.0.1",
     "source-map-support": "^0.5.19",
-    "typescript": "5.9.3",
-    "typescript-eslint": "^8.44.0"
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8.59.3"
   }
 }

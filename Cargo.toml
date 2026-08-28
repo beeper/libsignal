@@ -42,7 +42,7 @@ default-members = [
 resolver = "2" # so that our dev-dependency features don't leak into products
 
 [workspace.package]
-version = "0.100.0"
+version = "0.101.2"
 authors = ["Signal Messenger LLC"]
 license = "AGPL-3.0-only"
 rust-version = "1.88"
@@ -92,12 +92,12 @@ signal-neon-futures = { path = "rust/bridge/node/futures" }
 # Our forks of some dependencies, accessible as xxx_signal so that usages of them are obvious in source code. Crates
 # that want to use the real things can depend on those directly.
 
-boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v5.0.2", package = "boring", default-features = false }
+boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v5.2.0", package = "boring", default-features = false }
 spqr = { git = "https://github.com/signalapp/SparsePostQuantumRatchet.git", tag = "v1.5.3" }
-tokio-boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v5.0.2", package = "tokio-boring" }
+tokio-boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v5.2.0", package = "tokio-boring" }
 
 aes = "0.9.1"
-aes-gcm-siv = "0.11.1"
+aes-gcm-siv = "0.12.0"
 anyhow = "1.0.97"
 arbitrary = "1.4.2"
 argon2 = "0.5.0"
@@ -162,9 +162,9 @@ linkme = "0.3.33"
 log = "0.4.21"
 macro_rules_attribute = "0.2.0"
 mediasan-common = "0.5.3"
-minidump = { version = "0.22.1", default-features = false }
-minidump-processor = { version = "0.22.1", default-features = false }
-minidump-unwind = { version = "0.22.1", default-features = false }
+minidump = { version = "0.27.0", default-features = false }
+minidump-processor = { version = "0.27.0", default-features = false }
+minidump-unwind = { version = "0.27.0", default-features = false }
 minijinja = "2.19.0"
 mp4san = "0.5.3"
 neon = { version = "1.1.0", default-features = false }
@@ -240,8 +240,8 @@ zeroize = "1.8.2"
 [patch.crates-io]
 # When building libsignal, just use our forks so we don't end up with two different versions of the libraries.
 
-boring = { git = 'https://github.com/signalapp/boring', tag = "signal-v5.0.2" }
-boring-sys = { git = 'https://github.com/signalapp/boring', tag = "signal-v5.0.2" }
+boring = { git = 'https://github.com/signalapp/boring', tag = "signal-v5.2.0" }
+boring-sys = { git = 'https://github.com/signalapp/boring', tag = "signal-v5.2.0" }
 
 [profile.dev.package.argon2]
 opt-level = 2 # libsignal-account-keys unit tests are too slow with an unoptimized argon2

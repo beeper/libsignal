@@ -159,7 +159,7 @@ impl<'a> jni::SimpleArgTypeInfo<'a> for ErrorOnBorrow {
         _env: &mut ::jni::Env<'a>,
         _foreign: &Self::ArgType,
     ) -> Result<Self, jni::BridgeLayerError> {
-        Err(jni::BridgeLayerError::BadArgument(
+        Err(jni::BridgeLayerError::bad_argument(
             "deliberate error".to_string(),
         ))
     }
@@ -333,7 +333,7 @@ impl<'a> jni::ResultTypeInfo<'a> for ErrorOnReturn {
         self,
         _env: &mut ::jni::Env<'a>,
     ) -> Result<Self::ResultType, jni::BridgeLayerError> {
-        Err(jni::BridgeLayerError::BadArgument(
+        Err(jni::BridgeLayerError::bad_argument(
             "deliberate error".to_string(),
         ))
     }
@@ -694,4 +694,61 @@ pub fn TESTING_ReturnIoError() -> BridgedError<std::io::Error> {
 #[bridge_fn(nice = true)]
 pub fn TESTING_ReturnSomeIoError(present: bool) -> Option<BridgedError<std::io::Error>> {
     present.then(|| BridgedError(std::io::Error::other("testing")))
+}
+
+#[derive(BridgedAsValue, serde::Serialize)]
+#[bridge(
+    ffi_nice_type = "MyNiceTypeStruct",
+    jni_nice_type = "org.signal.libsignal.internal.MyNiceTypeStruct"
+)]
+pub struct MyNiceTypeStructNot {
+    x: i32,
+    y: i32,
+}
+
+#[derive(BridgedAsValue, serde::Serialize)]
+#[bridge(
+    ffi_nice_type = "MyNiceTypeEnum",
+    jni_nice_type = "org.signal.libsignal.internal.MyNiceTypeEnum"
+)]
+pub enum MyNiceTypeEnumNot {
+    Unit,
+    Single(i32),
+}
+
+#[derive(BridgedAsValue, serde::Serialize)]
+#[bridge(
+    ffi_nice_type = "MyNiceTypeSimpleEnum",
+    jni_nice_type = "org.signal.libsignal.internal.MyNiceTypeSimpleEnum"
+)]
+pub enum MyNiceTypeSimpleEnumNot {
+    A,
+    B,
+}
+
+#[bridge_fn(nice = true, node = false)]
+pub fn TESTING_MyNiceTypeStruct_identity(x: MyNiceTypeStructNot) -> MyNiceTypeStructNot {
+    x
+}
+#[bridge_fn(nice = true, node = false)]
+pub fn TESTING_MyNiceTypeStruct_to_string(x: MyNiceTypeStructNot) -> String {
+    serde_json::to_string(&x).expect("can convert to json")
+}
+#[bridge_fn(nice = true, node = false)]
+pub fn TESTING_MyNiceTypeEnum_identity(x: MyNiceTypeEnumNot) -> MyNiceTypeEnumNot {
+    x
+}
+#[bridge_fn(nice = true, node = false)]
+pub fn TESTING_MyNiceTypeEnum_to_string(x: MyNiceTypeEnumNot) -> String {
+    serde_json::to_string(&x).expect("can convert to json")
+}
+#[bridge_fn(nice = true, node = false)]
+pub fn TESTING_MyNiceTypeSimpleEnum_identity(
+    x: MyNiceTypeSimpleEnumNot,
+) -> MyNiceTypeSimpleEnumNot {
+    x
+}
+#[bridge_fn(nice = true, node = false)]
+pub fn TESTING_MyNiceTypeSimpleEnum_to_string(x: MyNiceTypeSimpleEnumNot) -> String {
+    serde_json::to_string(&x).expect("can convert to json")
 }

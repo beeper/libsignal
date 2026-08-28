@@ -8,6 +8,7 @@ use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use libsignal_bridge_types::net::TokioAsyncContext;
 #[cfg(any(feature = "ffi", feature = "jni", feature = "node",))]
 use libsignal_bridge_types::net::chat::BridgeDeleteBackupMediaItem;
+use libsignal_bridge_types::net::chat::remote_derives::CallQualitySurveyInternal;
 use libsignal_bridge_types::net::chat::{
     AuthenticatedChatConnection, BridgeCopyBackupMediaItem, ChatListener, HttpRequest,
     ProvisioningChatConnection, ProvisioningListener, UnauthenticatedChatConnection,
@@ -541,6 +542,20 @@ mod remote_derives {
     }
 
     #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(libsignal_net_chat::grpc::usernames::test_cases::ConfirmUsernameArgs)]
+    pub(super) struct ConfirmUsernameArgs {
+        username: String,
+        username_ciphertext: Vec<u8>,
+    }
+    #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(libsignal_net_chat::grpc::usernames::test_cases::ConfirmUsernameOut)]
+    pub(super) enum ConfirmUsernameOut {
+        Success(Uuid),
+        ReservationNotFound,
+        UsernameNotAvailable,
+    }
+
+    #[derive(BridgedAsValue, StructuralFrom)]
     #[structural_from(libsignal_net_chat::grpc::usernames::test_cases::SetUsernameLinkArgs)]
     pub struct SetUsernameLinkArgs {
         pub username_ciphertext: Vec<u8>,
@@ -665,6 +680,16 @@ mod remote_derives {
         CredentialRejected,
         MissingResponse,
     }
+
+    #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(libsignal_net_chat::grpc::backups::test_cases::RedeemBackupReceiptOut)]
+    #[bridge(arg = false)]
+    pub enum RedeemBackupReceiptOut {
+        Success,
+        InvalidReceipt,
+        MissingBackupId,
+        MissingResponse,
+    }
 }
 
 #[bridge_fn(nice = true)]
@@ -683,6 +708,11 @@ fn TESTING_RemoveDeviceTests()
 fn TESTING_ReserveUsernameHashTests()
 -> GrpcTestCases<remote_derives::ReserveUsernameHashArgs, remote_derives::ReserveUsernameHashOut> {
     libsignal_net_chat::grpc::usernames::test_cases::reserve_username_hash_test_cases().into()
+}
+#[bridge_fn(nice = true)]
+fn TESTING_ConfirmUsernameTests()
+-> GrpcTestCases<remote_derives::ConfirmUsernameArgs, remote_derives::ConfirmUsernameOut> {
+    libsignal_net_chat::grpc::usernames::test_cases::confirm_username_test_cases().into()
 }
 #[bridge_fn(nice = true)]
 fn TESTING_SetUsernameLinkTests()
@@ -800,4 +830,19 @@ fn TESTING_GetBackupSvrBCredentialsTests()
 fn TESTING_BackupListMediaTests()
 -> GrpcTestCases<remote_derives::ListMediaArgs, remote_derives::ListMediaOut> {
     libsignal_net_chat::grpc::backups::test_cases::list_media_test_cases().into()
+}
+#[bridge_fn(nice = true)]
+fn TESTING_SubmitCallQualitySurveyTests() -> GrpcTestCases<CallQualitySurveyInternal, ()> {
+    libsignal_net_chat::grpc::call_quality::test_cases::submit_call_quality_survey_test_cases()
+        .into()
+}
+
+#[bridge_fn(nice = true)]
+fn TESTING_RedeemBackupReceiptTests()
+-> GrpcTestCases<Vec<u8>, remote_derives::RedeemBackupReceiptOut> {
+    GrpcTestCases::from_iter(
+        libsignal_net_chat::grpc::backups::test_cases::redeem_receipt_test_cases()
+            .into_iter()
+            .map(|next| next.map_request(|presentation| ::zkgroup::serialize(&presentation))),
+    )
 }

@@ -4,6 +4,7 @@
 //
 
 use std::ffi::CString;
+use std::mem::MaybeUninit;
 
 use derive_where::derive_where;
 use libsignal_bridge_macros::c_export;
@@ -27,16 +28,8 @@ pub use error::*;
 mod futures;
 pub use futures::*;
 
-// TODO: These re-exports are because of the ffi_arg_type macro expecting all bridging structs to be
-// under the ffi module; eventually we should be able to remove it.
-pub use crate::io::FfiSyncInputStreamStruct;
-pub use crate::protocol::storage::{
-    FfiIdentityKeyStoreStruct, FfiKyberPreKeyStoreStruct, FfiPreKeyStoreStruct,
-    FfiSenderKeyStoreStruct, FfiSessionStoreStruct, FfiSignedPreKeyStoreStruct,
-};
-
 #[c_export]
-pub type FfiInputStreamStruct = FfiSyncInputStreamStruct;
+pub type FfiInputStreamStruct = crate::io::FfiSyncInputStreamStruct;
 #[c_export]
 type ConstPointerFfiInputStreamStruct = ConstPointer<FfiInputStreamStruct>;
 
@@ -45,9 +38,9 @@ pub struct NullPointerError;
 
 #[repr(C)]
 #[derive(IsCType)]
-#[capi(export_name_override = borrowed_slice_of_name_override)]
-pub struct BorrowedSliceOf<T> {
-    base: *const T,
+#[capi(export_name_override = borrowed_slice_of_name_override, swift_protocol)]
+pub struct BorrowedSliceOf<Element> {
+    base: *const Element,
     length: usize,
 }
 #[cfg(feature = "metadata")]
@@ -128,8 +121,17 @@ impl<T> BorrowedMutableSliceOf<T> {
 /// function for each type).
 #[repr(C)]
 #[derive(IsCType)]
-pub struct OwnedBufferOfMaxAligned<T> {
-    pub base: *mut T,
+#[capi(swift_protocol)]
+pub struct OwnedBufferOfMaxAligned<Element> {
+    pub base: *mut Element,
+    pub length: usize,
+    pub size_bytes: usize,
+}
+
+#[repr(C)]
+#[derive(IsCType)]
+pub struct OwnedBufferOfMaxAlignedErased {
+    pub base: *mut std::ffi::c_void,
     pub length: usize,
     pub size_bytes: usize,
 }
@@ -327,6 +329,26 @@ pub struct PairOf<First, Second> {
 }
 
 #[repr(C)]
+#[derive(IsCType)]
+#[capi(swift_protocol)]
+pub struct OptionalOf<Contents> {
+    pub present: bool,
+    pub value: MaybeUninit<Contents>,
+}
+impl<T> OptionalOf<T> {
+    pub const NONE: Self = OptionalOf {
+        present: false,
+        value: MaybeUninit::uninit(),
+    };
+    pub const fn some(t: T) -> Self {
+        OptionalOf {
+            present: true,
+            value: MaybeUninit::new(t),
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Default, IsCType)]
 pub struct OptionalPairOf<A, B> {
     pub present: bool,
@@ -469,10 +491,9 @@ impl std::fmt::Debug for UnexpectedPanic {
     }
 }
 
-// Wrapper for a `*mut T` that gets translated by cbindgen into a named struct
-// type in the generated C header file. This is useful because the consuming
-// Swift code considers all opaque pointers to be the same type, but
-// differentiates between the generated named struct types.
+// Wrapper for a `*mut T` that gets translated into a named struct type in the generated C header
+// file. This is useful because the consuming Swift code considers all opaque pointers to be the
+// same type, but differentiates between the generated named struct types.
 #[repr(C)]
 #[derive(derive_more::From, zerocopy::FromZeros, IsCType)]
 #[derive_where(Copy, Clone, Debug, PartialEq, Eq)]
@@ -603,7 +624,6 @@ mod type_aliases {
     use static_assertions::const_assert_eq;
 
     use crate::ffi::capi::IsCType;
-    use crate::ffi::{CPromise, FfiCdsiLookupResponseEntry, OptionalPairOf, OwnedBufferOf, PairOf};
 
     #[c_export]
     type AesKeyBytes = zkgroup::AesKeyBytes;
@@ -632,44 +652,21 @@ mod type_aliases {
     #[c_export]
     type ServiceIdFixedWidthBinaryBytes = libsignal_core::ServiceIdFixedWidthBinaryBytes;
     #[c_export]
-    type IdentityKeyStore = super::FfiIdentityKeyStoreStruct;
+    type IdentityKeyStore = crate::protocol::storage::FfiIdentityKeyStoreStruct;
     #[c_export]
-    type KyberPreKeyStore = super::FfiKyberPreKeyStoreStruct;
+    type KyberPreKeyStore = crate::protocol::storage::FfiKyberPreKeyStoreStruct;
     #[c_export]
-    type PreKeyStore = super::FfiPreKeyStoreStruct;
+    type PreKeyStore = crate::protocol::storage::FfiPreKeyStoreStruct;
     #[c_export]
-    type SenderKeyStore = super::FfiSenderKeyStoreStruct;
+    type SenderKeyStore = crate::protocol::storage::FfiSenderKeyStoreStruct;
     #[c_export]
-    type SessionStore = super::FfiSessionStoreStruct;
+    type SessionStore = crate::protocol::storage::FfiSessionStoreStruct;
     #[c_export]
-    type SignedPreKeyStore = super::FfiSignedPreKeyStoreStruct;
+    type SignedPreKeyStore = crate::protocol::storage::FfiSignedPreKeyStoreStruct;
     #[c_export]
     type InputStream = super::FfiInputStreamStruct;
     #[c_export]
-    type SyncInputStream = super::FfiSyncInputStreamStruct;
-
-    // Shim exports to support cbindgen's name mangling
-    #[c_export]
-    type CPromiseOwnedBufferOfServiceIdFixedWidthBinaryBytes =
-        CPromise<OwnedBufferOf<ServiceIdFixedWidthBinaryBytes>>;
-    #[c_export]
-    #[allow(non_camel_case_types)]
-    type CPromiseOwnedBufferOfc_uchar = CPromise<OwnedBufferOf<u8>>;
-    #[c_export]
-    #[allow(non_camel_case_types)]
-    type CPromisePairOfOwnedBufferOfc_ucharOwnedBufferOfc_uchar =
-        CPromise<PairOf<OwnedBufferOf<u8>, OwnedBufferOf<u8>>>;
-    #[c_export]
-    type OptionalPairOfCStringPtru832 = OptionalPairOf<*const std::ffi::c_char, [u8; 32]>;
-    #[c_export]
-    type OwnedBufferOfFfiCdsiLookupResponseEntry = OwnedBufferOf<FfiCdsiLookupResponseEntry>;
-    #[c_export]
-    #[allow(non_camel_case_types)]
-    type PairOfOwnedBufferOfc_ucharOwnedBufferOfc_uchar =
-        PairOf<OwnedBufferOf<u8>, OwnedBufferOf<u8>>;
-    #[c_export]
-    type CPromiseOptionalPairOfCStringPtru832 =
-        CPromise<OptionalPairOf<*const std::ffi::c_char, [u8; 32]>>;
+    type SyncInputStream = crate::io::FfiSyncInputStreamStruct;
 
     #[repr(C)]
     #[derive(IsCType)]

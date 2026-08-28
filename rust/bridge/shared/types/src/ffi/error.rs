@@ -146,6 +146,9 @@ pub enum SignalErrorCode {
     DeviceIdNotFound = 224,
     UsernameNotAvailable = 225,
     UsernameNotSet = 226,
+    UsernameReservationNotFound = 227,
+    InvalidReceipt = 228,
+    MissingBackupId = 229,
 }
 
 pub trait UpcastAsAny {
@@ -865,6 +868,16 @@ impl IntoFfiError for UsernameNotAvailable {
     }
 }
 
+impl IntoFfiError for libsignal_net_chat::grpc::backups::RedeemBackupReceiptFailure {
+    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
+        let code = match self {
+            Self::InvalidOrExpiredReceipt => SignalErrorCode::InvalidReceipt,
+            Self::MissingBackupId => SignalErrorCode::MissingBackupId,
+        };
+        SimpleError::new(code, self.to_string())
+    }
+}
+
 impl IntoFfiError for libsignal_net_chat::api::DisconnectedError {
     fn into_ffi_error(self) -> impl Into<SignalFfiError> {
         let code = match self {
@@ -1327,5 +1340,18 @@ impl From<WithContext<SignalFfiError>> for std::io::Error {
 impl IntoFfiError for libsignal_net_chat::grpc::usernames::UsernameNotSet {
     fn into_ffi_error(self) -> impl Into<SignalFfiError> {
         SimpleError::new(SignalErrorCode::UsernameNotSet, self.to_string())
+    }
+}
+
+impl IntoFfiError for libsignal_net_chat::grpc::usernames::ConfirmUsernameError {
+    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
+        use libsignal_net_chat::grpc::usernames::ConfirmUsernameError;
+        let code = match self {
+            ConfirmUsernameError::ReservationNotFound => {
+                SignalErrorCode::UsernameReservationNotFound
+            }
+            ConfirmUsernameError::UsernameNotAvailable => SignalErrorCode::UsernameNotAvailable,
+        };
+        SimpleError::new(code, self.to_string())
     }
 }

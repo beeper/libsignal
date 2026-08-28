@@ -393,6 +393,7 @@ fn derive_bridged_as_value_arg(
         &parse_quote!(#krate::node::NiceArgConverter),
         &parse_quote!(register_ts_nice_type),
         &mut impl_nice_arg_converter.extra_where,
+        None,
     )?;
     let register_ts_arg_converter = nice_type_metadata(
         input,
@@ -401,6 +402,7 @@ fn derive_bridged_as_value_arg(
         &parse_quote!(#krate::node::NiceArgConverter),
         &parse_quote!(register_ts_arg_converter),
         &mut impl_nice_arg_converter.extra_where,
+        None,
     )?;
     let stored_decl_name = format_ident!("{ident}NodeArgStoredType");
     let stored_decl = arg_type_info_storage_decl(&stored_decl_name, input, target);
@@ -409,11 +411,11 @@ fn derive_bridged_as_value_arg(
         #stored_decl
         #[cfg(feature = "node")]
         impl<
-            #(#variant_names: ::neon::types::Finalize),*
+            #(#variant_names: #krate::node::NodeFinalizeTuple),*
         > ::neon::types::Finalize for #stored_decl_name<#(#variant_names),*> {
             fn finalize<'a, C: ::neon::context::Context<'a>>(self, cx: &mut C) {
                 match self {#(
-                    Self::#variant_names(x) => x.finalize(cx),
+                    Self::#variant_names(x) => #krate::node::NodeFinalizeTuple::tuple_finalize(x, cx),
                 )*}
             }
         }
@@ -422,7 +424,7 @@ fn derive_bridged_as_value_arg(
             type ArgType = ::neon::types::JsObject;
             type StoredType = #stored_decl_name<#(
                 (
-                    #(<#field_types as #krate::node::ArgTypeInfo<'storage, 'context>>::StoredType),*
+                    #(<#field_types as #krate::node::ArgTypeInfo<'storage, 'context>>::StoredType,)*
                 ),
             )*>;
             fn borrow(
@@ -438,14 +440,14 @@ fn derive_bridged_as_value_arg(
                                 foreign_arg.get(cx, stringify!(#field_names))?;
                             let #field_names = <#field_types as #krate::node::ArgTypeInfo<'storage, 'context>>::borrow(cx, #field_names)?;
                         )*
-                        Ok(#stored_decl_name::#variant_names((#(#field_names),*)))
+                        Ok(#stored_decl_name::#variant_names((#(#field_names,)*)))
                     },)*
                     _ => ::neon::context::Context::throw_range_error(cx, concat!("Invalid variant __type for ", stringify!(#ident))),
                 }
             }
             fn load_from(stored_arg: &'storage mut Self::StoredType) -> Self {
                 match stored_arg {#(
-                    #stored_decl_name::#variant_names((#(#field_names),*)) => {
+                    #stored_decl_name::#variant_names((#(#field_names,)*)) => {
                         #(let #field_names = #krate::node::ArgTypeInfo::load_from(#field_names);)*
                         #field_patterns
                     },
@@ -461,7 +463,7 @@ fn derive_bridged_as_value_arg(
             type ArgType = ::neon::types::JsObject;
             type StoredType = #stored_decl_name<#(
                 (
-                    #(<#field_types as #krate::node::AsyncArgTypeInfo<'storage>>::StoredType),*
+                    #(<#field_types as #krate::node::AsyncArgTypeInfo<'storage>>::StoredType,)*
                 ),
             )*>;
             fn save_async_arg(
@@ -477,14 +479,14 @@ fn derive_bridged_as_value_arg(
                                 foreign_arg.get(cx, stringify!(#field_names))?;
                             let #field_names = <#field_types as #krate::node::AsyncArgTypeInfo<'storage>>::save_async_arg(cx, #field_names)?;
                         )*
-                        Ok(#stored_decl_name::#variant_names((#(#field_names),*)))
+                        Ok(#stored_decl_name::#variant_names((#(#field_names,)*)))
                     },)*
                     _ => ::neon::context::Context::throw_range_error(cx, concat!("Invalid variant __type for ", stringify!(#ident))),
                 }
             }
             fn load_async_arg(stored_arg: &'storage mut Self::StoredType) -> Self {
                 match stored_arg {#(
-                    #stored_decl_name::#variant_names((#(#field_names),*)) => {
+                    #stored_decl_name::#variant_names((#(#field_names,)*)) => {
                         #(let #field_names = #krate::node::AsyncArgTypeInfo::load_async_arg(#field_names);)*
                         #field_patterns
                     },
@@ -538,6 +540,7 @@ fn derive_bridged_as_value_return(
         &parse_quote!(#krate::node::NiceResultConverter),
         &parse_quote!(register_ts_nice_type),
         &mut impl_nice_result_converter.extra_where,
+        None,
     )?;
     let register_ts_result_converter = nice_type_metadata(
         input,
@@ -546,6 +549,7 @@ fn derive_bridged_as_value_return(
         &parse_quote!(#krate::node::NiceResultConverter),
         &parse_quote!(register_ts_result_converter),
         &mut impl_nice_result_converter.extra_where,
+        None,
     )?;
     let DeriveInputInfo {
         patterns,
