@@ -19,7 +19,13 @@ import {
   ProvisioningConnection,
   ProvisioningConnectionListener,
 } from './net/Chat.js';
-import { RegistrationService } from './net/Registration.js';
+import {
+  RegisterAccountResponse,
+  RegisterAccountWithoutNumberArgs,
+  RegistrationService,
+  ReregisterAccountArgs,
+  ReregisterAccountWithoutNumberArgs,
+} from './net/Registration.js';
 import { Svr2 } from './net/Svr2.js';
 import { SvrB } from './net/SvrB.js';
 import { BridgedStringMap, newNativeHandle } from './internal.js';
@@ -29,11 +35,17 @@ export * from './net/Chat.js';
 export * from './net/chat/AuthAccountsService.js';
 export * from './net/chat/AuthBackupsService.js';
 export * from './net/chat/AuthDevicesService.js';
+export * from './net/chat/AuthKeysService.js';
 export * from './net/chat/AuthMessagesService.js';
+export * from './net/chat/AuthPaymentsService.js';
+export * from './net/chat/AuthStickersService.js';
 export * from './net/chat/AuthUsernamesService.js';
 export * from './net/chat/UnauthBackupsService.js';
 export * from './net/chat/UnauthCallQualityService.js';
+export * from './net/chat/UnauthCredentialsService.js';
 export * from './net/chat/UnauthKeysService.js';
+export * from './net/chat/UnauthLoginPurchaseService.js';
+
 export * from './net/chat/UnauthMessagesService.js';
 export * from './net/chat/UnauthProfilesService.js';
 export * from './net/chat/UnauthUsernamesService.js';
@@ -322,6 +334,65 @@ export class Net {
         tokioAsyncContext: this.asyncContext,
       },
       { e164 }
+    );
+  }
+
+  /**
+   * Re-registers an account that has a phone number.
+   *
+   * Uses the account's recovery password to authenticate instead of a
+   * verification session, so there is no session to create or resume.
+   */
+  public async reregisterAccount(
+    args: Readonly<ReregisterAccountArgs>
+  ): Promise<RegisterAccountResponse> {
+    return RegistrationService.reregisterAccount(
+      {
+        connectionManager: this._connectionManager,
+        tokioAsyncContext: this.asyncContext,
+      },
+      args
+    );
+  }
+
+  /**
+   * Registers a new account that has no phone number.
+   *
+   * No PNI keys are accepted here, since the account has no phone number to
+   * associate them with.
+   *
+   * `accountAttributes.recoveryPassword` must not be empty: a recovery
+   * password is the only way an account with no phone number can ever be
+   * recovered.
+   */
+  public async registerAccountWithoutNumber(
+    args: Readonly<RegisterAccountWithoutNumberArgs>
+  ): Promise<RegisterAccountResponse> {
+    return RegistrationService.registerAccountWithoutNumber(
+      {
+        connectionManager: this._connectionManager,
+        tokioAsyncContext: this.asyncContext,
+      },
+      args
+    );
+  }
+
+  /**
+   * Re-registers an account that has no phone number, identified by its ACI.
+   *
+   * The counterpart to {@link Net.reregisterAccount} for an account with no
+   * phone number. No PNI keys are accepted here; libsignal generates the PNI
+   * material the server requires and then discards.
+   */
+  public async reregisterAccountWithoutNumber(
+    args: Readonly<ReregisterAccountWithoutNumberArgs>
+  ): Promise<RegisterAccountResponse> {
+    return RegistrationService.reregisterAccountWithoutNumber(
+      {
+        connectionManager: this._connectionManager,
+        tokioAsyncContext: this.asyncContext,
+      },
+      args
     );
   }
 

@@ -2,7 +2,7 @@
 name = "libsignal-net-chat"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -60,7 +60,7 @@ libsignal-net = { workspace = true, features = ["test-util"] }
 
 anyhow = { workspace = true }
 bytes = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
 env_logger = { workspace = true }
 futures-util = { workspace = true }
 hyper = { workspace = true, features = ["http2", "client"] }

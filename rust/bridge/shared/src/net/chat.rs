@@ -7,16 +7,19 @@ use std::borrow::Cow;
 use std::convert::Infallible;
 use std::time::Duration;
 
+use ::zkgroup::ServerPublicParams;
 use ::zkgroup::groups::GroupSendFullToken;
+use ::zkgroup::receipts::{ReceiptCredential, ReceiptCredentialRequestContext};
 use futures_util::TryStreamExt;
 use http::uri::InvalidUri;
 use http::{HeaderName, HeaderValue, StatusCode};
 use itertools::Itertools as _;
-use libsignal_account_keys::SvrKey;
+use libsignal_account_keys::{MfaMetadata, SvrKey};
 use libsignal_bridge_macros::{bridge_fn, bridge_io};
 use libsignal_bridge_types::crypto::RandomNumberGenerator;
 use libsignal_bridge_types::net::chat::remote_derives::{
-    CallQualitySurveyInternal, ListMediaResponse,
+    CallQualitySurveyInternal, CurrencyConversionsInternal, GetStickerUploadFormsResponse,
+    ListMediaResponse,
 };
 use libsignal_bridge_types::net::chat::*;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
@@ -38,8 +41,15 @@ use libsignal_net_chat::api::messages::{
 use libsignal_net_chat::api::profiles::UnauthenticatedAccountExistenceApi;
 use libsignal_net_chat::api::usernames::UnauthenticatedChatApi as _;
 use libsignal_net_chat::api::{RequestError, UploadForm, UserBasedAuthorization};
+use libsignal_net_chat::grpc::accounts::{
+    ConfirmTotpKeyError, GenerateTotpKeyError, MAX_MFA_KEY_ID, MfaKeyId, MfaKeyNotFound,
+};
 use libsignal_net_chat::grpc::backups::RedeemBackupReceiptFailure;
-use libsignal_net_chat::grpc::devices::{DeviceIdNotFoundInAccount, LinkedDevice};
+use libsignal_net_chat::grpc::credentials::AuthCheckResult;
+use libsignal_net_chat::grpc::devices::{
+    DeviceCapability, DeviceIdNotFoundInAccount, LinkedDevice,
+};
+use libsignal_net_chat::grpc::login_purchase::{PaymentProvider, ReceiptCredentialError};
 use libsignal_net_chat::grpc::usernames::{ConfirmUsernameError, UsernameNotAvailable};
 use libsignal_net_chat::stream_util::{BulkPolledStreamChunk, BulkPolledStreamTerminationReason};
 use libsignal_net_chat::ws::OverWs;
@@ -137,27 +147,6 @@ async fn UnauthenticatedChatConnection_send(
     };
     chat.send(request, Duration::from_millis(timeout_millis.into()))
         .await
-}
-
-#[bridge_io(TokioAsyncContext)]
-async fn UnauthenticatedChatConnection_send_raw_grpc(
-    chat: &UnauthenticatedChatConnection,
-    service: String,
-    method: String,
-    payload: Box<[u8]>,
-) -> Result<Vec<u8>, RequestError<Infallible>> {
-    chat.as_typed(|chat| {
-        Box::pin(libsignal_net_chat::grpc::raw_grpc(
-            "unauth",
-            chat.0
-                .shared_h2_connection()
-                .expect("requires an H2 connection"),
-            &service,
-            &method,
-            payload.into_vec(),
-        ))
-    })
-    .await
 }
 
 #[bridge_io(TokioAsyncContext)]
@@ -339,27 +328,6 @@ async fn AuthenticatedChatConnection_send(
     };
     chat.send(request, Duration::from_millis(timeout_millis.into()))
         .await
-}
-
-#[bridge_io(TokioAsyncContext)]
-async fn AuthenticatedChatConnection_send_raw_grpc(
-    chat: &AuthenticatedChatConnection,
-    service: String,
-    method: String,
-    payload: Box<[u8]>,
-) -> Result<Vec<u8>, RequestError<Infallible>> {
-    chat.as_typed(|chat| {
-        Box::pin(libsignal_net_chat::grpc::raw_grpc(
-            "auth",
-            chat.0
-                .shared_h2_connection()
-                .expect("requires an H2 connection"),
-            &service,
-            &method,
-            payload.into_vec(),
-        ))
-    })
-    .await
 }
 
 #[bridge_io(TokioAsyncContext)]
@@ -1003,6 +971,14 @@ async fn AuthenticatedChatConnection_set_username_link(
         .await
 }
 
+// Only an account's primary device may delete the account.
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_delete_account(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+) -> Result<(), RequestError<Infallible>> {
+    chat.require_grpc().await.delete_account().await
+}
+
 // Only an account's primary device may set a registration lock.
 //
 // Takes the account's raw 32-byte SVR key; libsignal derives the registration lock token from it
@@ -1048,6 +1024,105 @@ async fn AuthenticatedChatConnection_set_discoverable_by_phone_number(
         .await
         .set_discoverable_by_phone_number(discoverable)
         .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_generate_totp_key(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+) -> Result<BridgePendingTotpKey, RequestError<GenerateTotpKeyError>> {
+    chat.require_grpc()
+        .await
+        .generate_totp_key()
+        .await
+        .map(Into::into)
+}
+
+/// Validates an app-provided MFA key ID, which must be in `0..=MAX_MFA_KEY_ID`.
+fn mfa_key_id(key_id: i32) -> Result<MfaKeyId, IllegalArgumentError> {
+    u32::try_from(key_id)
+        .ok()
+        .and_then(|id| MfaKeyId::try_from(id).ok())
+        .ok_or_else(|| {
+            IllegalArgumentError::new(format!("MFA key IDs must be in 0..={MAX_MFA_KEY_ID}"))
+        })
+}
+
+/// Builds the metadata from its app-provided fields, enforcing the name length limit.
+fn mfa_metadata(name: String, created_at: Timestamp) -> Result<MfaMetadata, IllegalArgumentError> {
+    MfaMetadata::new(name, created_at).map_err(|e| IllegalArgumentError::new(e.to_string()))
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_confirm_totp_key(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    one_time_password: i32,
+    name: String,
+    created_at: Timestamp,
+    svr_key: [u8; 32],
+    rng: RandomNumberGenerator,
+) -> Result<i32, RequestOrArgumentError<ConfirmTotpKeyError>> {
+    let one_time_password = u32::try_from(one_time_password)
+        .map_err(|_| IllegalArgumentError::new("one-time passwords are non-negative"))?;
+    let metadata = mfa_metadata(name, created_at)?;
+    let mut rng = rng.create();
+    let key_id = chat
+        .require_grpc()
+        .await
+        .confirm_totp_key(
+            one_time_password,
+            &metadata,
+            &SvrKey::new(svr_key),
+            &mut rng,
+        )
+        .await?;
+    Ok(u32::from(key_id)
+        .try_into()
+        .expect("validated by libsignal-net-chat"))
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_list_mfa_keys(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    svr_key: [u8; 32],
+) -> Result<BridgeVec<BridgeConfirmedMfaKey>, RequestError<Infallible>> {
+    Ok(chat
+        .require_grpc()
+        .await
+        .list_mfa_keys(&SvrKey::new(svr_key))
+        .await?
+        .into_iter()
+        .map(BridgeConfirmedMfaKey::from)
+        .collect::<Vec<_>>()
+        .into())
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_set_mfa_key_metadata(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    key_id: i32,
+    name: String,
+    created_at: Timestamp,
+    svr_key: [u8; 32],
+    rng: RandomNumberGenerator,
+) -> Result<(), RequestOrArgumentError<MfaKeyNotFound>> {
+    let key_id = mfa_key_id(key_id)?;
+    let metadata = mfa_metadata(name, created_at)?;
+    let mut rng = rng.create();
+    chat.require_grpc()
+        .await
+        .set_mfa_key_metadata(key_id, &metadata, &SvrKey::new(svr_key), &mut rng)
+        .await?;
+    Ok(())
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_remove_mfa_key(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    key_id: i32,
+) -> Result<(), RequestOrArgumentError<Infallible>> {
+    let key_id = mfa_key_id(key_id)?;
+    chat.require_grpc().await.remove_mfa_key(key_id).await?;
+    Ok(())
 }
 
 #[bridge_io(TokioAsyncContext, nice = true)]
@@ -1105,6 +1180,17 @@ async fn AuthenticatedChatConnection_clear_push_token(
 }
 
 #[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_get_pre_key_count(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+) -> Result<BridgePreKeyCounts, RequestError<Infallible>> {
+    chat.require_grpc()
+        .await
+        .get_pre_key_count()
+        .await
+        .map(BridgePreKeyCounts::from)
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
 async fn UnauthenticatedChatConnection_submit_call_quality_survey(
     chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
     survey: CallQualitySurveyInternal,
@@ -1124,4 +1210,113 @@ async fn AuthenticatedChatConnection_redeem_backup_receipt(
         .await
         .redeem_backup_receipt(presentation.into_inner())
         .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_get_currency_conversions(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+) -> Result<CurrencyConversionsInternal, RequestError<Infallible>> {
+    chat.require_grpc()
+        .await
+        .get_currency_conversions()
+        .await
+        .map(|x| x.into())
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_check_svr_credentials(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    number: String,
+    credentials: BridgeVec<String>,
+) -> Result<BridgeVec<(String, AuthCheckResult)>, RequestError<core::convert::Infallible>> {
+    chat.require_grpc()
+        .await
+        .check_svr_credentials(number, credentials.0)
+        .await
+        .map(|entries| BridgeVec(entries.into_iter().collect()))
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_set_capabilities(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    capabilities: BridgeVec<DeviceCapability>,
+) -> Result<(), RequestError<Infallible>> {
+    chat.require_grpc()
+        .await
+        .set_capabilities(&capabilities)
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_create_login_receipt_credential(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    payment_processor: PaymentProvider,
+    purchase_identifier: String,
+    receipt_credential_request_context: ReceiptCredentialRequestContext,
+    server_params: BridgeHandleRef<'_, ServerPublicParams>,
+    purchase_time: Timestamp,
+) -> Result<ReceiptCredential, RequestError<ReceiptCredentialError>> {
+    chat.require_grpc()
+        .await
+        .create_login_receipt_credential(
+            payment_processor,
+            purchase_identifier,
+            &receipt_credential_request_context,
+            &server_params,
+            purchase_time,
+        )
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_get_sticker_upload_forms(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    number_of_stickers: i32,
+) -> Result<GetStickerUploadFormsResponse, RequestError<core::convert::Infallible>> {
+    chat.require_grpc()
+        .await
+        .get_sticker_upload_forms(
+            number_of_stickers
+                .try_into()
+                .expect("cannot ask for a negative number of stickers"),
+        )
+        .await
+        .map(Into::into)
+}
+
+#[cfg(test)]
+mod test {
+    use assert_matches::assert_matches;
+    use test_case::test_case;
+
+    use super::*;
+
+    #[test_case(-1 => false)]
+    #[test_case(0 => true)]
+    #[test_case(MAX_MFA_KEY_ID as i32 => true)]
+    #[test_case(MAX_MFA_KEY_ID as i32 + 1 => false)]
+    #[test_case(i32::MAX => false)]
+    fn mfa_key_id_range(key_id: i32) -> bool {
+        mfa_key_id(key_id).is_ok()
+    }
+
+    #[test]
+    fn mfa_metadata_validation() {
+        assert_matches!(
+            mfa_metadata("ok".to_owned(), Timestamp::from_epoch_millis(0)),
+            Ok(_)
+        );
+        assert_matches!(
+            mfa_metadata(
+                "a".repeat(libsignal_account_keys::MFA_KEY_NAME_MAX_LEN + 1),
+                Timestamp::from_epoch_millis(0)
+            ),
+            Err(_)
+        );
+        // There is no upper bound on the creation time.
+        assert_matches!(
+            mfa_metadata("ok".to_owned(), Timestamp::from_epoch_millis(u64::MAX)),
+            Ok(_)
+        );
+    }
 }

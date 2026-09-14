@@ -167,7 +167,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::UnauthenticatedChatApi<OverGr
                 };
 
                 let log_safe_description = Redact(&request).to_string();
-                log_and_send("unauth", &log_safe_description, || {
+                log_and_send(Self::LOG_TAG, &log_safe_description, || {
                     service.send_story(request)
                 })
                 .await?
@@ -182,7 +182,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::UnauthenticatedChatApi<OverGr
                     authorization: Some(auth.into()),
                 };
                 let log_safe_description = Redact(&request).to_string();
-                log_and_send("unauth", &log_safe_description, || {
+                log_and_send(Self::LOG_TAG, &log_safe_description, || {
                     service.send_single_recipient_message(request)
                 })
                 .await?
@@ -235,7 +235,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::UnauthenticatedChatApi<OverGr
                 assert!(!online_only, "stories should never be sent online-only");
                 let request = SendMultiRecipientStoryRequest { urgent, message };
                 let log_safe_description = Redact(&request).to_string();
-                log_and_send("unauth", &log_safe_description, || {
+                log_and_send(Self::LOG_TAG, &log_safe_description, || {
                     service.send_multi_recipient_story(request)
                 })
                 .await?
@@ -251,7 +251,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::UnauthenticatedChatApi<OverGr
                 };
                 let log_safe_description = Redact(&request).to_string();
 
-                log_and_send("unauth", &log_safe_description, || {
+                log_and_send(Self::LOG_TAG, &log_safe_description, || {
                     service.send_multi_recipient_message(request)
                 })
                 .await?
@@ -347,7 +347,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::AuthenticatedChatApi<OverGrpc
         let log_safe_description = Redact(&request).to_string();
 
         let SendMessageAuthenticatedSenderResponse { response } =
-            log_and_send("auth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 service.send_message(request)
             })
             .await?
@@ -413,7 +413,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::AuthenticatedChatApi<OverGrpc
         let log_safe_description = Redact(&request).to_string();
 
         let SendMessageAuthenticatedSenderResponse { response } =
-            log_and_send("auth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 service.send_sync_message(request)
             })
             .await?
@@ -453,7 +453,7 @@ impl<T: GrpcServiceProvider> crate::api::messages::AuthenticatedChatApi<OverGrpc
         let mut attachments_service = AttachmentsClient::new(self.0.service());
         let request = attachments::GetUploadFormRequest { upload_length };
         let log_safe_description = Redact(&request).to_string();
-        let response = log_and_send("auth", &log_safe_description, || {
+        let response = log_and_send(Self::LOG_TAG, &log_safe_description, || {
             attachments_service.get_upload_form(request)
         })
         .await?

@@ -196,7 +196,12 @@ unsafe impl<T: IsCType> IsCType for *const T {
     #[cfg(feature = "metadata")]
     fn register_c_type_inner(ctx: &mut SwiftMetadataContext) -> CType {
         let t = T::register_c_type(ctx);
-        let mut type_name = format!("SignalType_ConstPointer_{}", t.type_name);
+        let mut type_name = format!(
+            "SignalType_ConstPointer_{}",
+            t.type_name
+                .strip_prefix("SignalType_")
+                .unwrap_or(&t.type_name)
+        );
         let mut mangling_component = t.mangling_component.clone();
         if t.rust_type == RustType::of::<std::ffi::c_char>() {
             mangling_component = "CStringPtr".to_string();
@@ -221,7 +226,12 @@ unsafe impl<T: IsCType> IsCType for *mut T {
     #[cfg(feature = "metadata")]
     fn register_c_type_inner(ctx: &mut SwiftMetadataContext) -> CType {
         let t = T::register_c_type(ctx);
-        let type_name = format!("SignalType_MutPointer_{}", t.type_name);
+        let type_name = format!(
+            "SignalType_MutPointer_{}",
+            t.type_name
+                .strip_prefix("SignalType_")
+                .unwrap_or(&t.type_name)
+        );
         CType {
             rust_type: RustType::of::<Self>(),
             dependencies: BTreeSet::from_iter([t.rust_type]),
@@ -244,7 +254,12 @@ unsafe impl<T: IsCType, const N: usize> IsCType for [T; N] {
     #[cfg(feature = "metadata")]
     fn register_c_type_inner(ctx: &mut SwiftMetadataContext) -> CType {
         let t = T::register_c_type(ctx);
-        let type_name = format!("SignalType_FixedArray{N}_{}", t.type_name);
+        let type_name = format!(
+            "SignalType_FixedArray{N}_{}",
+            t.type_name
+                .strip_prefix("SignalType_")
+                .unwrap_or(&t.type_name)
+        );
         CType {
             rust_type: RustType::of::<Self>(),
             dependencies: BTreeSet::from_iter([t.rust_type]),
@@ -274,8 +289,8 @@ macro_rules! function_types {
                 };
                 let type_name = format!(
                     "SignalType_{unsafe_}FunctionPointer_{}_{}",
-                    rt.type_name,
-                    args.iter().map(|arg| &arg.type_name).join("_")
+                    rt.type_name.strip_prefix("SignalType_").unwrap_or(&rt.type_name),
+                    args.iter().map(|arg| arg.type_name.strip_prefix("SignalType_").unwrap_or(&arg.type_name)).join("_")
                 );
                 CType {
                     rust_type: RustType::of::<Self>(),

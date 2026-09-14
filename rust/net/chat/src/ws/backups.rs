@@ -59,7 +59,7 @@ impl<T: WsConnection> crate::api::backups::UnauthenticatedChatApi<OverWs> for Un
 
         let response = self
             .send(
-                "unauth",
+                Self::LOG_TAG,
                 "/v1/archives/upload/form",
                 Request {
                     method: http::Method::GET,
@@ -107,7 +107,7 @@ impl<T: WsConnection> crate::api::backups::UnauthenticatedChatApi<OverWs> for Un
         let path = format!("/v1/archives/media/upload/form?uploadLength={upload_size}");
         let response = self
             .send(
-                "unauth",
+                Self::LOG_TAG,
                 &path,
                 Request {
                     method: http::Method::GET,

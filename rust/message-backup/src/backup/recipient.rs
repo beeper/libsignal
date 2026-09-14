@@ -51,6 +51,8 @@ pub enum RecipientError {
     MissingIdentityKey(proto::contact::IdentityState),
     /// Contact.nickname is present but empty
     NicknameIsPresentButEmpty,
+    /// Contact.sharedName is present but empty
+    SharedNameIsPresentButEmpty,
     /// distribution destination has invalid UUID
     InvalidDistributionId,
     /// invalid group: {0}
@@ -317,6 +319,7 @@ pub struct ContactData {
     pub system_given_name: String,
     pub system_family_name: String,
     pub system_nickname: String,
+    pub shared_name: Option<ContactName>,
     #[serde_as(as = "Option<serialize::EnumAsString>")]
     pub avatar_color: Option<proto::AvatarColor>,
     pub key_transparency_data: Option<Vec<u8>>,
@@ -327,6 +330,29 @@ pub struct ContactData {
 pub struct ContactName {
     pub given_name: String,
     pub family_name: String,
+}
+
+pub struct EmptyContactName;
+
+impl TryFrom<proto::contact::Name> for ContactName {
+    type Error = EmptyContactName;
+
+    fn try_from(value: proto::contact::Name) -> Result<Self, Self::Error> {
+        let proto::contact::Name {
+            given,
+            family,
+            special_fields: _,
+        } = value;
+
+        if given.is_empty() && family.is_empty() {
+            return Err(EmptyContactName);
+        }
+
+        Ok(ContactName {
+            given_name: given,
+            family_name: family,
+        })
+    }
 }
 
 #[serde_as]
@@ -537,6 +563,7 @@ impl<C: ReportUnusualTimestamp> TryIntoWith<ContactData, C> for proto::Contact {
             identityKey,
             identityState,
             nickname,
+            sharedName,
             note,
             systemGivenName,
             systemFamilyName,
@@ -643,22 +670,15 @@ impl<C: ReportUnusualTimestamp> TryIntoWith<ContactData, C> for proto::Contact {
 
         let nickname = nickname
             .into_option()
-            .map(
-                |proto::contact::Name {
-                     given,
-                     family,
-                     special_fields: _,
-                 }| {
-                    if given.is_empty() && family.is_empty() {
-                        return Err(RecipientError::NicknameIsPresentButEmpty);
-                    }
-                    Ok(ContactName {
-                        given_name: given,
-                        family_name: family,
-                    })
-                },
-            )
-            .transpose()?;
+            .map(ContactName::try_from)
+            .transpose()
+            .map_err(|_| RecipientError::NicknameIsPresentButEmpty)?;
+
+        let shared_name = sharedName
+            .into_option()
+            .map(ContactName::try_from)
+            .transpose()
+            .map_err(|_| RecipientError::SharedNameIsPresentButEmpty)?;
 
         // The color is allowed to be unset.
         let avatar_color = avatarColor.map(|v| v.enum_value_or_default());
@@ -684,6 +704,7 @@ impl<C: ReportUnusualTimestamp> TryIntoWith<ContactData, C> for proto::Contact {
             system_given_name: systemGivenName,
             system_family_name: systemFamilyName,
             system_nickname: systemNickname,
+            shared_name,
             avatar_color,
             key_transparency_data: keyTransparencyData,
         })
@@ -873,6 +894,12 @@ mod test {
                     ..Default::default()
                 })
                 .into(),
+                sharedName: Some(proto::contact::Name {
+                    given: "GivenSharedName".to_owned(),
+                    family: "FamilySharedName".to_owned(),
+                    ..Default::default()
+                })
+                .into(),
                 systemGivenName: "GivenSystemName".to_owned(),
                 systemFamilyName: "FamilySystemName".to_owned(),
                 systemNickname: "SystemNickName".to_owned(),
@@ -928,6 +955,10 @@ mod test {
                 system_given_name: "GivenSystemName".to_owned(),
                 system_family_name: "FamilySystemName".to_owned(),
                 system_nickname: "SystemNickName".to_owned(),
+                shared_name: Some(ContactName {
+                    given_name: "GivenSharedName".to_owned(),
+                    family_name: "FamilySharedName".to_owned(),
+                }),
                 note: "nb".into(),
                 avatar_color: None,
                 key_transparency_data: None,
@@ -1016,6 +1047,10 @@ mod test {
     #[test_case(|x| x.nickname.as_mut().unwrap().given = "".into() => Ok(()); "no nickname given name")]
     #[test_case(|x| x.nickname.as_mut().unwrap().family = "".into() => Ok(()); "no nickname family name")]
     #[test_case(|x| x.nickname = Some(Default::default()).into() => Err(RecipientError::NicknameIsPresentButEmpty); "no nickname given or family name")]
+    #[test_case(|x| x.sharedName = None.into() => Ok(()); "no shared name")]
+    #[test_case(|x| x.sharedName.as_mut().unwrap().given = "".into() => Ok(()); "no shared name given name")]
+    #[test_case(|x| x.sharedName.as_mut().unwrap().family = "".into() => Ok(()); "no shared name family name")]
+    #[test_case(|x| x.sharedName = Some(Default::default()).into() => Err(RecipientError::SharedNameIsPresentButEmpty); "no shared name given or family name")]
     #[test_case(|x| {x.blocked = true; x.blockedAtTimestamp = 1000} => Ok(()); "blocked with blockedAtTimestamp")]
     #[test_case(|x| x.blocked = true => Ok(()); "blocked without blockedAtTimestamp")]
     #[test_case(|x| x.blockedAtTimestamp = 1000 => Err(RecipientError::BlockedAtWithoutBlocked); "blockedAtTimestamp without blocked")]

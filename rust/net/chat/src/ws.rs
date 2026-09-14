@@ -177,7 +177,7 @@ impl WsConnection for chat::ChatConnection {
         match self
             .grpc_overrides()
             .get(message)
-            .unwrap_or(&chat::GrpcOverride::UseWs)
+            .unwrap_or(&chat::GrpcOverride::UseGrpc)
         {
             chat::GrpcOverride::UseGrpc => self.shared_h2_connection(),
             chat::GrpcOverride::UseWs => None,
@@ -281,10 +281,10 @@ impl ResponseError {
                     if status.is_server_error() {
                         return RequestError::ServerSideError;
                     }
-                    if status.as_u16() == 429 {
-                        if let Some(retry_later) = extract_retry_later(headers) {
-                            return RequestError::RetryLater(retry_later);
-                        }
+                    if status.as_u16() == 429
+                        && let Some(retry_later) = extract_retry_later(headers)
+                    {
+                        return RequestError::RetryLater(retry_later);
                     }
                     if status.as_u16() == 428
                         && allow_rate_limit_errors == AllowRateLimitChallenges::Yes

@@ -10,6 +10,8 @@ pub mod proto {
     // We'll export org::signal::chat for a more flat interface elsewhere.
     mod org {
         pub(super) mod signal {
+            // The comments in proto files shouldn't be held to strict rustdoc standards.
+            #[allow(rustdoc::bare_urls)]
             pub mod chat {
                 pub mod common {
                     tonic::include_proto!("org.signal.chat.common");
@@ -29,11 +31,23 @@ pub mod proto {
                 pub mod call_quality {
                     tonic::include_proto!("org.signal.chat.calling.quality");
                 }
+                pub mod credentials {
+                    tonic::include_proto!("org.signal.chat.credentials");
+                }
                 pub mod device {
                     tonic::include_proto!("org.signal.chat.device");
                 }
+                pub mod keys {
+                    tonic::include_proto!("org.signal.chat.keys");
+                }
+                pub mod login_purchase {
+                    tonic::include_proto!("org.signal.chat.purchase");
+                }
                 pub mod messages {
                     tonic::include_proto!("org.signal.chat.messages");
+                }
+                pub mod payments {
+                    tonic::include_proto!("org.signal.chat.payments");
                 }
 
                 // Not actually a proto, we just make sure to generate our helper file in the same place.

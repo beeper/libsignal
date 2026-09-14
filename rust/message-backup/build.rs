@@ -86,6 +86,7 @@ fn main() {
         prost_build::Config::new()
             .boxed(".signal.backup.DirectStoryReplyMessage.reply.textReply")
             .boxed(".signal.backup.ChatStyle.wallpaper.wallpaperPhoto")
+            .boxed(".signal.backup.Frame.item.chatItem")
             // Save descriptors to file
             .file_descriptor_set_path(&descriptor_path)
             // Override prost-types with pbjson-types

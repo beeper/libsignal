@@ -685,3 +685,45 @@ describe('OnlineBackupValidator', () => {
     assert.throws(() => backup.finalize());
   });
 });
+
+describe('MessageBackup sizing', () => {
+  // If this fails, the fix is not to update the numbers.
+  it('has the expected flush intervals', () => {
+    assert.equal(MessageBackup.flushInterval(0n), 8192n);
+    assert.equal(MessageBackup.flushInterval(65536n), 9459n);
+    assert.equal(MessageBackup.flushInterval(1048576n), 37837n);
+    assert.equal(MessageBackup.flushInterval(16777216n), 151348n);
+    assert.equal(MessageBackup.flushInterval(200000000n), 522557n);
+
+    assert.equal(MessageBackup.flushInterval(0n, 1048576n), 26754n);
+    assert.equal(MessageBackup.flushInterval(0n, 16777216n), 107019n);
+  });
+
+  it('holds a fixed interval until the backup crosses the estimate', () => {
+    const estimate = 16777216n;
+    assert.equal(
+      MessageBackup.flushInterval(0n, estimate),
+      MessageBackup.flushInterval(estimate / 2n, estimate)
+    );
+    assert.isBelow(
+      Number(MessageBackup.flushInterval(0n, estimate)),
+      Number(MessageBackup.flushInterval(estimate))
+    );
+
+    // Past the estimate, the interval is the one that suits a backup ending here.
+    assert.equal(
+      MessageBackup.flushInterval(4n * estimate, estimate),
+      MessageBackup.flushInterval(0n, 4n * estimate)
+    );
+  });
+
+  it('emits small backups at a single size', () => {
+    const compressedLength = 1000n;
+    for (let i = 0; i < 100; i++) {
+      assert.equal(
+        compressedLength + MessageBackup.paddingSize(8192n, compressedLength),
+        65536n
+      );
+    }
+  });
+});

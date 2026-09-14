@@ -174,7 +174,7 @@ impl<T: WsConnection> UnauthenticatedChatApi<OverWs> for Unauth<T> {
 
         let response = self
             .send(
-                "unauth",
+                Self::LOG_TAG,
                 &log_safe_path,
                 Request {
                     method: http::Method::PUT,
@@ -247,7 +247,7 @@ impl<T: WsConnection> UnauthenticatedChatApi<OverWs> for Unauth<T> {
         );
         let response = self
             .send(
-                "unauth",
+                Self::LOG_TAG,
                 &log_safe_path,
                 Request {
                     method: http::Method::PUT,
@@ -348,7 +348,7 @@ impl<T: WsConnection> crate::api::messages::AuthenticatedChatApi<OverWs> for Aut
 
         let response = self
             .send(
-                "auth",
+                Self::LOG_TAG,
                 &log_safe_path,
                 Request {
                     method: http::Method::PUT,
@@ -434,7 +434,7 @@ impl<T: WsConnection> crate::api::messages::AuthenticatedChatApi<OverWs> for Aut
         let path = format!("/v4/attachments/form/upload?uploadLength={upload_length}");
         let response = self
             .send(
-                "auth",
+                Self::LOG_TAG,
                 &path,
                 Request {
                     method: http::Method::GET,

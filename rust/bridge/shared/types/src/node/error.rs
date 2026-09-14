@@ -12,6 +12,7 @@ use libsignal_net_chat::api::backups::{BackupAuthCredentialRejected, GetUploadFo
 use libsignal_net_chat::api::keys::GetPreKeysFailure;
 use libsignal_net_chat::api::messages::UploadTooLarge;
 use libsignal_net_chat::grpc::devices::DeviceIdNotFoundInAccount;
+use libsignal_net_chat::grpc::login_purchase::ReceiptCredentialError;
 use libsignal_net_chat::grpc::usernames::UsernameNotAvailable;
 use neon::thread::LocalKey;
 #[cfg(feature = "signal-media")]
@@ -801,6 +802,11 @@ mod registration {
         RegistrationLock(RegistrationLock),
         RecoveryVerificationFailed,
         DeviceTransferPossibleNotSkipped,
+        RegisterAccountRequestRejected,
+        InvalidSession,
+        InvalidReceipt,
+        RecoveryPasswordRequired,
+        OneTimePasswordRequired,
     }
 
     impl SignalNodeError for BridgedErrorVariant {
@@ -912,6 +918,26 @@ mod registration {
                     "RegistrationDeviceTransferPossibleNotSkipped",
                     "device transfer is possible but wasn't explicitly skipped",
                 ),
+                Self::RegisterAccountRequestRejected => (
+                    "RegisterAccountRequestRejected",
+                    "the server rejected the request",
+                ),
+                Self::InvalidSession => (
+                    "RegistrationInvalidSession",
+                    "the verification session is unverified or no longer exists",
+                ),
+                Self::InvalidReceipt => (
+                    "RegistrationInvalidReceipt",
+                    "the receipt credential presentation was not accepted",
+                ),
+                Self::RecoveryPasswordRequired => (
+                    "RegistrationRecoveryPasswordRequired",
+                    "a recovery password is required",
+                ),
+                Self::OneTimePasswordRequired => (
+                    "RegistrationOneTimePasswordRequired",
+                    "a valid one-time password is required",
+                ),
             };
             new_js_error(cx, Some(name), message, operation_name, no_extra_properties)
         }
@@ -992,6 +1018,11 @@ mod registration {
                 RegisterAccountError::RegistrationLock(registration_lock) => {
                     Self::RegistrationLock(registration_lock)
                 }
+                RegisterAccountError::RequestRejected => Self::RegisterAccountRequestRejected,
+                RegisterAccountError::InvalidSession => Self::InvalidSession,
+                RegisterAccountError::InvalidReceipt => Self::InvalidReceipt,
+                RegisterAccountError::RecoveryPasswordRequired => Self::RecoveryPasswordRequired,
+                RegisterAccountError::OneTimePasswordRequired => Self::OneTimePasswordRequired,
             }
         }
     }
@@ -1091,5 +1122,106 @@ impl SimpleNodeError for libsignal_net_chat::grpc::usernames::ConfirmUsernameErr
             Self::ReservationNotFound => "UsernameReservationNotFound",
             Self::UsernameNotAvailable => "UsernameNotAvailable",
         })
+    }
+}
+
+impl SignalNodeError for ReceiptCredentialError {
+    fn into_throwable<'cx>(self, cx: &mut Cx<'cx>, operation_name: &str) -> Handle<'cx, JsError> {
+        let message = self.to_string();
+        let name = match &self {
+            ReceiptCredentialError::PaymentStillProcessing => {
+                "ReceiptCredentialErrorPaymentStillProcessing"
+            }
+            ReceiptCredentialError::PaymentRequired { .. } => {
+                "ReceiptCredentialErrorPaymentRequired"
+            }
+            ReceiptCredentialError::PaymentNotFound => "ReceiptCredentialErrorPaymentNotFound",
+            ReceiptCredentialError::ReceiptAlreadyIssued => {
+                "ReceiptCredentialErrorReceiptAlreadyIssued"
+            }
+        };
+        new_js_error(cx, Some(name), &message, operation_name, |cx| {
+            if let ReceiptCredentialError::PaymentRequired { charge_failure } = self {
+                let props = cx.empty_object();
+                let charge_failure: Handle<JsValue> = charge_failure
+                    .map(|cf| {
+                        // We can't use the nice converters here because we _directly_ throw an
+                        // unconverted value.
+                        use libsignal_net_chat::grpc::login_purchase::PaymentProvider;
+                        let libsignal_net_chat::grpc::login_purchase::ChargeFailure {
+                            processor,
+                            code,
+                            message,
+                            outcome_network_status,
+                            outcome_reason,
+                            outcome_type,
+                        } = *cf;
+                        let obj = cx.empty_object();
+                        let processor = match processor {
+                            PaymentProvider::GooglePlayBilling => "googlePlayBilling",
+                            PaymentProvider::AppleAppStore => "appleAppStore",
+                            PaymentProvider::Stripe => "stripe",
+                            PaymentProvider::Braintree => "braintree",
+                        };
+                        let null: Handle<JsValue> = cx.null().upcast();
+                        for (k, v) in [
+                            ("processor", Some(processor)),
+                            ("code", Some(&code)),
+                            ("message", Some(&message)),
+                            ("outcomeNetworkStatus", outcome_network_status.as_deref()),
+                            ("outcomeReason", outcome_reason.as_deref()),
+                            ("outcomeType", outcome_type.as_deref()),
+                        ] {
+                            let v = v
+                                .map(|x| cx.string(x).upcast::<JsValue>())
+                                .unwrap_or_else(|| null);
+                            obj.prop(cx, k).set(v)?;
+                        }
+                        Ok(obj.upcast())
+                    })
+                    .transpose()?
+                    .unwrap_or_else(|| cx.null().upcast());
+                props.prop(cx, "_chargeFailure").set(charge_failure)?;
+                Ok(props.upcast())
+            } else {
+                no_extra_properties(cx)
+            }
+        })
+    }
+}
+
+impl SimpleNodeError for libsignal_net_chat::grpc::accounts::GenerateTotpKeyError {
+    fn js_error_name(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::TooManyTotpKeys => "TooManyTotpKeys",
+            Self::TooManyMfaKeys => "TooManyMfaKeys",
+        })
+    }
+}
+
+impl SimpleNodeError for libsignal_net_chat::grpc::accounts::ConfirmTotpKeyError {
+    fn js_error_name(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::OneTimePasswordNotVerified => "OneTimePasswordNotVerified",
+            Self::TooManyMfaKeys => "TooManyMfaKeys",
+        })
+    }
+}
+
+impl SimpleNodeError for libsignal_net_chat::grpc::accounts::MfaKeyNotFound {
+    fn js_error_name(&self) -> Option<&'static str> {
+        Some("MfaKeyNotFound")
+    }
+}
+
+impl<E> SignalNodeError for crate::support::RequestOrArgumentError<E>
+where
+    libsignal_net_chat::api::RequestError<E>: SignalNodeError,
+{
+    fn into_throwable<'cx>(self, cx: &mut Cx<'cx>, operation_name: &str) -> Handle<'cx, JsError> {
+        match self {
+            Self::Request(e) => e.into_throwable(cx, operation_name),
+            Self::Argument(e) => e.into_throwable(cx, operation_name),
+        }
     }
 }

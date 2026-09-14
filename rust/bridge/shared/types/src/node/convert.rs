@@ -830,6 +830,27 @@ macro_rules! zkgroup_serialize_type {
                 }
             }
         }
+
+        impl<'a> ResultTypeInfo<'a> for $ty {
+            type ResultType = <Vec<u8> as ResultTypeInfo<'a>>::ResultType;
+            fn convert_into(self, cx: &mut Cx<'a>) -> JsResult<'a, Self::ResultType> {
+                zkgroup::serialize(&self).convert_into(cx)
+            }
+            #[cfg(feature = "metadata")]
+            fn register_ts_ffi_type(ctx: &mut TsMetadataContext) -> String {
+                <Vec<u8> as ResultTypeInfo<'a>>::register_ts_ffi_type(ctx)
+            }
+        }
+        #[cfg(feature = "metadata")]
+        impl NiceResultConverter for $ty {
+            fn register_ts_result_converter(_ctx: &mut TsMetadataContext) -> TsReturnConverter {
+                TsReturnConverter {
+                    nice_type: format!("zkgroup.{}", $cls),
+                    ffi_type: "Uint8Array<ArrayBuffer>".to_string(),
+                    converter_function: format!("((x) => new zkgroup.{}(x))", $cls),
+                }
+            }
+        }
     };
     ($ty:ty, $cls:expr) => {
         zkgroup_serialize_type!($ty, zkgroup::deserialize, $cls);
@@ -844,6 +865,15 @@ zkgroup_serialize_type!(
     zkgroup::generic_server_params::GenericServerPublicParams,
     TryFrom::try_from,
     "GenericServerPublicParams"
+);
+zkgroup_serialize_type!(zkgroup::receipts::ReceiptCredential, "ReceiptCredential");
+zkgroup_serialize_type!(
+    zkgroup::receipts::ReceiptCredentialRequestContext,
+    "ReceiptCredentialRequestContext"
+);
+zkgroup_serialize_type!(
+    zkgroup::receipts::ReceiptCredentialPresentation,
+    "ReceiptCredentialPresentation"
 );
 
 // Used for callback results.
@@ -1907,8 +1937,13 @@ impl<A: NiceResultConverter, B: NiceResultConverter> NiceResultConverter for (A,
             nice_type: format!("[{}, {}]", a.nice_type, b.nice_type),
             ffi_type: format!("[{}, {}]", a.ffi_type, b.ffi_type),
             converter_function: format!(
-                "([a, b]) => [({})(a), ({})(b)]",
-                a.converter_function, b.converter_function
+                "([a, b]: [{}, {}]): [{}, {}] => [({})(a), ({})(b)]",
+                a.ffi_type,
+                b.ffi_type,
+                a.nice_type,
+                b.nice_type,
+                a.converter_function,
+                b.converter_function
             ),
         }
     }

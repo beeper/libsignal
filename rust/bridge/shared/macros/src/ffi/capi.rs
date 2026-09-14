@@ -526,6 +526,8 @@ pub fn c_export(attr: &TokenStream, item: &TokenStream) -> syn::Result<TokenStre
                 }
                 Ok(())
             })?;
+        } else if attr.path().is_ident("export_name") {
+            name = Some(attr.meta.require_name_value()?.value.to_token_stream());
         }
     }
     let name = name

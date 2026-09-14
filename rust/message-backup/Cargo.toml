@@ -22,7 +22,7 @@ json = [
     "dep:prost-build",
     "dep:serde_json",
 ]
-scramble = ["dep:rand"]
+scramble = []
 cli = [
     "dep:clap",
     "dep:clap-stdin",
@@ -90,7 +90,8 @@ pbjson = { workspace = true, optional = true }
 pbjson-types = { workspace = true, optional = true }
 prost = { workspace = true }
 protobuf = { workspace = true }
-rand = { workspace = true, optional = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true, optional = true, features = ["preserve_order"] }
 serde_with = { workspace = true, features = ["hex"] }

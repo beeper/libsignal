@@ -30,6 +30,9 @@ fn main() {
         "proto/TextSecure.proto",
     ];
     println!("cargo:rerun-if-changed=proto/");
+    for proto in SERVICE_PROTOS {
+        println!("cargo:rerun-if-changed={proto}");
+    }
 
     let mut config = tonic_prost_build::Config::new();
     let fds = config
@@ -50,6 +53,16 @@ fn main() {
         .type_attribute(
             ".org.signal.chat.messages.GetMessagesResponse.response",
             "#[expect(clippy::large_enum_variant)]",
+        )
+        // Similarly, fetching subscription information is likely to be done by active subscribers.
+        .type_attribute(
+            ".org.signal.chat.purchase.GetSubscriptionInformationResponse.response",
+            "#[expect(clippy::large_enum_variant)]",
+        )
+        // Lets tests iterate every capability the server knows about.
+        .type_attribute(
+            ".org.signal.chat.common.DeviceCapability",
+            "#[derive(::strum::EnumIter)]",
         )
         .compile_fds_with_config(fds, config)
         .expect("can generate code");

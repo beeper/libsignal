@@ -207,11 +207,12 @@ impl<T: GrpcServiceProvider> crate::api::backups::UnauthenticatedChatApi<OverGrp
             upload_type: Some(UploadType::Messages(MessagesUploadType {})),
         };
         let log_safe_description = Redact(&request).to_string();
-        let response: GetUploadFormResponse = log_and_send("unauth", &log_safe_description, || {
-            backup_service.get_upload_form(request)
-        })
-        .await?
-        .into_inner();
+        let response: GetUploadFormResponse =
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
+                backup_service.get_upload_form(request)
+            })
+            .await?
+            .into_inner();
 
         response.try_into()
     }
@@ -232,11 +233,12 @@ impl<T: GrpcServiceProvider> crate::api::backups::UnauthenticatedChatApi<OverGrp
             upload_type: Some(UploadType::Media(MediaUploadType {})),
         };
         let log_safe_description = Redact(&request).to_string();
-        let response: GetUploadFormResponse = log_and_send("unauth", &log_safe_description, || {
-            backup_service.get_upload_form(request)
-        })
-        .await?
-        .into_inner();
+        let response: GetUploadFormResponse =
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
+                backup_service.get_upload_form(request)
+            })
+            .await?
+            .into_inner();
 
         response.try_into()
     }
@@ -258,11 +260,12 @@ impl<T: GrpcServiceProvider> Unauth<T> {
             public_key: public_key.serialize().into_vec(),
         };
         let log_safe_description = Redact(&request).to_string();
-        let response: SetPublicKeyResponse = log_and_send("unauth", &log_safe_description, || {
-            backup_service.set_public_key(request)
-        })
-        .await?
-        .into_inner();
+        let response: SetPublicKeyResponse =
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
+                backup_service.set_public_key(request)
+            })
+            .await?
+            .into_inner();
 
         let response = response.response.ok_or_else(|| RequestError::Unexpected {
             log_safe: "missing response".to_owned(),
@@ -294,7 +297,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         };
         let log_safe_description = Redact(&request).to_string();
         let response: GetCdnCredentialsResponse =
-            log_and_send("unauth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 backup_service.get_cdn_credentials(request)
             })
             .await?
@@ -332,7 +335,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         };
         let log_safe_description = Redact(&request).to_string();
         let response: GetSvrBCredentialsResponse =
-            log_and_send("unauth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 backup_service.get_svr_b_credentials(request)
             })
             .await?
@@ -367,7 +370,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
             signed_presentation: Some(auth.into()),
         };
         let log_safe_description = Redact(&request).to_string();
-        let response: RefreshResponse = log_and_send("unauth", &log_safe_description, || {
+        let response: RefreshResponse = log_and_send(Self::LOG_TAG, &log_safe_description, || {
             backup_service.refresh(request)
         })
         .await?
@@ -400,11 +403,12 @@ impl<T: GrpcServiceProvider> Unauth<T> {
             signed_presentation: Some(auth.into()),
         };
         let log_safe_description = Redact(&request).to_string();
-        let response: DeleteAllResponse = log_and_send("unauth", &log_safe_description, || {
-            backup_service.delete_all(request)
-        })
-        .await?
-        .into_inner();
+        let response: DeleteAllResponse =
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
+                backup_service.delete_all(request)
+            })
+            .await?
+            .into_inner();
 
         let response = response.response.ok_or_else(|| RequestError::Unexpected {
             log_safe: "missing response".to_owned(),
@@ -443,7 +447,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         };
         let log_safe_description = Redact(&request).to_string();
         let response: GetMessageBackupInfoResponse =
-            log_and_send("unauth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 backup_service.get_message_backup_info(request)
             })
             .await?
@@ -496,7 +500,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         };
         let log_safe_description = Redact(&request).to_string();
         let response: GetMediaBackupInfoResponse =
-            log_and_send("unauth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 backup_service.get_media_backup_info(request)
             })
             .await?
@@ -576,7 +580,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         T::Service: 'static,
     {
         send_request_with_streaming_response(
-            "unauth",
+            Self::LOG_TAG,
             service,
             || {
                 Ok(CopyMediaRequest {
@@ -689,7 +693,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         T::Service: 'static,
     {
         send_request_with_streaming_response(
-            "unauth",
+            Self::LOG_TAG,
             service,
             || {
                 Ok(DeleteMediaRequest {
@@ -752,7 +756,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
         };
         let log_safe_description = Redact(&request).to_string();
         let response: proto::ListMediaResponse =
-            log_and_send("unauth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 backup_service.list_media(request)
             })
             .await?
@@ -818,11 +822,12 @@ impl<T: GrpcServiceProvider> Auth<T> {
             presentation: zkgroup::serialize(&presentation),
         };
         let log_safe_description = Redact(&request).to_string();
-        let response: RedeemReceiptResponse = log_and_send("auth", &log_safe_description, || {
-            service.redeem_receipt(request)
-        })
-        .await?
-        .into_inner();
+        let response: RedeemReceiptResponse =
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
+                service.redeem_receipt(request)
+            })
+            .await?
+            .into_inner();
 
         let response = response.response.ok_or_else(|| RequestError::Unexpected {
             log_safe: "missing response".to_owned(),

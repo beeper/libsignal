@@ -142,7 +142,7 @@ impl<T: GrpcServiceProvider> Unauth<T> {
             call_id_hash,
         } = survey;
         let SubmitCallQualitySurveyResponse {} =
-            log_and_send("unauth", "SubmitCallQualitySurvey", || {
+            log_and_send(Self::LOG_TAG, "SubmitCallQualitySurvey", || {
                 client.submit_call_quality_survey(SubmitCallQualitySurveyRequest {
                     user_satisfied,
                     call_quality_issues,

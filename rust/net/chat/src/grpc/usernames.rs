@@ -106,13 +106,15 @@ impl<T: GrpcServiceProvider> Auth<T> {
             username_hashes: username_hashes.iter().map(|hash| hash.to_vec()).collect(),
         };
         let desc = Redact(&request).to_string();
-        match log_and_send("auth", &desc, || client.reserve_username_hash(request))
-            .await?
-            .into_inner()
-            .response
-            .ok_or_else(|| RequestError::Unexpected {
-                log_safe: "missing response".to_string(),
-            })? {
+        match log_and_send(Self::LOG_TAG, &desc, || {
+            client.reserve_username_hash(request)
+        })
+        .await?
+        .into_inner()
+        .response
+        .ok_or_else(|| RequestError::Unexpected {
+            log_safe: "missing response".to_string(),
+        })? {
             reserve_username_hash_response::Response::UsernameHash(hash) => {
                 let hash_len = hash.len();
                 UsernameHash::try_from(hash).map_err(|_| RequestError::Unexpected {
@@ -154,13 +156,15 @@ impl<T: GrpcServiceProvider> Auth<T> {
             username_ciphertext,
         };
         let desc = Redact(&request).to_string();
-        let response = log_and_send("auth", &desc, || client.confirm_username_hash(request))
-            .await?
-            .into_inner()
-            .response
-            .ok_or_else(|| RequestError::Unexpected {
-                log_safe: "missing response".to_string(),
-            })?;
+        let response = log_and_send(Self::LOG_TAG, &desc, || {
+            client.confirm_username_hash(request)
+        })
+        .await?
+        .into_inner()
+        .response
+        .ok_or_else(|| RequestError::Unexpected {
+            log_safe: "missing response".to_string(),
+        })?;
 
         match response {
             ConfirmUsernameResponse::ReservationNotFound(errors::FailedPrecondition {
@@ -206,7 +210,7 @@ impl<T: GrpcServiceProvider> Auth<T> {
             keep_link_handle,
         };
         let desc = Redact(&request).to_string();
-        match log_and_send("auth", &desc, || client.set_username_link(request))
+        match log_and_send(Self::LOG_TAG, &desc, || client.set_username_link(request))
             .await?
             .into_inner()
             .response
@@ -232,10 +236,11 @@ impl<T: GrpcServiceProvider> Auth<T> {
         let mut client = AccountsClient::new(self.0.service());
         let request = DeleteUsernameHashRequest {};
         let desc = Redact(&request).to_string();
-        let DeleteUsernameHashResponse {} =
-            log_and_send("auth", &desc, || client.delete_username_hash(request))
-                .await?
-                .into_inner();
+        let DeleteUsernameHashResponse {} = log_and_send(Self::LOG_TAG, &desc, || {
+            client.delete_username_hash(request)
+        })
+        .await?
+        .into_inner();
         Ok(())
     }
 
@@ -249,10 +254,11 @@ impl<T: GrpcServiceProvider> Auth<T> {
         let mut client = AccountsClient::new(self.0.service());
         let request = DeleteUsernameLinkRequest {};
         let desc = Redact(&request).to_string();
-        let DeleteUsernameLinkResponse {} =
-            log_and_send("auth", &desc, || client.delete_username_link(request))
-                .await?
-                .into_inner();
+        let DeleteUsernameLinkResponse {} = log_and_send(Self::LOG_TAG, &desc, || {
+            client.delete_username_link(request)
+        })
+        .await?
+        .into_inner();
         Ok(())
     }
 }
@@ -269,7 +275,7 @@ impl<T: GrpcServiceProvider> crate::api::usernames::UnauthenticatedChatApi<OverG
         };
         let log_safe_description = Redact(&request).to_string();
         let LookupUsernameHashResponse { response } =
-            log_and_send("unauth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 account_service.lookup_username_hash(request)
             })
             .await?
@@ -308,7 +314,7 @@ impl<T: GrpcServiceProvider> crate::api::usernames::UnauthenticatedChatApi<OverG
         };
         let log_safe_description = Redact(&request).to_string();
         let LookupUsernameLinkResponse { response } =
-            log_and_send("unauth", &log_safe_description, || {
+            log_and_send(Self::LOG_TAG, &log_safe_description, || {
                 account_service.lookup_username_link(request)
             })
             .await?

@@ -9,9 +9,14 @@
 pub mod accounts;
 pub mod backups;
 pub mod call_quality;
+pub mod credentials;
 pub mod devices;
+pub mod keys;
+pub mod login_purchase;
 mod messages;
+pub mod payments;
 mod profiles;
+pub mod stickers;
 pub mod usernames;
 
 use std::convert::Infallible;
@@ -30,7 +35,9 @@ use libsignal_net_grpc::proto::google;
 use prost::Message as _;
 use tonic::codegen::StdError;
 
-use crate::api::{ChallengeOption, DisconnectedError, RateLimitChallenge, RequestError};
+use crate::api::{
+    ChallengeOption, DisconnectedError, RateLimitChallenge, RequestError, S3UploadForm,
+};
 use crate::logging::{DebugAsStrOrBytes, Redact, RedactHex};
 use crate::stream_util::take_until_first_error;
 
@@ -87,68 +94,6 @@ impl<T: GrpcService + Clone + Sync> GrpcServiceProvider for T {
     fn service(&self) -> Self {
         self.clone()
     }
-}
-
-/// A tonic encoder and decoder that passes byte buffers through unchanged, letting tonic
-/// add the gRPC framing and nothing else.
-struct PassthroughCodec;
-
-impl tonic::codec::Codec for PassthroughCodec {
-    type Encode = Vec<u8>;
-    type Decode = Vec<u8>;
-    type Encoder = Self;
-    type Decoder = Self;
-
-    fn encoder(&mut self) -> Self::Encoder {
-        PassthroughCodec
-    }
-    fn decoder(&mut self) -> Self::Decoder {
-        PassthroughCodec
-    }
-}
-
-impl tonic::codec::Encoder for PassthroughCodec {
-    type Item = Vec<u8>;
-    type Error = tonic::Status;
-    fn encode(
-        &mut self,
-        item: Self::Item,
-        dst: &mut tonic::codec::EncodeBuf<'_>,
-    ) -> Result<(), Self::Error> {
-        use bytes::BufMut;
-        dst.put(&item[..]);
-        Ok(())
-    }
-}
-
-impl tonic::codec::Decoder for PassthroughCodec {
-    type Item = Vec<u8>;
-    type Error = tonic::Status;
-    fn decode(
-        &mut self,
-        src: &mut tonic::codec::DecodeBuf<'_>,
-    ) -> Result<Option<Self::Item>, Self::Error> {
-        use bytes::Buf;
-        Ok(Some(src.copy_to_bytes(src.remaining()).into()))
-    }
-}
-
-pub fn raw_grpc(
-    log_tag: &'static str,
-    service_provider: impl GrpcServiceProvider,
-    service_name: &str,
-    method: &str,
-    payload: Vec<u8>,
-) -> impl Future<Output = Result<Vec<u8>, RequestError<Infallible>>> {
-    let mut client = tonic::client::Grpc::new(service_provider.service());
-    let path = http::uri::PathAndQuery::from_maybe_shared(format!("/{service_name}/{method}"))
-        .expect("valid URI path");
-    log_and_send(log_tag, method, || async move {
-        let response = client
-            .unary(tonic::Request::new(payload), path, PassthroughCodec)
-            .await?;
-        Ok(response.into_inner())
-    })
 }
 
 /// Performs a single operation, assumed to be a gRPC request, with logging at the start and end.
@@ -228,7 +173,7 @@ where
 ///
 /// ```ignored
 /// send_request_with_streaming_response(
-///     "unauth",
+///     Self::LOG_TAG,
 ///     self.grpc_service(),
 ///     || Ok(SomeRequest { id: validate_id(id_param)? }),
 ///     |service, request| async move {
@@ -705,6 +650,34 @@ impl TryFrom<ChallengeRequiredProto> for RateLimitChallenge {
             retry_later: retry_after_seconds.map(|seconds| RetryLater {
                 retry_after_seconds: seconds.try_into().unwrap_or(u32::MAX),
             }),
+        })
+    }
+}
+
+impl TryFrom<libsignal_net_grpc::proto::chat::common::S3UploadForm> for S3UploadForm {
+    type Error = RequestError<std::convert::Infallible>;
+
+    fn try_from(
+        value: libsignal_net_grpc::proto::chat::common::S3UploadForm,
+    ) -> Result<Self, Self::Error> {
+        let libsignal_net_grpc::proto::chat::common::S3UploadForm {
+            key,
+            credential,
+            acl,
+            algorithm,
+            date,
+            policy,
+            signature,
+        } = value;
+        // If we want to validate any of these fields, here's where we'd do it.
+        Ok(S3UploadForm {
+            key,
+            credential,
+            acl,
+            algorithm,
+            date,
+            policy,
+            signature,
         })
     }
 }

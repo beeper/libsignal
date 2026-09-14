@@ -87,15 +87,15 @@ service Accounts {
   // key for the caller's account
   rpc ConfirmTotpKey(ConfirmTotpKeyRequest) returns (ConfirmTotpKeyResponse) {}
 
-  // Returns a list of confirmed TOTP keys for the authenticated account
-  rpc ListTotpKeys(ListTotpKeysRequest) returns (ListTotpKeysResponse) {}
+  // Returns a list of confirmed MFA keys for the authenticated account
+  rpc ListMfaKeys(ListMfaKeysRequest) returns (ListMfaKeysResponse) {}
 
   // Updates encrypted, user-supplied metadata (e.g. a human-readable name and
-  // creation timestamp) for an existing, confirmed TOTP key
-  rpc SetTotpKeyMetadata(SetTotpKeyMetadataRequest) returns (SetTotpKeyMetadataResponse) {}
+  // creation timestamp) for an existing, confirmed MFA key
+  rpc SetMfaKeyMetadata(SetMfaKeyMetadataRequest) returns (SetMfaKeyMetadataResponse) {}
 
-  // Removes a TOTP from the authenticated account
-  rpc RemoveTotpKey(RemoveTotpKeyRequest) returns (RemoveTotpKeyResponse) {}
+  // Removes an MFA key from the authenticated account
+  rpc RemoveMfaKey(RemoveMfaKeyRequest) returns (RemoveMfaKeyResponse) {}
 }
 
 // Provides methods for looking up Signal accounts. Callers must not provide
@@ -533,6 +533,10 @@ message GenerateTotpKeyResponse {
     // The authenticated account already has too many TOTP keys, and the caller
     // must remove one before adding more
     errors.FailedPrecondition too_many_totp_keys = 2 [(tag.reason) = "too_many_totp_keys"];
+
+    // The authenticated account already has too many MFA keys of all types, and
+    // the caller must remove one before adding more
+    errors.FailedPrecondition too_many_mfa_keys = 3 [(tag.reason) = "too_many_mfa_keys"];
   }
 }
 
@@ -549,7 +553,7 @@ message ConfirmTotpKeyRequest {
 message ConfirmTotpKeyResponse {
   message KeyConfirmed {
     // The account-specific identifier for the newly-confirmed TOTP key
-    uint32 key_id = 1;
+    uint32 key_id = 1 [(require.range) = {min: 0, max: 127}];
   }
 
   oneof response {
@@ -560,33 +564,42 @@ message ConfirmTotpKeyResponse {
     // The provided one-time password was not valid for any reason (including
     // incorrect passwords, misaligned clocks, or missing account records)
     errors.FailedPrecondition one_time_password_not_verified = 2 [(tag.reason) = "one_time_password_not_verified"];
+
+    // The authenticated account already has too many MFA keys of all types, and
+    // the caller must remove one before adding more
+    errors.FailedPrecondition too_many_mfa_keys = 3 [(tag.reason) = "too_many_mfa_keys"];
   }
 }
 
-message ListTotpKeysRequest {}
+message ListMfaKeysRequest {}
 
-message ListTotpKeysResponse {
-  message TotpKeyMetadata {
-    // The user-provided ciphertext for metadata associated with this TOTP key
-    bytes metadata_ciphertext = 1;
+message ListMfaKeysResponse {
+  message MfaKeyMetadata {
+    enum MfaKeyType {
+      MFA_KEY_TYPE_UNSPECIFIED = 0;
+      MFA_KEY_TYPE_TOTP = 1;
+    }
 
-    // The TOTP parameters associated with this key
-    TotpParameters totp_parameters = 2;
+    /// The user-provided ciphertext for metadata associated with this MFA key
+    bytes metadata_ciphertext = 1 [(require.exactlySize) = 160];
+
+    /// The type of MFA factor this key is for
+    MfaKeyType type = 2;
   }
 
-  map<int32, TotpKeyMetadata> keys = 1;
+  map<uint32, MfaKeyMetadata> keys = 1;
 }
 
-message SetTotpKeyMetadataRequest {
-  // The account-specific identifier of the TOTP key to modify
-  uint32 key_id = 1;
+message SetMfaKeyMetadataRequest {
+  // The account-specific identifier of the MFA key to modify
+  uint32 key_id = 1 [(require.range) = {min: 0, max: 127}];
 
   // The ciphertext of the new user-provided metadata to be attached to the
   // identified key
   bytes metadata_ciphertext = 2 [(require.exactlySize) = 160];
 }
 
-message SetTotpKeyMetadataResponse {
+message SetMfaKeyMetadataResponse {
   message MetadataUpdated {
   }
 
@@ -599,10 +612,10 @@ message SetTotpKeyMetadataResponse {
   }
 }
 
-message RemoveTotpKeyRequest {
-  // The account-specific identifier of the TOTP key to remove
-  uint32 key_id = 1;
+message RemoveMfaKeyRequest {
+  // The account-specific identifier of the MFA key to remove
+  uint32 key_id = 1 [(require.range) = {min: 0, max: 127}];
 }
 
-message RemoveTotpKeyResponse {
+message RemoveMfaKeyResponse {
 }

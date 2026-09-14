@@ -113,4 +113,17 @@
       }
     }
   },
+  {
+    "chatItem": {
+      "authorId": "1",
+      "chatId": "1",
+      "dateSent": "3",
+      "directionless": {},
+      "updateMessage": {
+        "learnedProfileChange": {
+          "sharedName": "Han Solo"
+        }
+      }
+    }
+  },
 ]
