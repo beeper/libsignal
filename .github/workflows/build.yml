@@ -95,7 +95,7 @@ jobs:
       if: matrix.target == 'aarch64-pc-windows-gnullvm'
       with:
         msystem: 'CLANGARM64'
-        location: C:\.\
+        #location: C:\.\
 
     - name: Install MinGW-w64
       if: matrix.target == 'x86_64-pc-windows-gnu'
