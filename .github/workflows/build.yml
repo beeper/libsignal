@@ -84,7 +84,7 @@ jobs:
       if: contains(matrix.target, 'android')
       uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       with:
-        packages: 'tools platform-tools ndk;26.1.10909125'
+        packages: 'cmdline-tools;latest platform-tools ndk;26.1.10909125'
 
     - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
       if: runner.os == 'macOS'
