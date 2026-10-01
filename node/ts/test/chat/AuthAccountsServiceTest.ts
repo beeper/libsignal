@@ -142,7 +142,77 @@ describe('AuthAccountsService', () => {
             await expect(out)
               .to.eventually.be.rejectedWith(LibSignalErrorBase)
               .and.deep.include({
-                code: ErrorCode.OneTimePasswordNotVerified,
+                code: ErrorCode.MfaNotVerified,
+              });
+            break;
+          case 'tooManyMfaKeys':
+            await expect(out)
+              .to.eventually.be.rejectedWith(LibSignalErrorBase)
+              .and.deep.include({
+                code: ErrorCode.TooManyMfaKeys,
+              });
+            break;
+          default:
+            expect(await out).to.equal(resp.success);
+        }
+      }
+    );
+  });
+
+  describe('startWebAuthnRegistration', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_StartWebAuthnRegistrationTests(),
+      connectAuth<AuthAccountsService>,
+      async (
+        chat: AuthAccountsService,
+        _args: void,
+        resp: NativeNice.StartWebAuthnRegistrationOut
+      ) => {
+        const out = chat.startWebAuthnRegistration();
+        switch (resp) {
+          case 'tooManyMfaKeys':
+            await expect(out)
+              .to.eventually.be.rejectedWith(LibSignalErrorBase)
+              .and.deep.include({
+                code: ErrorCode.TooManyMfaKeys,
+              });
+            break;
+          default:
+            expect(await out).to.deep.equal(resp.success);
+        }
+      }
+    );
+  });
+
+  describe('finishWebAuthnRegistration', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_FinishWebAuthnRegistrationTests(),
+      connectAuth<AuthAccountsService>,
+      async (
+        chat: AuthAccountsService,
+        {
+          attestationObject,
+          collectedClientDataJson,
+          name,
+          createdAt,
+          svrKey,
+        }: NativeNice.FinishWebAuthnRegistrationArgs,
+        resp: NativeNice.FinishWebAuthnRegistrationOut
+      ) => {
+        Native.TESTING_EnableDeterministicRngForTesting();
+        const out = chat.finishWebAuthnRegistration({
+          attestationObject,
+          collectedClientDataJson,
+          metadata: { name, createdAt },
+          svrKey: new SvrKey(svrKey),
+          rng: { __deterministicRngSeedForTesting: 0 },
+        });
+        switch (resp) {
+          case 'webAuthnRegistrationUnsuccessful':
+            await expect(out)
+              .to.eventually.be.rejectedWith(LibSignalErrorBase)
+              .and.deep.include({
+                code: ErrorCode.WebAuthnRegistrationUnsuccessful,
               });
             break;
           case 'tooManyMfaKeys':
@@ -236,6 +306,16 @@ describe('AuthAccountsService', () => {
         await expect(chat.setMfaKeyMetadata({ keyId: 0, metadata, svrKey }))
           .to.eventually.be.rejectedWith(LibSignalErrorBase)
           .and.deep.include({ code: ErrorCode.Generic });
+        await expect(
+          chat.finishWebAuthnRegistration({
+            attestationObject: new Uint8Array(0),
+            collectedClientDataJson: '{}',
+            metadata,
+            svrKey,
+          })
+        )
+          .to.eventually.be.rejectedWith(LibSignalErrorBase)
+          .and.deep.include({ code: ErrorCode.Generic });
       });
     }
 
@@ -246,7 +326,7 @@ describe('AuthAccountsService', () => {
       ['a fractional', 0.5],
       ['an unsafe', Number.MAX_SAFE_INTEGER + 1],
     ] as const) {
-      it(`rejects ${description} creation timestamp from both metadata APIs`, async () => {
+      it(`rejects ${description} creation timestamp from every metadata API`, async () => {
         const tokio = new TokioAsyncContext(Native.TokioAsyncContext_new());
         const [chat] = connectAuth<AuthAccountsService>(tokio);
         const metadata = { name: 'Work laptop', createdAt };
@@ -261,6 +341,16 @@ describe('AuthAccountsService', () => {
           .to.eventually.be.rejectedWith(LibSignalErrorBase)
           .and.deep.include({ code: ErrorCode.Generic });
         await expect(chat.setMfaKeyMetadata({ keyId: 0, metadata, svrKey }))
+          .to.eventually.be.rejectedWith(LibSignalErrorBase)
+          .and.deep.include({ code: ErrorCode.Generic });
+        await expect(
+          chat.finishWebAuthnRegistration({
+            attestationObject: new Uint8Array(0),
+            collectedClientDataJson: '{}',
+            metadata,
+            svrKey,
+          })
+        )
           .to.eventually.be.rejectedWith(LibSignalErrorBase)
           .and.deep.include({ code: ErrorCode.Generic });
       });
@@ -294,6 +384,69 @@ describe('AuthAccountsService', () => {
             break;
           default:
             resp satisfies never;
+        }
+      }
+    );
+  });
+
+  describe('startMfaVerification', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_StartMfaVerificationTests(),
+      connectAuth<AuthAccountsService>,
+      async (
+        chat: AuthAccountsService,
+        _noArgs,
+        resp: NativeNice.StartMfaVerificationOut
+      ) => {
+        const out = chat.startMfaVerification({});
+        switch (resp) {
+          case 'malformed':
+            await expect(out)
+              .to.eventually.be.rejectedWith(LibSignalErrorBase)
+              .and.deep.include({
+                code: ErrorCode.IoError,
+              });
+            break;
+          default: {
+            const result = await out;
+            expect(result.hasTotp).equals(resp.success.hasTotp);
+            if (resp.success.webauthnParams !== null) {
+              expect(result.webauthnParams).deep.equals(
+                resp.success.webauthnParams
+              );
+            } else {
+              expect(result).does.not.haveOwnProperty('webauthnParams');
+            }
+          }
+        }
+      }
+    );
+  });
+
+  describe('finishMfaVerification', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_FinishMfaVerificationTests(),
+      connectAuth<AuthAccountsService>,
+      async (
+        chat: AuthAccountsService,
+        args: NativeNice.BridgeMfaVerificationCredential,
+        resp: NativeNice.FinishMfaVerificationOut
+      ) => {
+        const credential =
+          'totp' in args
+            ? { totpPassword: args.totp }
+            : { webauthnJson: args.webAuthn };
+        const out = chat.finishMfaVerification({ credential });
+        switch (resp) {
+          case 'failedToVerify':
+            await expect(out)
+              .to.eventually.be.rejectedWith(LibSignalErrorBase)
+              .and.deep.include({
+                code: ErrorCode.MfaNotVerified,
+              });
+            break;
+          default:
+            await out;
         }
       }
     );

@@ -1223,11 +1223,11 @@ fn GroupSendEndorsement_CheckValidContents(
 }
 
 #[bridge_fn]
-fn GroupSendEndorsement_Combine(endorsements: Vec<&[u8]>) -> Vec<u8> {
+fn GroupSendEndorsement_Combine(endorsements: &[&[u8]]) -> Vec<u8> {
     let combined = GroupSendEndorsement::combine(
         endorsements
-            .into_iter()
-            .map(|next| zkgroup::deserialize(next).expect("should have been parsed previously")),
+            .iter()
+            .map(|&next| zkgroup::deserialize(next).expect("should have been parsed previously")),
     );
     zkgroup::serialize(&combined)
 }

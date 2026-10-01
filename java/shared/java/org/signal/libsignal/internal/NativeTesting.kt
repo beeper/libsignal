@@ -332,6 +332,12 @@ public object NativeTesting {
   ): CompletableFuture<ObjectHandle>
 
   @JvmStatic
+  public external fun TESTING_FinishMfaVerificationTests(): Array<Object>
+
+  @JvmStatic
+  public external fun TESTING_FinishWebAuthnRegistrationTests(): Array<Object>
+
+  @JvmStatic
   public external fun TESTING_FutureCancellationCounter_Create(initialValue: Int): ObjectHandle
 
   @JvmStatic
@@ -638,7 +644,16 @@ public object NativeTesting {
   public external fun TESTING_SetDiscoverableByPhoneNumberTests(): Array<Object>
 
   @JvmStatic
+  public external fun TESTING_SetLastResortKemPreKeyTests(): Array<Object>
+
+  @JvmStatic
   public external fun TESTING_SetMfaKeyMetadataTests(): Array<Object>
+
+  @JvmStatic
+  public external fun TESTING_SetOneTimeEcPreKeysTests(): Array<Object>
+
+  @JvmStatic
+  public external fun TESTING_SetOneTimeKemPreKeysTests(): Array<Object>
 
   @JvmStatic
   public external fun TESTING_SetPushTokenFcmTests(): Array<Object>
@@ -650,6 +665,9 @@ public object NativeTesting {
   public external fun TESTING_SetRegistrationRecoveryPasswordTests(): Array<Object>
 
   @JvmStatic
+  public external fun TESTING_SetSignedEcPreKeyTests(): Array<Object>
+
+  @JvmStatic
   public external fun TESTING_SetUsernameLinkTests(): Array<Object>
 
   @JvmStatic
@@ -657,6 +675,12 @@ public object NativeTesting {
     sourcePublicKey: ObjectHandle,
     signedPreKey: SignedPublicPreKey<*>,
   ): Unit
+
+  @JvmStatic
+  public external fun TESTING_StartMfaVerificationTests(): Array<Object>
+
+  @JvmStatic
+  public external fun TESTING_StartWebAuthnRegistrationTests(): Array<Object>
 
   @JvmStatic
   public external fun TESTING_SubmitCallQualitySurveyTests(): Array<Object>

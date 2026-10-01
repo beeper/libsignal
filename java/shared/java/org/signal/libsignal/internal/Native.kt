@@ -336,6 +336,25 @@ internal object Native {
   ): CompletableFuture<Void?>
 
   @JvmStatic
+  public external fun AuthenticatedChatConnection_finish_mfa_verification(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    credential: Object,
+  ): CompletableFuture<Void?>
+
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_finish_web_authn_registration(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    attestationObject: ByteArray,
+    collectedClientDataJson: String,
+    name: String,
+    createdAt: Long,
+    svrKey: ByteArray,
+    rng: Long,
+  ): CompletableFuture<Int>
+
+  @JvmStatic
   public external fun AuthenticatedChatConnection_generate_totp_key(
     asyncRuntime: ObjectHandle,
     chat: SimpleOwner,
@@ -475,6 +494,16 @@ internal object Native {
   ): CompletableFuture<Void?>
 
   @JvmStatic
+  public external fun AuthenticatedChatConnection_set_last_resort_kem_pre_key(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    identityType: Int,
+    id: Int,
+    key: SimpleOwner,
+    signature: ByteArray,
+  ): CompletableFuture<Void?>
+
+  @JvmStatic
   public external fun AuthenticatedChatConnection_set_mfa_key_metadata(
     asyncRuntime: ObjectHandle,
     chat: SimpleOwner,
@@ -483,6 +512,25 @@ internal object Native {
     createdAt: Long,
     svrKey: ByteArray,
     rng: Long,
+  ): CompletableFuture<Void?>
+
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_set_one_time_ec_pre_keys(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    identityType: Int,
+    preKeyIds: IntArray,
+    preKeyData: Array<*>,
+  ): CompletableFuture<Void?>
+
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_set_one_time_kem_pre_keys(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    identityType: Int,
+    preKeyIds: IntArray,
+    preKeyData: Array<*>,
+    preKeySignatures: Array<*>,
   ): CompletableFuture<Void?>
 
   @JvmStatic
@@ -507,12 +555,34 @@ internal object Native {
   ): CompletableFuture<Void?>
 
   @JvmStatic
+  public external fun AuthenticatedChatConnection_set_signed_ec_pre_key(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    identityType: Int,
+    id: Int,
+    key: SimpleOwner,
+    signature: ByteArray,
+  ): CompletableFuture<Void?>
+
+  @JvmStatic
   public external fun AuthenticatedChatConnection_set_username_link(
     asyncRuntime: ObjectHandle,
     chat: SimpleOwner,
     usernameCiphertext: ByteArray,
     keepLinkHandle: Boolean,
   ): CompletableFuture<UUID>
+
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_start_mfa_verification(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+  ): CompletableFuture<Object>
+
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_start_web_authn_registration(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+  ): CompletableFuture<Object>
 
   @JvmStatic
   @Throws(Exception::class)

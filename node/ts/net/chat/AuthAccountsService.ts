@@ -3,16 +3,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+import type { EmptyObject } from 'type-fest';
+
 import { RequestOptions, AuthenticatedChatConnection } from '../Chat.js';
 import * as NativeNice from '../../NativeNice.js';
 import { LibSignalErrorBase } from '../../Errors.js';
 import type {
   GenericError,
-  OneTimePasswordNotVerified,
+  MfaNotVerified,
   StandardNetworkError,
   TooManyMfaKeys,
   TooManyTotpKeys,
   MfaKeyNotFound,
+  WebAuthnRegistrationUnsuccessful,
 } from '../../Errors.js';
 import { SvrKey } from '../../AccountKeys.js';
 import type { Rng } from '../../RngForTesting.js';
@@ -29,7 +32,10 @@ export const MFA_KEY_NAME_MAX_LENGTH = 98;
 
 function validateMfaMetadataCreatedAt(
   createdAt: number,
-  operation: 'confirmTotpKey' | 'setMfaKeyMetadata'
+  operation:
+    | 'confirmTotpKey'
+    | 'setMfaKeyMetadata'
+    | 'finishWebAuthnRegistration'
 ): void {
   if (!Number.isSafeInteger(createdAt) || createdAt < 0) {
     throw new LibSignalErrorBase(
@@ -91,12 +97,36 @@ export type PendingTotpKey = {
 };
 
 /**
+ * The parameters a WebAuthn authenticator needs to create a new credential for the account.
+ *
+ * Returned by {@link AuthAccountsService#startWebAuthnRegistration}; the caller passes these to
+ * the platform's WebAuthn API to run a registration ceremony, then reports the outcome via
+ * {@link AuthAccountsService#finishWebAuthnRegistration}.
+ */
+export type WebAuthnCreateParameters = {
+  /** The "user handle" (`user.id`) that should be handed to the authenticator. */
+  userHandle: Uint8Array<ArrayBuffer>;
+  /**
+   * The COSE IDs (https://www.iana.org/assignments/cose#algorithms) of acceptable algorithms for
+   * the created key, as WebAuthn `COSEAlgorithmIdentifier`s.
+   */
+  allowedAlgorithms: Array<number>;
+  /**
+   * The credential IDs already registered for this account.
+   *
+   * These can be passed to candidate authenticators to tell them not to create a new key if they
+   * already have a private key matching one of these.
+   */
+  excludeCredentialIds: Array<Uint8Array<ArrayBuffer>>;
+};
+
+/**
  * The kind of a confirmed MFA key.
  *
  * `unknown` is a kind of key this version of libsignal doesn't know about; see
  * {@link AuthAccountsService#listMfaKeys}.
  */
-export type MfaKeyKind = 'totp' | 'unknown';
+export type MfaKeyKind = 'totp' | 'webAuthn' | 'unknown';
 
 /**
  * A confirmed multi-factor authentication (MFA) key on the account, as returned by
@@ -113,6 +143,49 @@ export type ConfirmedMfaKey = {
   /** What kind of MFA key this is. */
   kind: MfaKeyKind;
 };
+
+/**
+ * Information necessary to run an MFA verification, returned by
+ * {@link AuthAccountsService#startMfaVerification}.
+ *
+ * Note that it is possible for no methods of verification to be available; this occurs when the
+ * account has no MFA keys, or when all registered keys are of a type this version of libsignal
+ * does not support.
+ */
+export type StartMfaVerificationResponse = {
+  /**
+   * If true, the account has one or more TOTP keys registered and can complete verification with
+   * {@link MfaVerificationCredentialTotp}.
+   */
+  hasTotp: boolean;
+  /**
+   * If present, the account has one or more WebAuthn keys registered and can complete
+   * verification with {@link MfaVerificationCredentialWebAuthn} using the parameters
+   * provided.
+   */
+  webauthnParams?: WebAuthnAuthenticationParameters;
+};
+
+export type WebAuthnAuthenticationParameters = {
+  challenge: Uint8Array<ArrayBuffer>;
+  /** After this interval, verification may fail even if everything else is done correctly. */
+  timeoutSeconds: number;
+  allowedCredentialIds: Uint8Array<ArrayBuffer>[];
+};
+
+/** @see MfaVerificationCredential */
+export type MfaVerificationCredentialTotp = { totpPassword: number };
+/** @see MfaVerificationCredential */
+export type MfaVerificationCredentialWebAuthn = { webauthnJson: string };
+/**
+ * A credential used to demonstrate ownership of an MFA method.
+ *
+ * @see AuthAccountsService#startMfaVerification
+ * @see AuthAccountsService#finishMfaVerification
+ */
+export type MfaVerificationCredential =
+  | MfaVerificationCredentialTotp
+  | MfaVerificationCredentialWebAuthn;
 
 export interface AuthAccountsService {
   /**
@@ -244,7 +317,7 @@ export interface AuthAccountsService {
    * {@link GenericError}.
    *
    * @param rng should be omitted in production
-   * @throws {OneTimePasswordNotVerified} if the one-time password was not accepted for any reason
+   * @throws {MfaNotVerified} if the one-time password was not accepted for any reason
    * @throws {TooManyMfaKeys} if the account filled up with MFA keys between generating and
    * confirming this one
    * @throws {StandardNetworkError}
@@ -258,6 +331,99 @@ export interface AuthAccountsService {
     },
     options?: RequestOptions
   ) => Promise<number>;
+
+  /**
+   * Starts a WebAuthn registration ceremony, returning the parameters the authenticator needs to
+   * create a new credential (passkey) for the authenticated account.
+   *
+   * The caller passes the returned {@link WebAuthnCreateParameters} to the platform's WebAuthn
+   * API to run the ceremony, and then reports its outcome via
+   * {@link AuthAccountsService#finishWebAuthnRegistration}. No MFA key is added until the ceremony
+   * is finished, so a started registration that is never finished leaves the account's keys
+   * unchanged.
+   *
+   * WebAuthn credentials may only be registered for accounts without phone numbers.
+   *
+   * @throws {TooManyMfaKeys} if the account already has too many MFA keys of all kinds, and one
+   * must be removed before adding more
+   * @throws {StandardNetworkError}
+   */
+  startWebAuthnRegistration: (
+    options?: RequestOptions
+  ) => Promise<WebAuthnCreateParameters>;
+
+  /**
+   * Concludes a WebAuthn registration ceremony (see
+   * {@link AuthAccountsService#startWebAuthnRegistration}), adding the new credential (passkey) to
+   * the authenticated account.
+   *
+   * `attestationObject` is the attestation object from the completed ceremony, serialized as
+   * specified in https://www.w3.org/TR/webauthn/#attestation-object. `collectedClientDataJson` is
+   * the "collected client data" map used in the ceremony, as the exact JSON map that was hashed
+   * for the authenticator; it is passed through unchanged.
+   *
+   * A metadata name longer than {@link MFA_KEY_NAME_MAX_LENGTH} bytes of UTF-8 or containing
+   * U+0000, or a metadata creation timestamp that is not a non-negative safe integer, is a
+   * programmer error, reported as a {@link GenericError}.
+   *
+   * @param svrKey The account's SVR key to encrypt metadata with
+   * @param rng should be omitted in production
+   * @returns The account-specific identifier assigned to the newly-registered key
+   * @throws {WebAuthnRegistrationUnsuccessful} if the ceremony's response was not verified
+   * successfully, for any reason
+   * @throws {TooManyMfaKeys} if the account filled up with MFA keys while the ceremony was running
+   * @throws {StandardNetworkError}
+   */
+  finishWebAuthnRegistration: (
+    request: {
+      attestationObject: Uint8Array<ArrayBuffer>;
+      collectedClientDataJson: string;
+      metadata: MfaMetadata;
+      svrKey: SvrKey;
+      rng?: Rng;
+    },
+    options?: RequestOptions
+  ) => Promise<number>;
+
+  /**
+   * Starts a verification check for any of the MFA keys on the authenticated account.
+   *
+   * WebAuthn verification is necessarily two-phase; this checks which MFA methods are available
+   * and provides the necessary data to run a check for any of them.
+   *
+   * Note that it is possible for the returned {@link StartMfaVerificationResponse} to
+   * not include any verification methods; this occurs when the account has no MFA keys,
+   * or when all registered keys are of a type this version of libsignal does not support.
+   *
+   * If {@link StartMfaVerificationResponse#webauthnParams} are returned, the set of valid
+   * {@link WebAuthnAuthenticationParameters#allowedCredentialIds} will be non-empty.
+   *
+   * @throws {StandardNetworkError}
+   *
+   * @see AuthAccountsService#finishMfaVerification
+   */
+  startMfaVerification: (
+    request: EmptyObject,
+    options?: RequestOptions
+  ) => Promise<StartMfaVerificationResponse>;
+
+  /**
+   * Completes a verification check for any of the MFA keys on the authenticated account.
+   *
+   * WebAuthn verification is necessarily two-phase; this passes the response back to the chat
+   * server to verify.
+   *
+   * @throws {MfaNotVerified} if the verification fails for any reason
+   * @throws {StandardNetworkError}
+   *
+   * @see [startMfaVerification]
+   */
+  finishMfaVerification: (
+    request: {
+      credential: Readonly<MfaVerificationCredential>;
+    },
+    options?: RequestOptions
+  ) => Promise<void>;
 
   /**
    * Lists the confirmed MFA keys for the authenticated account.
@@ -422,6 +588,73 @@ AuthenticatedChatConnection.prototype.confirmTotpKey = async function (
     createdAt,
     svrKey: svrKey.getContents(),
     rng,
+  });
+};
+
+AuthenticatedChatConnection.prototype.startWebAuthnRegistration =
+  async function (options?): Promise<WebAuthnCreateParameters> {
+    return await NativeNice.AuthenticatedChatConnection_start_web_authn_registration(
+      {
+        asyncContext: this.asyncContext,
+        abortSignal: options?.abortSignal,
+        chat: this.chatService,
+      }
+    );
+  };
+
+AuthenticatedChatConnection.prototype.finishWebAuthnRegistration =
+  async function (
+    {
+      attestationObject,
+      collectedClientDataJson,
+      metadata: { name, createdAt },
+      svrKey,
+      rng,
+    },
+    options?
+  ): Promise<number> {
+    validateMfaMetadataCreatedAt(createdAt, 'finishWebAuthnRegistration');
+    return await NativeNice.AuthenticatedChatConnection_finish_web_authn_registration(
+      {
+        asyncContext: this.asyncContext,
+        abortSignal: options?.abortSignal,
+        chat: this.chatService,
+        attestationObject,
+        collectedClientDataJson,
+        name,
+        createdAt,
+        svrKey: svrKey.getContents(),
+        rng,
+      }
+    );
+  };
+
+AuthenticatedChatConnection.prototype.startMfaVerification = async function (
+  _request,
+  options?
+): Promise<StartMfaVerificationResponse> {
+  const { hasTotp, webauthnParams } =
+    await NativeNice.AuthenticatedChatConnection_start_mfa_verification({
+      asyncContext: this.asyncContext,
+      abortSignal: options?.abortSignal,
+      chat: this.chatService,
+    });
+  return { hasTotp, ...(webauthnParams !== null ? { webauthnParams } : {}) };
+};
+
+AuthenticatedChatConnection.prototype.finishMfaVerification = async function (
+  { credential },
+  options?
+): Promise<void> {
+  const bridgeCred: NativeNice.BridgeMfaVerificationCredential =
+    'totpPassword' in credential
+      ? { totp: credential.totpPassword }
+      : { webAuthn: credential.webauthnJson };
+  return NativeNice.AuthenticatedChatConnection_finish_mfa_verification({
+    asyncContext: this.asyncContext,
+    abortSignal: options?.abortSignal,
+    chat: this.chatService,
+    credential: bridgeCred,
   });
 };
 

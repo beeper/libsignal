@@ -18,14 +18,15 @@ use libsignal_account_keys::{MfaMetadata, SvrKey};
 use libsignal_bridge_macros::{bridge_fn, bridge_io};
 use libsignal_bridge_types::crypto::RandomNumberGenerator;
 use libsignal_bridge_types::net::chat::remote_derives::{
-    CallQualitySurveyInternal, CurrencyConversionsInternal, GetStickerUploadFormsResponse,
-    ListMediaResponse,
+    BridgeMfaVerificationCredential, CallQualitySurveyInternal, CurrencyConversionsInternal,
+    GetStickerUploadFormsResponse, ListMediaResponse, StartMfaVerificationResponse,
 };
 use libsignal_bridge_types::net::chat::*;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
+use libsignal_bridge_types::protocol::StrictPreKeyId;
 use libsignal_bridge_types::support::AsType;
-use libsignal_core::curve::PrivateKey;
-use libsignal_core::{DeviceId, ServiceId};
+use libsignal_core::curve::{PrivateKey, PublicKey};
+use libsignal_core::{DeviceId, ServiceId, ServiceIdKind};
 use libsignal_net::chat::{self, ConnectError, LanguageList, Response as ChatResponse, SendError};
 use libsignal_net_chat::api;
 use libsignal_net_chat::api::backups::{
@@ -42,18 +43,22 @@ use libsignal_net_chat::api::profiles::UnauthenticatedAccountExistenceApi;
 use libsignal_net_chat::api::usernames::UnauthenticatedChatApi as _;
 use libsignal_net_chat::api::{RequestError, UploadForm, UserBasedAuthorization};
 use libsignal_net_chat::grpc::accounts::{
-    ConfirmTotpKeyError, GenerateTotpKeyError, MAX_MFA_KEY_ID, MfaKeyId, MfaKeyNotFound,
+    ConfirmTotpKeyError, FinishWebAuthnRegistrationError, GenerateTotpKeyError, MAX_MFA_KEY_ID,
+    MfaKeyId, MfaKeyNotFound, MfaVerificationFailed, StartWebAuthnRegistrationError,
 };
 use libsignal_net_chat::grpc::backups::RedeemBackupReceiptFailure;
 use libsignal_net_chat::grpc::credentials::AuthCheckResult;
 use libsignal_net_chat::grpc::devices::{
     DeviceCapability, DeviceIdNotFoundInAccount, LinkedDevice,
 };
+use libsignal_net_chat::grpc::keys::{PublicEcPreKey, PublicKemPreKey, PublicSignedEcPreKey};
 use libsignal_net_chat::grpc::login_purchase::{PaymentProvider, ReceiptCredentialError};
 use libsignal_net_chat::grpc::usernames::{ConfirmUsernameError, UsernameNotAvailable};
 use libsignal_net_chat::stream_util::{BulkPolledStreamChunk, BulkPolledStreamTerminationReason};
 use libsignal_net_chat::ws::OverWs;
-use libsignal_protocol::{CiphertextMessage, Timestamp};
+use libsignal_protocol::{
+    CiphertextMessage, KyberPreKeyId, PreKeyId, SignedPreKeyId, Timestamp, kem,
+};
 use uuid::Uuid;
 
 use crate::support::*;
@@ -1081,6 +1086,45 @@ async fn AuthenticatedChatConnection_confirm_totp_key(
 }
 
 #[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_start_web_authn_registration(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+) -> Result<BridgeWebAuthnCreateParameters, RequestError<StartWebAuthnRegistrationError>> {
+    chat.require_grpc()
+        .await
+        .start_web_authn_registration()
+        .await
+        .map(Into::into)
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_finish_web_authn_registration(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    attestation_object: Vec<u8>,
+    collected_client_data_json: String,
+    name: String,
+    created_at: Timestamp,
+    svr_key: [u8; 32],
+    rng: RandomNumberGenerator,
+) -> Result<i32, RequestOrArgumentError<FinishWebAuthnRegistrationError>> {
+    let metadata = mfa_metadata(name, created_at)?;
+    let mut rng = rng.create();
+    let key_id = chat
+        .require_grpc()
+        .await
+        .finish_web_authn_registration(
+            attestation_object,
+            collected_client_data_json,
+            &metadata,
+            &SvrKey::new(svr_key),
+            &mut rng,
+        )
+        .await?;
+    Ok(u32::from(key_id)
+        .try_into()
+        .expect("validated by libsignal-net-chat"))
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
 async fn AuthenticatedChatConnection_list_mfa_keys(
     chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
     svr_key: [u8; 32],
@@ -1282,6 +1326,121 @@ async fn AuthenticatedChatConnection_get_sticker_upload_forms(
         )
         .await
         .map(Into::into)
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_set_one_time_ec_pre_keys(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    identity_type: AsType<ServiceIdKind, u8>,
+    pre_key_ids: Vec<StrictPreKeyId<PreKeyId>>,
+    pre_key_data: BridgeVec<BridgeHandleRef<'_, PublicKey>>,
+) -> Result<(), RequestError<Infallible>> {
+    // The lifetimes involved in the parameters make it simpler to pass them as separate arrays and
+    // stitch them back together.
+    assert_eq!(pre_key_ids.len(), pre_key_data.len());
+    let pre_keys = pre_key_ids
+        .into_iter()
+        .zip(pre_key_data)
+        .map(|(id, key)| PublicEcPreKey {
+            key_id: id.into_inner(),
+            public_key: &key,
+        });
+    chat.require_grpc()
+        .await
+        .set_one_time_ec_pre_keys(*identity_type, pre_keys)
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_set_one_time_kem_pre_keys(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    identity_type: AsType<ServiceIdKind, u8>,
+    pre_key_ids: Vec<StrictPreKeyId<KyberPreKeyId>>,
+    pre_key_data: BridgeVec<BridgeHandleRef<'_, kem::PublicKey>>,
+    pre_key_signatures: BridgeVec<Vec<u8>>,
+) -> Result<(), RequestError<Infallible>> {
+    // The lifetimes involved in the parameters make it simpler to pass them as separate arrays and
+    // stitch them back together.
+    assert_eq!(pre_key_ids.len(), pre_key_data.len());
+    assert_eq!(pre_key_ids.len(), pre_key_signatures.len());
+    let pre_keys = pre_key_ids
+        .into_iter()
+        .zip(pre_key_data)
+        .zip(pre_key_signatures)
+        .map(|((id, key), sig)| PublicKemPreKey {
+            key_id: id.into_inner(),
+            public_key: &key,
+            signature: Cow::Owned(sig),
+        });
+    chat.require_grpc()
+        .await
+        .set_one_time_kem_pre_keys(*identity_type, pre_keys)
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_set_signed_ec_pre_key(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    identity_type: AsType<ServiceIdKind, u8>,
+    id: StrictPreKeyId<SignedPreKeyId>,
+    key: BridgeHandleRef<'_, PublicKey>,
+    signature: Vec<u8>,
+) -> Result<(), RequestError<Infallible>> {
+    chat.require_grpc()
+        .await
+        .set_signed_ec_pre_key(
+            *identity_type,
+            PublicSignedEcPreKey {
+                key_id: id.into_inner(),
+                public_key: &key,
+                signature: Cow::Owned(signature),
+            },
+        )
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_set_last_resort_kem_pre_key(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    identity_type: AsType<ServiceIdKind, u8>,
+    id: StrictPreKeyId<KyberPreKeyId>,
+    key: BridgeHandleRef<'_, kem::PublicKey>,
+    signature: Vec<u8>,
+) -> Result<(), RequestError<Infallible>> {
+    chat.require_grpc()
+        .await
+        .set_last_resort_kem_pre_key(
+            *identity_type,
+            PublicKemPreKey {
+                key_id: id.into_inner(),
+                public_key: &key,
+                signature: Cow::Owned(signature),
+            },
+        )
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_start_mfa_verification(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+) -> Result<StartMfaVerificationResponse, RequestError<Infallible>> {
+    Ok(chat
+        .require_grpc()
+        .await
+        .start_mfa_verification()
+        .await?
+        .into())
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_finish_mfa_verification(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    credential: BridgeMfaVerificationCredential,
+) -> Result<(), RequestError<MfaVerificationFailed>> {
+    chat.require_grpc()
+        .await
+        .finish_mfa_verification(credential.into())
+        .await
 }
 
 #[cfg(test)]

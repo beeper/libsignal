@@ -864,12 +864,6 @@ checksum = "18f12cc9948ed9604230cdddc7c86e270f9401ccbe3c2e98a4378c5e7632212f"
 
 [[package]]
 name = "convert_case"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
-
-[[package]]
-name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
@@ -1094,7 +1088,6 @@ dependencies = [
  "curve25519-dalek-derive",
  "digest 0.11.3",
  "fiat-crypto 0.3.0",
- "rand_core 0.10.1",
  "rustc_version",
  "serde",
  "subtle",
@@ -1325,19 +1318,6 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
-version = "0.99.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6edb4b64a43d977b8e99788fe3a04d483834fba1215a7e02caa415b626497f7f"
-dependencies = [
- "convert_case 0.4.0",
- "proc-macro2",
- "quote",
- "rustc_version",
- "syn 2.0.118",
-]
-
-[[package]]
-name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
@@ -1351,7 +1331,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
- "convert_case 0.10.0",
+ "convert_case",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -1448,9 +1428,9 @@ dependencies = [
 
 [[package]]
 name = "downcast-rs"
-version = "1.2.1"
+version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
+checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
 
 [[package]]
 name = "dyn-clonable"
@@ -2620,7 +2600,7 @@ dependencies = [
  "cbc",
  "const-str",
  "criterion",
- "derive_more 2.1.1",
+ "derive_more",
  "displaydoc",
  "hkdf",
  "hmac",
@@ -2716,7 +2696,7 @@ dependencies = [
  "bytes",
  "chrono",
  "const-str",
- "derive_more 2.1.1",
+ "derive_more",
  "futures-util",
  "hex",
  "http",
@@ -2762,7 +2742,7 @@ dependencies = [
  "bytes",
  "const-str",
  "derive-where",
- "derive_more 2.1.1",
+ "derive_more",
  "device-transfer",
  "displaydoc",
  "futures-util",
@@ -2835,7 +2815,7 @@ dependencies = [
  "const-str",
  "criterion",
  "curve25519-dalek 5.0.0",
- "derive_more 2.1.1",
+ "derive_more",
  "displaydoc",
  "hex",
  "libsignal-debug",
@@ -2852,14 +2832,14 @@ dependencies = [
 
 [[package]]
 name = "libsignal-debug"
-version = "0.102.2"
+version = "0.103.1"
 dependencies = [
  "cfg-if",
 ]
 
 [[package]]
 name = "libsignal-ffi"
-version = "0.102.2"
+version = "0.103.1"
 dependencies = [
  "cpufeatures 0.2.17",
  "libsignal-ffi-impl",
@@ -2868,7 +2848,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-ffi-impl"
-version = "0.102.2"
+version = "0.103.1"
 dependencies = [
  "cpufeatures 0.2.17",
  "hex",
@@ -2905,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni"
-version = "0.102.2"
+version = "0.103.1"
 dependencies = [
  "libsignal-debug",
  "libsignal-jni-impl",
@@ -2913,7 +2893,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni-impl"
-version = "0.102.2"
+version = "0.103.1"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
@@ -2946,7 +2926,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-jni-testing"
-version = "0.102.2"
+version = "0.103.1"
 dependencies = [
  "jni 0.22.4",
  "libsignal-bridge-testing",
@@ -2993,7 +2973,7 @@ dependencies = [
  "const-str",
  "criterion",
  "derive-where",
- "derive_more 2.1.1",
+ "derive_more",
  "dir-test",
  "displaydoc",
  "env_logger",
@@ -3070,7 +3050,7 @@ dependencies = [
  "clap",
  "const-str",
  "derive-where",
- "derive_more 2.1.1",
+ "derive_more",
  "displaydoc",
  "either",
  "env_logger",
@@ -3139,7 +3119,7 @@ dependencies = [
  "clap",
  "const-str",
  "data-encoding-macro",
- "derive_more 2.1.1",
+ "derive_more",
  "displaydoc",
  "either",
  "env_logger",
@@ -3219,7 +3199,7 @@ dependencies = [
  "bytes",
  "const-str",
  "derive-where",
- "derive_more 2.1.1",
+ "derive_more",
  "displaydoc",
  "either",
  "env_logger",
@@ -3268,7 +3248,7 @@ dependencies = [
 
 [[package]]
 name = "libsignal-node"
-version = "0.102.2"
+version = "0.103.1"
 dependencies = [
  "futures",
  "libsignal-bridge",
@@ -3318,7 +3298,7 @@ dependencies = [
  "curve25519-dalek 5.0.0",
  "data-encoding-macro",
  "derive-where",
- "derive_more 2.1.1",
+ "derive_more",
  "displaydoc",
  "env_logger",
  "futures-util",
@@ -3467,14 +3447,14 @@ dependencies = [
 
 [[package]]
 name = "mediasan-common"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f73b5d28d38190d36e335021afe3ecac3f2149571a7ec004feb0802e3630b60"
+checksum = "e2913a8af018373c8062afe2823a7dcbffa67c9a2b81e40d8cf9df2fa259e695"
 dependencies = [
  "bytes",
- "derive_more 0.99.20",
+ "derive_more",
  "futures-util",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3624,14 +3604,14 @@ dependencies = [
 
 [[package]]
 name = "mp4san"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0637bb2e621e8b14977db309b16c388a22a319742467e807c13658e81cd52d1"
+checksum = "7f065a39e3fc6a64ae2d86fc97f3a5c6aab21cec8120d8875ac634ac55832056"
 dependencies = [
  "bytes",
  "derive-where",
  "derive_builder",
- "derive_more 0.99.20",
+ "derive_more",
  "downcast-rs",
  "dyn-clonable",
  "futures-util",
@@ -3639,14 +3619,14 @@ dependencies = [
  "mediasan-common",
  "mp4san-derive",
  "paste",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "mp4san-derive"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc567cf0f0ed75c95e2ae9a54935273442e245c3123fbe3a66bf4e5c06c0c09c"
+checksum = "9a3f26528f9bf620fa3c17bc9fb20b559ca2610d8a00ebea85a1049412335f12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4716,9 +4696,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.41"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "once_cell",
  "ring",
@@ -4778,9 +4758,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -5100,7 +5080,7 @@ dependencies = [
  "const-str",
  "criterion",
  "ctr 0.10.1",
- "derive_more 2.1.1",
+ "derive_more",
  "displaydoc",
  "ghash 0.6.0",
  "hex",
@@ -5266,12 +5246,10 @@ checksum = "19f58d7b0190c7f12df7e8be6b79767a0836059159811b869d5ab55721fe14d0"
 
 [[package]]
 name = "spqr"
-version = "1.5.3"
-source = "git+https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.5.3#fd320484dcec89004021e6fdc7481825f5f261fa"
+version = "1.6.0"
+source = "git+https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.6.0#06959b4708f9b7b1e94d0f8cc835f3958c077e94"
 dependencies = [
  "cpufeatures 0.3.0",
- "curve25519-dalek 5.0.0",
- "displaydoc",
  "hax-lib",
  "hkdf",
  "libcrux-hmac",
@@ -6190,21 +6168,21 @@ dependencies = [
 
 [[package]]
 name = "webpsan"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "525981331586adcb12aca289a3ce9b2f11c25abebff980033169e0f08b725836"
+checksum = "81c6118de8ed6b46cd8a5f824d1a727b71bdb159deb41f6e833e207e47baca4c"
 dependencies = [
  "assert_matches",
  "bitflags 2.13.0",
  "bitstream-io",
  "bytes",
  "derive_builder",
- "derive_more 0.99.20",
+ "derive_more",
  "log",
  "mediasan-common",
  "num-integer",
  "num-traits",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -6684,7 +6662,7 @@ dependencies = [
  "criterion",
  "curve25519-dalek 5.0.0",
  "derive-where",
- "derive_more 2.1.1",
+ "derive_more",
  "displaydoc",
  "hex",
  "hkdf",

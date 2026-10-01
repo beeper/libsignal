@@ -4,21 +4,28 @@
 //
 
 use std::convert::Infallible;
+use std::time::Duration;
 
 use libsignal_account_keys::{EncryptedMfaMetadata, InvalidMfaMetadata, MfaMetadata, SvrKey};
 use libsignal_core::LogSafeDisplay;
 use libsignal_net_grpc::proto::chat::account::accounts_client::AccountsClient;
 use libsignal_net_grpc::proto::chat::account::list_mfa_keys_response::mfa_key_metadata::MfaKeyType as GrpcMfaKeyType;
+use libsignal_net_grpc::proto::chat::account::start_web_authn_registration_response::WebAuthnCreateParameters as GrpcWebAuthnCreateParameters;
 use libsignal_net_grpc::proto::chat::account::{
     ClearRegistrationLockRequest, ClearRegistrationLockResponse, ConfirmTotpKeyRequest,
-    ConfirmTotpKeyResponse, DeleteAccountRequest, DeleteAccountResponse, GenerateTotpKeyRequest,
-    GenerateTotpKeyResponse, ListMfaKeysRequest, ListMfaKeysResponse, RemoveMfaKeyRequest,
-    RemoveMfaKeyResponse, SetDiscoverableByPhoneNumberRequest,
-    SetDiscoverableByPhoneNumberResponse, SetMfaKeyMetadataRequest, SetMfaKeyMetadataResponse,
-    SetRegistrationLockRequest, SetRegistrationLockResponse,
-    SetRegistrationRecoveryPasswordRequest, SetRegistrationRecoveryPasswordResponse,
-    TotpParameters as GrpcTotpParameters, confirm_totp_key_response, generate_totp_key_response,
-    list_mfa_keys_response, set_mfa_key_metadata_response,
+    ConfirmTotpKeyResponse, DeleteAccountRequest, DeleteAccountResponse,
+    FinishMfaVerificationRequest, FinishMfaVerificationResponse, FinishWebAuthnRegistrationRequest,
+    FinishWebAuthnRegistrationResponse, GenerateTotpKeyRequest, GenerateTotpKeyResponse,
+    ListMfaKeysRequest, ListMfaKeysResponse, RemoveMfaKeyRequest, RemoveMfaKeyResponse,
+    SetDiscoverableByPhoneNumberRequest, SetDiscoverableByPhoneNumberResponse,
+    SetMfaKeyMetadataRequest, SetMfaKeyMetadataResponse, SetRegistrationLockRequest,
+    SetRegistrationLockResponse, SetRegistrationRecoveryPasswordRequest,
+    SetRegistrationRecoveryPasswordResponse, StartMfaVerificationRequest,
+    StartMfaVerificationResponse as StartMfaVerificationResponseProto,
+    StartWebAuthnRegistrationRequest, StartWebAuthnRegistrationResponse,
+    TotpParameters as GrpcTotpParameters, confirm_totp_key_response,
+    finish_web_authn_registration_response, generate_totp_key_response, list_mfa_keys_response,
+    set_mfa_key_metadata_response, start_web_authn_registration_response,
 };
 use libsignal_net_grpc::proto::chat::errors;
 
@@ -90,6 +97,29 @@ pub struct PendingTotpKey {
     pub parameters: TotpParameters,
 }
 
+/// The parameters a WebAuthn authenticator needs to create a new credential for the account.
+///
+/// Returned by [`Auth::start_web_authn_registration`]; the caller passes these to the platform's
+/// WebAuthn API to run a registration ceremony, then reports the outcome via
+/// [`Auth::finish_web_authn_registration`].
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
+pub struct WebAuthnCreateParameters {
+    /// The "user handle" (`user.id`) that should be handed to the authenticator.
+    pub user_handle: Vec<u8>,
+    /// The COSE IDs (<https://www.iana.org/assignments/cose#algorithms>) of acceptable algorithms
+    /// for the created key.
+    ///
+    /// WebAuthn's `COSEAlgorithmIdentifier` is an `i32`, but the server sends `i64`s; while that
+    /// is the case, IDs that don't fit in an `i32` are ignored.
+    pub allowed_algorithms: Vec<i32>,
+    /// The credential IDs already registered for this account.
+    ///
+    /// These can be passed to candidate authenticators to tell them not to create a new key if
+    /// they already have a private key matching one of these.
+    pub exclude_credential_ids: Vec<Vec<u8>>,
+}
+
 /// A confirmed multi-factor authentication (MFA) key on the account, as returned by
 /// [`Auth::list_mfa_keys`].
 #[derive(Clone)]
@@ -108,6 +138,8 @@ pub struct ConfirmedMfaKey {
 pub enum MfaKeyKind {
     /// A TOTP key; see [`Auth::generate_totp_key`].
     Totp,
+    /// A WebAuthn credential (passkey); see [`Auth::start_web_authn_registration`].
+    WebAuthn,
     /// A kind of key this version of libsignal doesn't know about.
     Unknown,
 }
@@ -131,9 +163,63 @@ pub enum ConfirmTotpKeyError {
 impl LogSafeDisplay for ConfirmTotpKeyError {}
 
 #[derive(displaydoc::Display, Debug)]
+pub enum StartWebAuthnRegistrationError {
+    /// The account already has too many MFA keys of all kinds
+    TooManyMfaKeys,
+}
+impl LogSafeDisplay for StartWebAuthnRegistrationError {}
+
+#[derive(displaydoc::Display, Debug)]
+pub enum FinishWebAuthnRegistrationError {
+    /// The registration ceremony's response failed verification
+    WebAuthnRegistrationUnsuccessful,
+    /// The account already has too many MFA keys of all kinds
+    TooManyMfaKeys,
+}
+impl LogSafeDisplay for FinishWebAuthnRegistrationError {}
+
+#[derive(displaydoc::Display, Debug)]
 /// No confirmed MFA key with the provided identifier was found on the account
 pub struct MfaKeyNotFound;
 impl LogSafeDisplay for MfaKeyNotFound {}
+
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
+pub struct StartMfaVerificationResponse {
+    pub has_totp: bool,
+    pub webauthn_params: Option<WebAuthnAuthenticationParameters>,
+}
+
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
+pub struct WebAuthnAuthenticationParameters {
+    pub challenge: Vec<u8>,
+    pub timeout: Duration,
+    pub allowed_credential_ids: Vec<Vec<u8>>,
+}
+
+pub enum MfaVerificationCredential {
+    Totp { password: u32 },
+    WebAuthn { json: String },
+}
+
+impl From<MfaVerificationCredential>
+    for libsignal_net_grpc::proto::chat::account::finish_mfa_verification_request::Credential
+{
+    fn from(value: MfaVerificationCredential) -> Self {
+        match value {
+            MfaVerificationCredential::Totp { password } => Self::TotpPassword(password),
+            MfaVerificationCredential::WebAuthn { json } => {
+                Self::WebauthnAuthenticationResponseJson(json)
+            }
+        }
+    }
+}
+
+#[derive(displaydoc::Display, Debug)]
+/// The provided verification was not accepted.
+pub struct MfaVerificationFailed;
+impl LogSafeDisplay for MfaVerificationFailed {}
 
 fn parse_mfa_key_id<E>(key_id: u32) -> Result<MfaKeyId, RequestError<E>> {
     MfaKeyId::try_from(key_id).map_err(|e| RequestError::Unexpected {
@@ -160,6 +246,45 @@ fn parse_totp_parameters<E>(
         algorithm,
         password_length,
         time_step_seconds,
+    })
+}
+
+fn parse_web_authn_create_parameters<E>(
+    parameters: GrpcWebAuthnCreateParameters,
+) -> Result<WebAuthnCreateParameters, RequestError<E>> {
+    let GrpcWebAuthnCreateParameters {
+        user_handle,
+        allowed_algorithms,
+        exclude_credential_ids,
+    } = parameters;
+    // COSE spec and WebAuthn's COSEAlgorithmIdentifier disagree on the concrete type. We use the
+    // narrower one, which is i32 (https://www.w3.org/TR/webauthn-2/#sctn-alg-identifier).
+    //
+    // TODO: Filtering will become redundant when server switches to using int32.
+    let mut ignored = Vec::new();
+    let allowed_algorithms: Vec<i32> = allowed_algorithms
+        .into_iter()
+        .filter_map(|algorithm| match i32::try_from(algorithm) {
+            Ok(algorithm) => Some(algorithm),
+            Err(_) => {
+                ignored.push(algorithm);
+                None
+            }
+        })
+        .collect();
+    if !ignored.is_empty() {
+        log::warn!("ignoring algorithm IDs that don't fit in i32: {ignored:?}");
+        // Distinguish between "server sent an empty list" vs "we filtered everything out"
+        if allowed_algorithms.is_empty() {
+            return Err(RequestError::Unexpected {
+                log_safe: "no usable WebAuthn algorithms".to_string(),
+            });
+        }
+    }
+    Ok(WebAuthnCreateParameters {
+        user_handle,
+        allowed_algorithms,
+        exclude_credential_ids,
     })
 }
 
@@ -220,6 +345,47 @@ impl std::fmt::Display for Redact<ConfirmTotpKeyRequest> {
         f.debug_struct("ConfirmTotpKeyRequest")
             .field("metadata_ciphertext.len", &metadata_ciphertext.len())
             .finish()
+    }
+}
+
+impl std::fmt::Display for Redact<StartWebAuthnRegistrationRequest> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(StartWebAuthnRegistrationRequest {}) = self;
+        f.debug_struct("StartWebAuthnRegistrationRequest").finish()
+    }
+}
+
+impl std::fmt::Display for Redact<FinishWebAuthnRegistrationRequest> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(FinishWebAuthnRegistrationRequest {
+            attestation_object,
+            collected_client_data_json,
+            metadata_ciphertext,
+        }) = self;
+        f.debug_struct("FinishWebAuthnRegistrationRequest")
+            .field("attestation_object.len", &attestation_object.len())
+            .field(
+                "collected_client_data_json.len",
+                &collected_client_data_json.len(),
+            )
+            .field("metadata_ciphertext.len", &metadata_ciphertext.len())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for Redact<StartMfaVerificationRequest> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(StartMfaVerificationRequest {}) = self;
+        f.debug_struct("StartMfaVerificationRequest").finish()
+    }
+}
+
+impl std::fmt::Display for Redact<FinishMfaVerificationRequest> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(FinishMfaVerificationRequest { credential: _ }) = self;
+        // We don't include which credential was used because that's unnecessarily identifying.
+        f.debug_struct("FinishMfaVerificationRequest")
+            .finish_non_exhaustive()
     }
 }
 
@@ -495,6 +661,169 @@ impl<T: GrpcServiceProvider> Auth<T> {
         }
     }
 
+    /// Starts a WebAuthn registration ceremony, returning the parameters the authenticator needs
+    /// to create a new credential (passkey) for the account.
+    ///
+    /// The caller should pass the returned [`WebAuthnCreateParameters`] to the platform's WebAuthn
+    /// API to run the ceremony, and then report its outcome via
+    /// [`Self::finish_web_authn_registration`]. No MFA key is added until the ceremony is
+    /// finished, so a started registration that is never finished leaves the account's keys
+    /// unchanged.
+    ///
+    /// Any algorithm ID the server sends that is not a valid WebAuthn `COSEAlgorithmIdentifier`
+    /// is left out of [`WebAuthnCreateParameters::allowed_algorithms`], since no authenticator
+    /// could be asked for it.
+    ///
+    /// WebAuthn credentials may only be registered for accounts without phone numbers.
+    pub async fn start_web_authn_registration(
+        &self,
+    ) -> Result<WebAuthnCreateParameters, RequestError<StartWebAuthnRegistrationError>> {
+        let mut client = AccountsClient::new(self.0.service());
+        let request = StartWebAuthnRegistrationRequest {};
+        let desc = Redact(&request).to_string();
+        let StartWebAuthnRegistrationResponse { response } =
+            log_and_send(Self::LOG_TAG, &desc, || {
+                client.start_web_authn_registration(request)
+            })
+            .await?
+            .into_inner();
+
+        match response.ok_or_else(|| RequestError::Unexpected {
+            log_safe: "missing response".to_string(),
+        })? {
+            start_web_authn_registration_response::Response::Params(parameters) => {
+                parse_web_authn_create_parameters(parameters)
+            }
+            start_web_authn_registration_response::Response::TooManyMfaKeys(
+                errors::FailedPrecondition { description },
+            ) => {
+                log::warn!("too many MFA keys: {description}");
+                Err(RequestError::Other(
+                    StartWebAuthnRegistrationError::TooManyMfaKeys,
+                ))
+            }
+        }
+    }
+
+    /// Concludes a WebAuthn registration ceremony (see [`Self::start_web_authn_registration`]),
+    /// adding the new credential (passkey) to the account.
+    ///
+    /// The `attestation_object` and `collected_client_data_json` come from the completed ceremony:
+    /// the attestation object serialized as specified in
+    /// <https://www.w3.org/TR/webauthn/#attestation-object>, and the "collected client data" map
+    /// as the exact JSON map that was hashed for the authenticator. libsignal passes both through
+    /// unchanged.
+    ///
+    /// The `metadata` is attached to the newly-registered key and stored on the server alongside
+    /// it. It is stored encrypted, so that it may not be read by the server.
+    ///
+    /// Returns the account-specific identifier assigned to the newly-registered key. Fails with a
+    /// [`FinishWebAuthnRegistrationError`] if the ceremony's response does not pass verification,
+    /// or if the account filled up with MFA keys while the ceremony was running.
+    pub async fn finish_web_authn_registration(
+        &self,
+        attestation_object: Vec<u8>,
+        collected_client_data_json: String,
+        metadata: &MfaMetadata,
+        svr_key: &SvrKey,
+        rng: &mut (dyn rand::CryptoRng + Send),
+    ) -> Result<MfaKeyId, RequestError<FinishWebAuthnRegistrationError>> {
+        let mut client = AccountsClient::new(self.0.service());
+        let request = FinishWebAuthnRegistrationRequest {
+            attestation_object,
+            collected_client_data_json,
+            metadata_ciphertext: metadata.encrypt(svr_key, rng).as_bytes().to_vec(),
+        };
+        let desc = Redact(&request).to_string();
+        let FinishWebAuthnRegistrationResponse { response } =
+            log_and_send(Self::LOG_TAG, &desc, || {
+                client.finish_web_authn_registration(request)
+            })
+            .await?
+            .into_inner();
+
+        match response.ok_or_else(|| RequestError::Unexpected {
+            log_safe: "missing response".to_string(),
+        })? {
+            finish_web_authn_registration_response::Response::KeyConfirmed(
+                finish_web_authn_registration_response::KeyConfirmed { key_id },
+            ) => parse_mfa_key_id(key_id),
+            finish_web_authn_registration_response::Response::KeyNotConfirmed(
+                errors::FailedPrecondition { description },
+            ) => {
+                log::warn!("WebAuthn registration ceremony unsuccessful: {description}");
+                Err(RequestError::Other(
+                    FinishWebAuthnRegistrationError::WebAuthnRegistrationUnsuccessful,
+                ))
+            }
+            // The account filled up while the ceremony was running.
+            finish_web_authn_registration_response::Response::TooManyMfaKeys(
+                errors::FailedPrecondition { description },
+            ) => {
+                log::warn!("too many MFA keys: {description}");
+                Err(RequestError::Other(
+                    FinishWebAuthnRegistrationError::TooManyMfaKeys,
+                ))
+            }
+        }
+    }
+
+    pub async fn start_mfa_verification(
+        &self,
+    ) -> Result<StartMfaVerificationResponse, RequestError<Infallible>> {
+        let mut client = AccountsClient::new(self.0.service());
+        let request = StartMfaVerificationRequest {};
+        let desc = Redact(&request).to_string();
+        let StartMfaVerificationResponseProto {
+            has_totp,
+            webauthn_authentication_parameters,
+        } = log_and_send(Self::LOG_TAG, &desc, || {
+            client.start_mfa_verification(request)
+        })
+        .await?
+        .into_inner();
+
+        Ok(StartMfaVerificationResponse {
+            has_totp,
+            webauthn_params: webauthn_authentication_parameters
+                .map(|params| {
+                    if params.allowed_credential_ids.is_empty() {
+                        return Err(RequestError::Unexpected {
+                            log_safe: "missing allowed_credential_ids".to_owned(),
+                        });
+                    }
+                    Ok(WebAuthnAuthenticationParameters {
+                        challenge: params.challenge,
+                        timeout: Duration::from_secs(params.timeout_seconds.into()),
+                        allowed_credential_ids: params.allowed_credential_ids,
+                    })
+                })
+                .transpose()?,
+        })
+    }
+
+    pub async fn finish_mfa_verification(
+        &self,
+        credential: MfaVerificationCredential,
+    ) -> Result<(), RequestError<MfaVerificationFailed>> {
+        let mut client = AccountsClient::new(self.0.service());
+        let request = FinishMfaVerificationRequest {
+            credential: Some(credential.into()),
+        };
+        let desc = Redact(&request).to_string();
+        let FinishMfaVerificationResponse { success } = log_and_send(Self::LOG_TAG, &desc, || {
+            client.finish_mfa_verification(request)
+        })
+        .await?
+        .into_inner();
+
+        if success {
+            Ok(())
+        } else {
+            Err(RequestError::Other(MfaVerificationFailed))
+        }
+    }
+
     /// Lists the confirmed MFA keys for the authenticated account.
     ///
     /// If the metadata for a given key cannot be decrypted using the provided [`SvrKey`] (e.g.
@@ -537,6 +866,7 @@ impl<T: GrpcServiceProvider> Auth<T> {
                     // that didn't set the field at all decodes as `Unspecified`.
                     let kind = match GrpcMfaKeyType::try_from(r#type) {
                         Ok(GrpcMfaKeyType::Totp) => MfaKeyKind::Totp,
+                        Ok(GrpcMfaKeyType::Webauthn) => MfaKeyKind::WebAuthn,
                         Ok(GrpcMfaKeyType::Unspecified) | Err(_) => MfaKeyKind::Unknown,
                     };
                     Ok(ConfirmedMfaKey {
@@ -575,7 +905,7 @@ impl<T: GrpcServiceProvider> Auth<T> {
         match response.ok_or_else(|| RequestError::Unexpected {
             log_safe: "missing response".to_string(),
         })? {
-            set_mfa_key_metadata_response::Response::MetadataUpdated(
+            set_mfa_key_metadata_response::Response::Success(
                 set_mfa_key_metadata_response::MetadataUpdated {},
             ) => Ok(()),
             set_mfa_key_metadata_response::Response::KeyNotFound(errors::NotFound {}) => {
@@ -605,6 +935,9 @@ impl<T: GrpcServiceProvider> Auth<T> {
 // These tests will get pruned via LTO tree shaking.
 pub mod test_cases {
     use libsignal_account_keys::MFA_METADATA_CIPHERTEXT_LEN;
+    use libsignal_net_grpc::proto::chat::account::{
+        finish_mfa_verification_request, start_mfa_verification_response,
+    };
     use libsignal_protocol::Timestamp;
 
     use super::*;
@@ -904,6 +1237,344 @@ pub mod test_cases {
         ]
     }
 
+    pub fn test_web_authn_create_parameters() -> WebAuthnCreateParameters {
+        WebAuthnCreateParameters {
+            user_handle: b"test user handle".to_vec(),
+            // ES256 and RS256
+            allowed_algorithms: vec![-7, -257],
+            exclude_credential_ids: vec![b"credential one".to_vec(), b"credential two".to_vec()],
+        }
+    }
+
+    fn test_web_authn_create_parameters_grpc() -> GrpcWebAuthnCreateParameters {
+        let WebAuthnCreateParameters {
+            user_handle,
+            allowed_algorithms,
+            exclude_credential_ids,
+        } = test_web_authn_create_parameters();
+        GrpcWebAuthnCreateParameters {
+            user_handle,
+            allowed_algorithms: allowed_algorithms.into_iter().map(i64::from).collect(),
+            exclude_credential_ids,
+        }
+    }
+
+    pub type StartWebAuthnRegistrationArgs = ();
+    pub enum StartWebAuthnRegistrationOut {
+        Success(WebAuthnCreateParameters),
+        TooManyMfaKeys,
+    }
+    pub fn start_web_authn_registration_test_cases() -> Vec<
+        GrpcTestCase<
+            StartWebAuthnRegistrationArgs,
+            StartWebAuthnRegistrationRequest,
+            StartWebAuthnRegistrationResponse,
+            StartWebAuthnRegistrationOut,
+        >,
+    > {
+        let method = "/org.signal.chat.account.Accounts/StartWebAuthnRegistration";
+        let case = |name: &str, response_grpc, expected| GrpcTestCase {
+            name: name.to_string(),
+            method: method.to_string(),
+            request: (),
+            request_grpc: StartWebAuthnRegistrationRequest {},
+            response_grpc,
+            response: expected,
+        };
+        vec![
+            case(
+                "success",
+                StartWebAuthnRegistrationResponse {
+                    response: Some(start_web_authn_registration_response::Response::Params(
+                        test_web_authn_create_parameters_grpc(),
+                    )),
+                },
+                StartWebAuthnRegistrationOut::Success(test_web_authn_create_parameters()),
+            ),
+            case(
+                "no credentials to exclude",
+                StartWebAuthnRegistrationResponse {
+                    response: Some(start_web_authn_registration_response::Response::Params(
+                        GrpcWebAuthnCreateParameters {
+                            exclude_credential_ids: vec![],
+                            ..test_web_authn_create_parameters_grpc()
+                        },
+                    )),
+                },
+                StartWebAuthnRegistrationOut::Success(WebAuthnCreateParameters {
+                    exclude_credential_ids: vec![],
+                    ..test_web_authn_create_parameters()
+                }),
+            ),
+            case(
+                "algorithm ID outside the WebAuthn range",
+                StartWebAuthnRegistrationResponse {
+                    response: Some(start_web_authn_registration_response::Response::Params(
+                        GrpcWebAuthnCreateParameters {
+                            allowed_algorithms: vec![
+                                -7,
+                                i64::from(i32::MIN) - 1,
+                                i64::from(i32::MAX) + 1,
+                                -257,
+                            ],
+                            ..test_web_authn_create_parameters_grpc()
+                        },
+                    )),
+                },
+                StartWebAuthnRegistrationOut::Success(test_web_authn_create_parameters()),
+            ),
+            case(
+                "no algorithms offered",
+                StartWebAuthnRegistrationResponse {
+                    response: Some(start_web_authn_registration_response::Response::Params(
+                        GrpcWebAuthnCreateParameters {
+                            allowed_algorithms: vec![],
+                            ..test_web_authn_create_parameters_grpc()
+                        },
+                    )),
+                },
+                StartWebAuthnRegistrationOut::Success(WebAuthnCreateParameters {
+                    allowed_algorithms: vec![],
+                    ..test_web_authn_create_parameters()
+                }),
+            ),
+            case(
+                "too many MFA keys",
+                StartWebAuthnRegistrationResponse {
+                    response: Some(
+                        start_web_authn_registration_response::Response::TooManyMfaKeys(
+                            Default::default(),
+                        ),
+                    ),
+                },
+                StartWebAuthnRegistrationOut::TooManyMfaKeys,
+            ),
+        ]
+    }
+
+    pub const TEST_ATTESTATION_OBJECT: &[u8] = b"test attestation object";
+    pub const TEST_COLLECTED_CLIENT_DATA_JSON: &str =
+        r#"{"type":"webauthn.create","challenge":"dGVzdA","origin":"https://signal.org"}"#;
+
+    pub struct FinishWebAuthnRegistrationArgs {
+        pub attestation_object: Vec<u8>,
+        pub collected_client_data_json: String,
+        pub metadata: MfaMetadata,
+        pub svr_key: [u8; 32],
+    }
+    pub enum FinishWebAuthnRegistrationOut {
+        Success(MfaKeyId),
+        WebAuthnRegistrationUnsuccessful,
+        TooManyMfaKeys,
+    }
+    pub fn finish_web_authn_registration_test_cases() -> Vec<
+        GrpcTestCase<
+            FinishWebAuthnRegistrationArgs,
+            FinishWebAuthnRegistrationRequest,
+            FinishWebAuthnRegistrationResponse,
+            FinishWebAuthnRegistrationOut,
+        >,
+    > {
+        let method = "/org.signal.chat.account.Accounts/FinishWebAuthnRegistration";
+        let case = |name: &str, response_grpc, expected| GrpcTestCase {
+            name: name.to_string(),
+            method: method.to_string(),
+            request: FinishWebAuthnRegistrationArgs {
+                attestation_object: TEST_ATTESTATION_OBJECT.to_vec(),
+                collected_client_data_json: TEST_COLLECTED_CLIENT_DATA_JSON.to_string(),
+                metadata: test_metadata(),
+                svr_key: TEST_SVR_KEY,
+            },
+            request_grpc: FinishWebAuthnRegistrationRequest {
+                attestation_object: TEST_ATTESTATION_OBJECT.to_vec(),
+                collected_client_data_json: TEST_COLLECTED_CLIENT_DATA_JSON.to_string(),
+                metadata_ciphertext: TEST_ENCRYPTED_METADATA.to_vec(),
+            },
+            response_grpc,
+            response: expected,
+        };
+        vec![
+            case(
+                "success",
+                FinishWebAuthnRegistrationResponse {
+                    response: Some(
+                        finish_web_authn_registration_response::Response::KeyConfirmed(
+                            finish_web_authn_registration_response::KeyConfirmed { key_id: 17 },
+                        ),
+                    ),
+                },
+                FinishWebAuthnRegistrationOut::Success(MfaKeyId(17)),
+            ),
+            case(
+                "registration ceremony unsuccessful",
+                FinishWebAuthnRegistrationResponse {
+                    response: Some(
+                        finish_web_authn_registration_response::Response::KeyNotConfirmed(
+                            Default::default(),
+                        ),
+                    ),
+                },
+                FinishWebAuthnRegistrationOut::WebAuthnRegistrationUnsuccessful,
+            ),
+            case(
+                "too many MFA keys",
+                FinishWebAuthnRegistrationResponse {
+                    response: Some(
+                        finish_web_authn_registration_response::Response::TooManyMfaKeys(
+                            Default::default(),
+                        ),
+                    ),
+                },
+                FinishWebAuthnRegistrationOut::TooManyMfaKeys,
+            ),
+        ]
+    }
+
+    pub enum StartMfaVerificationOut {
+        Success(StartMfaVerificationResponse),
+        Malformed,
+    }
+
+    pub fn start_mfa_verification_test_cases() -> Vec<
+        GrpcTestCase<
+            (),
+            StartMfaVerificationRequest,
+            StartMfaVerificationResponseProto,
+            StartMfaVerificationOut,
+        >,
+    > {
+        let method = "/org.signal.chat.account.Accounts/StartMfaVerification";
+        let web_authn_params_proto =
+            start_mfa_verification_response::WebAuthnAuthenticationParameters {
+                challenge: b"challenge".to_vec(),
+                timeout_seconds: 5,
+                allowed_credential_ids: vec![b"first".to_vec(), b"second".to_vec()],
+            };
+        let web_authn_params = WebAuthnAuthenticationParameters {
+            challenge: b"challenge".to_vec(),
+            timeout: Duration::from_secs(5),
+            allowed_credential_ids: vec![b"first".to_vec(), b"second".to_vec()],
+        };
+        vec![
+            GrpcTestCase {
+                name: "both".to_string(),
+                method: method.to_string(),
+                request: (),
+                request_grpc: StartMfaVerificationRequest {},
+                response_grpc: StartMfaVerificationResponseProto {
+                    has_totp: true,
+                    webauthn_authentication_parameters: Some(web_authn_params_proto.clone()),
+                },
+                response: StartMfaVerificationOut::Success(StartMfaVerificationResponse {
+                    has_totp: true,
+                    webauthn_params: Some(web_authn_params.clone()),
+                }),
+            },
+            GrpcTestCase {
+                name: "just TOTP".to_string(),
+                method: method.to_string(),
+                request: (),
+                request_grpc: StartMfaVerificationRequest {},
+                response_grpc: StartMfaVerificationResponseProto {
+                    has_totp: true,
+                    webauthn_authentication_parameters: None,
+                },
+                response: StartMfaVerificationOut::Success(StartMfaVerificationResponse {
+                    has_totp: true,
+                    webauthn_params: None,
+                }),
+            },
+            GrpcTestCase {
+                name: "just WebAuthn".to_string(),
+                method: method.to_string(),
+                request: (),
+                request_grpc: StartMfaVerificationRequest {},
+                response_grpc: StartMfaVerificationResponseProto {
+                    has_totp: false,
+                    webauthn_authentication_parameters: Some(web_authn_params_proto.clone()),
+                },
+                response: StartMfaVerificationOut::Success(StartMfaVerificationResponse {
+                    has_totp: false,
+                    webauthn_params: Some(web_authn_params.clone()),
+                }),
+            },
+            GrpcTestCase {
+                name: "malformed WebAuthn (missing credential IDs)".to_string(),
+                method: method.to_string(),
+                request: (),
+                request_grpc: StartMfaVerificationRequest {},
+                response_grpc: StartMfaVerificationResponseProto {
+                    has_totp: false,
+                    webauthn_authentication_parameters: Some(
+                        start_mfa_verification_response::WebAuthnAuthenticationParameters {
+                            allowed_credential_ids: vec![],
+                            ..web_authn_params_proto
+                        },
+                    ),
+                },
+                response: StartMfaVerificationOut::Malformed,
+            },
+            GrpcTestCase {
+                name: "no MFA available".to_string(),
+                method: method.to_string(),
+                request: (),
+                request_grpc: StartMfaVerificationRequest {},
+                response_grpc: StartMfaVerificationResponseProto {
+                    has_totp: false,
+                    webauthn_authentication_parameters: None,
+                },
+                response: StartMfaVerificationOut::Success(StartMfaVerificationResponse {
+                    has_totp: false,
+                    webauthn_params: None,
+                }),
+            },
+        ]
+    }
+
+    pub enum FinishMfaVerificationOut {
+        Success,
+        FailedToVerify,
+    }
+
+    pub fn finish_mfa_verification_test_cases() -> Vec<
+        GrpcTestCase<
+            MfaVerificationCredential,
+            FinishMfaVerificationRequest,
+            FinishMfaVerificationResponse,
+            FinishMfaVerificationOut,
+        >,
+    > {
+        let method = "/org.signal.chat.account.Accounts/FinishMfaVerification";
+        vec![
+            GrpcTestCase {
+                name: "TOTP success".to_string(),
+                method: method.to_string(),
+                request: MfaVerificationCredential::Totp { password: 123456 },
+                request_grpc: FinishMfaVerificationRequest {
+                    credential: Some(finish_mfa_verification_request::Credential::TotpPassword(
+                        123456,
+                    )),
+                },
+                response_grpc: FinishMfaVerificationResponse { success: true },
+                response: FinishMfaVerificationOut::Success,
+            },
+            GrpcTestCase {
+                name: "WebAuthn failure".to_string(),
+                method: method.to_string(),
+                request: MfaVerificationCredential::WebAuthn {
+                    json: "{}".to_owned(),
+                },
+                request_grpc: FinishMfaVerificationRequest {
+                    credential: Some(finish_mfa_verification_request::Credential::WebauthnAuthenticationResponseJson(
+                        "{}".to_owned(),
+                    )),
+                },
+                response_grpc: FinishMfaVerificationResponse { success: false },
+                response: FinishMfaVerificationOut::FailedToVerify,
+            },
+        ]
+    }
+
     pub struct ListMfaKeysArgs {
         pub svr_key: [u8; 32],
     }
@@ -1015,6 +1686,27 @@ pub mod test_cases {
                     ..confirmed(17)
                 }]),
             ),
+            // A WebAuthn key is reported with its own kind, alongside a TOTP key.
+            case(
+                "mixed kinds",
+                vec![
+                    (
+                        17,
+                        list_mfa_keys_response::MfaKeyMetadata {
+                            metadata_ciphertext: TEST_ENCRYPTED_METADATA.to_vec(),
+                            r#type: GrpcMfaKeyType::Webauthn as i32,
+                        },
+                    ),
+                    (18, entry(TEST_ENCRYPTED_METADATA.to_vec())),
+                ],
+                ListMfaKeysOut::Success(vec![
+                    ConfirmedMfaKey {
+                        kind: MfaKeyKind::WebAuthn,
+                        ..confirmed(17)
+                    },
+                    confirmed(18),
+                ]),
+            ),
             // A kind of key this version doesn't know about (which decodes as an out-of-range
             // enum value) is still listed, so the caller can remove it.
             case(
@@ -1081,7 +1773,7 @@ pub mod test_cases {
                     metadata_ciphertext: TEST_ENCRYPTED_METADATA.to_vec(),
                 },
                 response_grpc: SetMfaKeyMetadataResponse {
-                    response: Some(set_mfa_key_metadata_response::Response::MetadataUpdated(
+                    response: Some(set_mfa_key_metadata_response::Response::Success(
                         set_mfa_key_metadata_response::MetadataUpdated {},
                     )),
                 },
@@ -1423,6 +2115,218 @@ mod test {
                     )
                 } else {
                     assert_matches!(result, Err(RequestError::Unexpected { .. }))
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_start_web_authn_registration() {
+        use test_cases::*;
+        run_tests(
+            start_web_authn_registration_test_cases(),
+            |chat: Auth<_>, ()| async move { chat.start_web_authn_registration().await },
+            |resp, result| match resp {
+                StartWebAuthnRegistrationOut::Success(params) => {
+                    assert_eq!(params, result.expect("success"))
+                }
+                StartWebAuthnRegistrationOut::TooManyMfaKeys => {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Other(
+                            StartWebAuthnRegistrationError::TooManyMfaKeys
+                        ))
+                    )
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_start_web_authn_registration_invalid_responses() {
+        let case = |name: &str, response_grpc, is_disconnect: bool| GrpcTestCase {
+            name: name.to_string(),
+            method: "/org.signal.chat.account.Accounts/StartWebAuthnRegistration".to_string(),
+            request: (),
+            request_grpc: StartWebAuthnRegistrationRequest {},
+            response_grpc,
+            response: is_disconnect,
+        };
+        run_tests_with_generic_responses(
+            [
+                case(
+                    "missing response",
+                    ok(StartWebAuthnRegistrationResponse { response: None }),
+                    false,
+                ),
+                case(
+                    "every algorithm outside the WebAuthn range",
+                    ok(StartWebAuthnRegistrationResponse {
+                        response: Some(start_web_authn_registration_response::Response::Params(
+                            GrpcWebAuthnCreateParameters {
+                                allowed_algorithms: vec![
+                                    i64::from(i32::MIN) - 1,
+                                    i64::from(i32::MAX) + 1,
+                                ],
+                                ..Default::default()
+                            },
+                        )),
+                    }),
+                    false,
+                ),
+                case("grpc error", err(tonic::Code::Internal), true),
+            ],
+            |chat: Auth<_>, ()| async move { chat.start_web_authn_registration().await },
+            |is_disconnect, result| {
+                if is_disconnect {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Disconnected(
+                            DisconnectedError::Transport { .. }
+                        ))
+                    )
+                } else {
+                    assert_matches!(result, Err(RequestError::Unexpected { .. }))
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_finish_web_authn_registration() {
+        use test_cases::*;
+        run_tests(
+            finish_web_authn_registration_test_cases(),
+            |chat: Auth<_>,
+             FinishWebAuthnRegistrationArgs {
+                 attestation_object,
+                 collected_client_data_json,
+                 metadata,
+                 svr_key,
+             }| async move {
+                chat.finish_web_authn_registration(
+                    attestation_object,
+                    collected_client_data_json,
+                    &metadata,
+                    &SvrKey::new(svr_key),
+                    &mut fixed_seed_test_rng(),
+                )
+                .await
+            },
+            |resp, result| match resp {
+                FinishWebAuthnRegistrationOut::Success(key_id) => {
+                    assert_matches!(result, Ok(x) if x == key_id)
+                }
+                FinishWebAuthnRegistrationOut::WebAuthnRegistrationUnsuccessful => {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Other(
+                            FinishWebAuthnRegistrationError::WebAuthnRegistrationUnsuccessful
+                        ))
+                    )
+                }
+                FinishWebAuthnRegistrationOut::TooManyMfaKeys => {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Other(
+                            FinishWebAuthnRegistrationError::TooManyMfaKeys
+                        ))
+                    )
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_finish_web_authn_registration_invalid_responses() {
+        let case = |name: &str, response_grpc, is_disconnect: bool| GrpcTestCase {
+            name: name.to_string(),
+            method: "/org.signal.chat.account.Accounts/FinishWebAuthnRegistration".to_string(),
+            request: (),
+            request_grpc: FinishWebAuthnRegistrationRequest {
+                attestation_object: test_cases::TEST_ATTESTATION_OBJECT.to_vec(),
+                collected_client_data_json: test_cases::TEST_COLLECTED_CLIENT_DATA_JSON.to_string(),
+                metadata_ciphertext: test_cases::TEST_ENCRYPTED_METADATA.to_vec(),
+            },
+            response_grpc,
+            response: is_disconnect,
+        };
+        run_tests_with_generic_responses(
+            [
+                case(
+                    "missing response",
+                    ok(FinishWebAuthnRegistrationResponse { response: None }),
+                    false,
+                ),
+                case(
+                    "key ID out of range",
+                    ok(FinishWebAuthnRegistrationResponse {
+                        response: Some(
+                            finish_web_authn_registration_response::Response::KeyConfirmed(
+                                finish_web_authn_registration_response::KeyConfirmed {
+                                    key_id: MAX_MFA_KEY_ID + 1,
+                                },
+                            ),
+                        ),
+                    }),
+                    false,
+                ),
+                case("grpc error", err(tonic::Code::Internal), true),
+            ],
+            |chat: Auth<_>, ()| async move {
+                chat.finish_web_authn_registration(
+                    test_cases::TEST_ATTESTATION_OBJECT.to_vec(),
+                    test_cases::TEST_COLLECTED_CLIENT_DATA_JSON.to_string(),
+                    &test_cases::test_metadata(),
+                    &SvrKey::new(test_cases::TEST_SVR_KEY),
+                    &mut fixed_seed_test_rng(),
+                )
+                .await
+            },
+            |is_disconnect, result| {
+                if is_disconnect {
+                    assert_matches!(
+                        result,
+                        Err(RequestError::Disconnected(
+                            DisconnectedError::Transport { .. }
+                        ))
+                    )
+                } else {
+                    assert_matches!(result, Err(RequestError::Unexpected { .. }))
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_start_mfa_verification() {
+        use test_cases::*;
+        run_tests(
+            start_mfa_verification_test_cases(),
+            |chat: Auth<_>, ()| async move { chat.start_mfa_verification().await },
+            |resp, result| match resp {
+                StartMfaVerificationOut::Success(expected) => {
+                    assert_eq!(expected, result.expect("success"));
+                }
+                StartMfaVerificationOut::Malformed => {
+                    assert_matches!(result, Err(RequestError::Unexpected { .. }));
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_finish_mfa_verification() {
+        use test_cases::*;
+        run_tests(
+            finish_mfa_verification_test_cases(),
+            |chat: Auth<_>, cred| async move { chat.finish_mfa_verification(cred).await },
+            |resp, result| match resp {
+                FinishMfaVerificationOut::Success => {
+                    () = result.expect("success");
+                }
+                FinishMfaVerificationOut::FailedToVerify => {
+                    assert_matches!(result, Err(RequestError::Other(MfaVerificationFailed)));
                 }
             },
         );

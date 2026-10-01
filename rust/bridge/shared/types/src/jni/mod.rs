@@ -114,7 +114,7 @@ macro_rules! jni_custom_spellings {
                 $kt_spelling.to_string()
             }
         }
-        impl<'a> From<$ident<'a>> for ::jni::JValueOwned<'a> {
+        impl<'a> From<$ident<'a>> for ::jni::objects::JObject<'a> {
             fn from(value: $ident<'a>) -> Self {
                 value.0.into()
             }
@@ -2032,7 +2032,30 @@ impl MessageOnlyExceptionJniError for libsignal_net_chat::grpc::accounts::Confir
     fn exception_class(&self) -> ClassName<'static> {
         match self {
             Self::OneTimePasswordNotVerified => {
-                ClassName("org.signal.libsignal.net.OneTimePasswordNotVerifiedException")
+                ClassName("org.signal.libsignal.net.MfaNotVerifiedException")
+            }
+            Self::TooManyMfaKeys => ClassName("org.signal.libsignal.net.TooManyMfaKeysException"),
+        }
+    }
+}
+
+impl MessageOnlyExceptionJniError
+    for libsignal_net_chat::grpc::accounts::StartWebAuthnRegistrationError
+{
+    fn exception_class(&self) -> ClassName<'static> {
+        match self {
+            Self::TooManyMfaKeys => ClassName("org.signal.libsignal.net.TooManyMfaKeysException"),
+        }
+    }
+}
+
+impl MessageOnlyExceptionJniError
+    for libsignal_net_chat::grpc::accounts::FinishWebAuthnRegistrationError
+{
+    fn exception_class(&self) -> ClassName<'static> {
+        match self {
+            Self::WebAuthnRegistrationUnsuccessful => {
+                ClassName("org.signal.libsignal.net.WebAuthnRegistrationUnsuccessfulException")
             }
             Self::TooManyMfaKeys => ClassName("org.signal.libsignal.net.TooManyMfaKeysException"),
         }
@@ -2042,6 +2065,12 @@ impl MessageOnlyExceptionJniError for libsignal_net_chat::grpc::accounts::Confir
 impl MessageOnlyExceptionJniError for libsignal_net_chat::grpc::accounts::MfaKeyNotFound {
     fn exception_class(&self) -> ClassName<'static> {
         ClassName("org.signal.libsignal.net.MfaKeyNotFoundException")
+    }
+}
+
+impl MessageOnlyExceptionJniError for libsignal_net_chat::grpc::accounts::MfaVerificationFailed {
+    fn exception_class(&self) -> ClassName<'static> {
+        ClassName("org.signal.libsignal.net.MfaNotVerifiedException")
     }
 }
 

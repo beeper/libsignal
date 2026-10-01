@@ -31,6 +31,7 @@ use crate::net::chat::{
 use crate::net::registration::{
     ConnectChatBridge, RegistrationCreateSessionRequest, RegistrationPushToken,
 };
+use crate::protocol::StrictPreKeyId;
 use crate::protocol::storage::{
     FfiIdentityKeyStoreStruct, FfiKyberPreKeyStoreStruct, FfiPreKeyStoreStruct,
     FfiSenderKeyStoreStruct, FfiSessionStoreStruct, FfiSignedPreKeyStoreStruct,
@@ -307,13 +308,13 @@ impl NiceArgConverter for Vec<u8> {
     }
 }
 
-impl ArgTypeInfoBase for Vec<&'_ [u8]> {
+impl ArgTypeInfoBase for &'_ [&'_ [u8]] {
     type ArgType = BorrowedSliceOf<BorrowedSliceOf<u8>>;
 }
-impl<'a> ArgTypeInfo<'a> for Vec<&'a [u8]> {
+impl<'a> ArgTypeInfo<'a> for &'a [&'a [u8]] {
     type StoredType = Vec<&'a [u8]>;
 
-    fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+    fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
         let slices = unsafe { foreign.as_slice()? };
         slices
             .iter()
@@ -334,7 +335,7 @@ impl<'a> ArgTypeInfo<'a> for Vec<&'a [u8]> {
     }
 
     fn load_from(stored: &'a mut Self::StoredType) -> Self {
-        std::mem::take(stored)
+        stored
     }
 }
 
@@ -691,6 +692,27 @@ impl SimpleArgTypeInfo for AccountEntropyPool {
     }
 }
 
+impl<T> SimpleArgTypeInfo for StrictPreKeyId<T>
+where
+    T: From<u32>,
+{
+    type ArgType = u32;
+
+    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+        StrictPreKeyId::try_from(foreign)
+            .map_err(|e| IllegalArgumentError::new(e.to_string()).into())
+    }
+}
+#[cfg(feature = "metadata")]
+impl<T> NiceArgConverter for StrictPreKeyId<T>
+where
+    T: From<u32>,
+{
+    fn register_swift_arg_converter(ctx: &mut SwiftMetadataContext) -> SwiftArgConverter {
+        u32::register_swift_arg_converter(ctx)
+    }
+}
+
 impl SimpleArgTypeInfo for libsignal_net_chat::api::messages::MultiRecipientSendAuthorization {
     type ArgType = BorrowedSliceOf<c_uchar>;
 
@@ -789,6 +811,39 @@ impl SimpleArgTypeInfo for Box<[u32]> {
     fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
         let slice = unsafe { foreign.as_slice()? };
         Ok(slice.into())
+    }
+}
+
+impl<T> SimpleArgTypeInfo for Vec<StrictPreKeyId<T>>
+where
+    T: From<u32>,
+{
+    type ArgType = BorrowedSliceOf<u32>;
+
+    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+        let slice = unsafe { foreign.as_slice()? };
+        slice
+            .iter()
+            .copied()
+            .map(StrictPreKeyId::try_from)
+            .try_collect()
+            .map_err(|e| IllegalArgumentError::new(e.to_string()).into())
+    }
+}
+#[cfg(feature = "metadata")]
+impl<T> NiceArgConverter for Vec<StrictPreKeyId<T>>
+where
+    T: From<u32>,
+{
+    fn register_swift_arg_converter(ctx: &mut SwiftMetadataContext) -> SwiftArgConverter {
+        let borrowed_slice = <BorrowedSliceOf<u32> as IsCType>::register_c_type(ctx);
+        SwiftArgConverter {
+            nice_type: "[UInt32]".to_string(),
+            converter_type: format!(
+                "ArrayArgConverter<IdentityArgConverter, {}>",
+                borrowed_slice.swift_name()
+            ),
+        }
     }
 }
 
@@ -1640,6 +1695,18 @@ where
     }
 }
 
+// Note that we do *not* have a blanket NiceArgConverter impl for AsType;
+// the nice form of each type is going to be different.
+#[cfg(feature = "metadata")]
+impl NiceArgConverter for AsType<ServiceIdKind, u8> {
+    fn register_swift_arg_converter(_ctx: &mut SwiftMetadataContext) -> SwiftArgConverter {
+        SwiftArgConverter {
+            nice_type: "ServiceIdKind".to_owned(),
+            converter_type: "ServiceIdKindConverter".to_owned(),
+        }
+    }
+}
+
 impl<T> ResultTypeInfo for Serialized<T>
 where
     T: FixedLengthBincodeSerializable<Array: IsCType> + serde::Serialize,
@@ -1713,6 +1780,23 @@ impl<A: NiceResultConverter + ResultTypeInfo, B: NiceResultConverter + ResultTyp
                 <(A, B) as ResultTypeInfo>::ResultType::register_c_type(ctx).swift_name()
             ),
         }
+    }
+}
+
+impl<A: ResultTypeInfo, B: ResultTypeInfo> ResultTypeInfo for Vec<(A, B)> {
+    type ResultType = <BridgeVec<(A, B)> as ResultTypeInfo>::ResultType;
+
+    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
+        BridgeVec(self).convert_into()
+    }
+}
+
+#[cfg(feature = "metadata")]
+impl<A: NiceResultConverter + ResultTypeInfo, B: NiceResultConverter + ResultTypeInfo>
+    NiceResultConverter for Vec<(A, B)>
+{
+    fn register_swift_result_converter(ctx: &mut SwiftMetadataContext) -> SwiftReturnConverter {
+        <BridgeVec<(A, B)>>::register_swift_result_converter(ctx)
     }
 }
 
@@ -1964,6 +2048,21 @@ macro_rules! ffi_bridge_as_handle {
                 }
             }
             #[cfg(feature = "metadata")]
+            impl $crate::ffi::NiceArgConverter for &mut $typ {
+                fn register_swift_arg_converter(
+                    _ctx: &mut $crate::metadata::ffi::SwiftMetadataContext
+                ) -> $crate::metadata::ffi::SwiftArgConverter {
+                    $crate::metadata::ffi::SwiftArgConverter {
+                        nice_type: $swift_type.into(),
+                        converter_type: format!(
+                            "BridgeHandleMutRefConverter<SignalMutPointer{}, {}>",
+                            stringify!($typ),
+                            $swift_type,
+                        ),
+                    }
+                }
+            }
+            #[cfg(feature = "metadata")]
             impl $crate::ffi::NiceResultConverter for $typ {
                 fn register_swift_result_converter(
                     _ctx: &mut $crate::metadata::ffi::SwiftMetadataContext
@@ -2137,6 +2236,7 @@ macro_rules! simple_optional {
 simple_optional!(f32);
 simple_optional!(Vec<u8>);
 return_optional!(libsignal_net_chat::grpc::login_purchase::ChargeFailure);
+return_optional!(crate::net::chat::remote_derives::BridgeWebAuthnAuthenticationParameters);
 
 #[cfg(test)]
 mod test {

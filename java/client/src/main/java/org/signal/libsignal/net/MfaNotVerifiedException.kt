@@ -9,17 +9,17 @@ import org.signal.libsignal.internal.CalledFromNative
 import java.io.IOException
 
 /**
- * The account already has too many MFA keys of all kinds; one must be removed before adding more.
+ * The provided one-time password was not accepted for the pending TOTP key.
  *
  * See the specific request docs for more information.
  */
-public class TooManyMfaKeysException :
+public class MfaNotVerifiedException :
   IOException,
-  GenerateTotpKeyError,
-  ConfirmTotpKeyError,
-  StartWebAuthnRegistrationError,
-  FinishWebAuthnRegistrationError {
+  ConfirmTotpKeyError {
   @CalledFromNative
   public constructor(message: String) : super(message) {
   }
 }
+
+@Deprecated(message = "renamed to MfaNotVerifiedException", replaceWith = ReplaceWith("MfaNotVerifiedException"))
+public typealias OneTimePasswordNotVerifiedException = MfaNotVerifiedException

@@ -9,13 +9,12 @@ import org.signal.libsignal.internal.CalledFromNative
 import java.io.IOException
 
 /**
- * The provided one-time password was not accepted for the pending TOTP key.
+ * The WebAuthn registration ceremony's response was not verified successfully.
  *
- * See the specific request docs for more information.
  */
-public class OneTimePasswordNotVerifiedException :
+public class WebAuthnRegistrationUnsuccessfulException :
   IOException,
-  ConfirmTotpKeyError {
+  FinishWebAuthnRegistrationError {
   @CalledFromNative
   public constructor(message: String) : super(message) {
   }

@@ -373,14 +373,22 @@ internal enum Native{% if testing %}Testing{% endif %}Nice {
                 {%- for (arg, ty) in f.arguments -%}
                     try {{ ty.converter_type }}.convertArgBorrowed({{ arg }}) { {{ arg }}Ffi in
                 {% endfor -%}
-                var rawOutput = {{ f.return_type.converter_type }}.emptyFfiReturn()
-                try checkError(SignalFfi.signal_{{ name|to_snake_case }}(
-                    &rawOutput,
-                    {% for (arg, ty) in f.arguments -%}
-                        {{ arg }}Ffi,
-                    {% endfor -%}
-                ))
-                return try {{ f.return_type.converter_type }}.convertReturn(consuming: rawOutput)
+                {%- if f.return_type.nice_type != "Void" -%}
+                    var rawOutput = {{ f.return_type.converter_type }}.emptyFfiReturn()
+                    try checkError(SignalFfi.signal_{{ name|to_snake_case }}(
+                        &rawOutput,
+                        {% for (arg, ty) in f.arguments -%}
+                            {{ arg }}Ffi,
+                        {% endfor -%}
+                    ))
+                    return try {{ f.return_type.converter_type }}.convertReturn(consuming: rawOutput)
+                {%- else -%}
+                    try checkError(SignalFfi.signal_{{ name|to_snake_case }}(
+                        {% for (arg, ty) in f.arguments -%}
+                            {{ arg }}Ffi,
+                        {% endfor -%}
+                    ))
+                {%- endif -%}
                 {%- for (arg, ty) in f.arguments -%}
                     } {# Closing braces #}
                 {%- endfor %}

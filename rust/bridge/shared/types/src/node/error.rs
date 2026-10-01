@@ -1202,7 +1202,24 @@ impl SimpleNodeError for libsignal_net_chat::grpc::accounts::GenerateTotpKeyErro
 impl SimpleNodeError for libsignal_net_chat::grpc::accounts::ConfirmTotpKeyError {
     fn js_error_name(&self) -> Option<&'static str> {
         Some(match self {
-            Self::OneTimePasswordNotVerified => "OneTimePasswordNotVerified",
+            Self::OneTimePasswordNotVerified => "MfaNotVerified",
+            Self::TooManyMfaKeys => "TooManyMfaKeys",
+        })
+    }
+}
+
+impl SimpleNodeError for libsignal_net_chat::grpc::accounts::StartWebAuthnRegistrationError {
+    fn js_error_name(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::TooManyMfaKeys => "TooManyMfaKeys",
+        })
+    }
+}
+
+impl SimpleNodeError for libsignal_net_chat::grpc::accounts::FinishWebAuthnRegistrationError {
+    fn js_error_name(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::WebAuthnRegistrationUnsuccessful => "WebAuthnRegistrationUnsuccessful",
             Self::TooManyMfaKeys => "TooManyMfaKeys",
         })
     }
@@ -1211,6 +1228,12 @@ impl SimpleNodeError for libsignal_net_chat::grpc::accounts::ConfirmTotpKeyError
 impl SimpleNodeError for libsignal_net_chat::grpc::accounts::MfaKeyNotFound {
     fn js_error_name(&self) -> Option<&'static str> {
         Some("MfaKeyNotFound")
+    }
+}
+
+impl SimpleNodeError for libsignal_net_chat::grpc::accounts::MfaVerificationFailed {
+    fn js_error_name(&self) -> Option<&'static str> {
+        Some("MfaNotVerified")
     }
 }
 

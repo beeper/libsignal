@@ -291,10 +291,10 @@ fn TESTING_JoinStringArray(array: Box<[String]>, join_with: String) -> String {
 }
 
 #[bridge_fn]
-fn TESTING_ProcessBytestringArray(input: Vec<&[u8]>) -> Box<[Vec<u8>]> {
+fn TESTING_ProcessBytestringArray(input: &[&[u8]]) -> Box<[Vec<u8>]> {
     input
-        .into_iter()
-        .map(|x| [x, x].concat())
+        .iter()
+        .map(|&x| [x, x].concat())
         .collect::<Vec<Vec<u8>>>()
         .into_boxed_slice()
 }

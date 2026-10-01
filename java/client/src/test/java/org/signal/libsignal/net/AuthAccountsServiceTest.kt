@@ -9,12 +9,16 @@ import kotlinx.coroutines.test.runTest
 import org.signal.libsignal.internal.BridgeConfirmedMfaKeyMetadata
 import org.signal.libsignal.internal.BridgeMfaKeyKind
 import org.signal.libsignal.internal.ConfirmTotpKeyOut
+import org.signal.libsignal.internal.FinishMfaVerificationOut
+import org.signal.libsignal.internal.FinishWebAuthnRegistrationOut
 import org.signal.libsignal.internal.GenerateTotpKeyOut
 import org.signal.libsignal.internal.ListMfaKeysOut
 import org.signal.libsignal.internal.NativeTesting
 import org.signal.libsignal.internal.NativeTestingNice
 import org.signal.libsignal.internal.RemoveMfaKeyOut
 import org.signal.libsignal.internal.SetMfaKeyMetadataOut
+import org.signal.libsignal.internal.StartMfaVerificationOut
+import org.signal.libsignal.internal.StartWebAuthnRegistrationOut
 import org.signal.libsignal.internal.TokioAsyncContext
 import org.signal.libsignal.internal.await
 import org.signal.libsignal.net.assertNonSuccess
@@ -155,7 +159,7 @@ class AuthAccountsServiceTest {
                 assertIs<RequestResult.Success<Int>>(actual).result,
               )
             ConfirmTotpKeyOut.OneTimePasswordNotVerified ->
-              actual.assertNonSuccess<_, _, OneTimePasswordNotVerifiedException>()
+              actual.assertNonSuccess<_, _, MfaNotVerifiedException>()
             ConfirmTotpKeyOut.TooManyMfaKeys ->
               actual.assertNonSuccess<_, _, TooManyMfaKeysException>()
           }
@@ -164,7 +168,7 @@ class AuthAccountsServiceTest {
     }
 
   @Test
-  fun testTotpKeyNameInvalid() =
+  fun testMfaKeyNameInvalid() =
     runTest {
       val tokioAsyncContext = TokioAsyncContext()
       val (chat, _) = AuthenticatedChatConnection.fakeConnect(tokioAsyncContext, NoOpListener())
@@ -189,11 +193,21 @@ class AuthAccountsServiceTest {
               svrKey = SvrKey(ByteArray(32)),
             ).await()
         assertIs<IllegalArgumentException>(assertIs<RequestResult.ApplicationError>(setResult).cause)
+
+        val finishResult =
+          service
+            .finishWebAuthnRegistration(
+              attestationObject = ByteArray(0),
+              collectedClientDataJson = "{}",
+              metadata = metadata,
+              svrKey = SvrKey(ByteArray(32)),
+            ).await()
+        assertIs<IllegalArgumentException>(assertIs<RequestResult.ApplicationError>(finishResult).cause)
       }
     }
 
   @Test
-  fun testTotpKeyCreatedAtBeforeEpoch() =
+  fun testMfaKeyCreatedAtBeforeEpoch() =
     runTest {
       val tokioAsyncContext = TokioAsyncContext()
       val (chat, _) = AuthenticatedChatConnection.fakeConnect(tokioAsyncContext, NoOpListener())
@@ -227,6 +241,19 @@ class AuthAccountsServiceTest {
           assertIs<RequestResult.ApplicationError>(setResult).cause,
           "set for $createdAt",
         )
+
+        val finishResult =
+          service
+            .finishWebAuthnRegistration(
+              attestationObject = ByteArray(0),
+              collectedClientDataJson = "{}",
+              metadata = metadata,
+              svrKey = svrKey,
+            ).await()
+        assertIs<IllegalArgumentException>(
+          assertIs<RequestResult.ApplicationError>(finishResult).cause,
+          "finish for $createdAt",
+        )
       }
     }
 
@@ -242,6 +269,63 @@ class AuthAccountsServiceTest {
         val removeResult = service.removeMfaKey(keyId = badId).await()
         assertIs<IllegalArgumentException>(assertIs<RequestResult.ApplicationError>(removeResult).cause, "for $badId")
       }
+    }
+
+  @Test
+  fun testStartWebAuthnRegistration() =
+    runTest {
+      GrpcTestCase.runTests(
+        NativeTestingNice.TESTING_StartWebAuthnRegistrationTests(),
+        AuthenticatedChatConnection::fakeConnect,
+        ::AuthAccountsService,
+        invoke = { chat, _ ->
+          chat.startWebAuthnRegistration()
+        },
+        check = { expected, actual ->
+          when (expected) {
+            is StartWebAuthnRegistrationOut.Success ->
+              assertEquals(
+                WebAuthnCreateParameters.fromInternal(expected._0),
+                assertIs<RequestResult.Success<WebAuthnCreateParameters>>(actual).result,
+              )
+            StartWebAuthnRegistrationOut.TooManyMfaKeys ->
+              actual.assertNonSuccess<_, _, TooManyMfaKeysException>()
+          }
+        },
+      )
+    }
+
+  @Test
+  fun testFinishWebAuthnRegistration() =
+    runTest {
+      NativeTesting.TESTING_EnableDeterministicRngForTesting()
+      GrpcTestCase.runTests(
+        NativeTestingNice.TESTING_FinishWebAuthnRegistrationTests(),
+        AuthenticatedChatConnection::fakeConnect,
+        ::AuthAccountsService,
+        invoke = { chat, req ->
+          chat.finishWebAuthnRegistration(
+            attestationObject = req.attestationObject,
+            collectedClientDataJson = req.collectedClientDataJson,
+            metadata = MfaMetadata(name = req.name, createdAt = req.createdAt),
+            svrKey = SvrKey(req.svrKey),
+            rngSeedForTesting = DeterministicRandomSeedUseOnlyForTesting(0),
+          )
+        },
+        check = { expected, actual ->
+          when (expected) {
+            is FinishWebAuthnRegistrationOut.Success ->
+              assertEquals(
+                expected._0,
+                assertIs<RequestResult.Success<Int>>(actual).result,
+              )
+            FinishWebAuthnRegistrationOut.WebAuthnRegistrationUnsuccessful ->
+              actual.assertNonSuccess<_, _, WebAuthnRegistrationUnsuccessfulException>()
+            FinishWebAuthnRegistrationOut.TooManyMfaKeys ->
+              actual.assertNonSuccess<_, _, TooManyMfaKeysException>()
+          }
+        },
+      )
     }
 
   @Test
@@ -265,6 +349,7 @@ class AuthAccountsServiceTest {
                 }
                 when (expectedKey.kind) {
                   BridgeMfaKeyKind.Totp -> assertEquals(MfaKeyKind.TOTP, key.kind)
+                  BridgeMfaKeyKind.WebAuthn -> assertEquals(MfaKeyKind.WEB_AUTHN, key.kind)
                   BridgeMfaKeyKind.Unknown -> assertEquals(MfaKeyKind.UNKNOWN, key.kind)
                 }
               }
@@ -313,6 +398,55 @@ class AuthAccountsServiceTest {
         check = { expected, actual ->
           when (expected) {
             RemoveMfaKeyOut.Success -> assertIs<RequestResult.Success<Unit>>(actual)
+          }
+        },
+      )
+    }
+
+  @Test
+  fun testStartMfaVerification() =
+    runTest {
+      GrpcTestCase.runTests(
+        NativeTestingNice.TESTING_StartMfaVerificationTests(),
+        AuthenticatedChatConnection::fakeConnect,
+        ::AuthAccountsService,
+        invoke = { chat, req ->
+          chat.startMfaVerification()
+        },
+        check = { expected, actual ->
+          when (expected) {
+            is StartMfaVerificationOut.Success -> {
+              val response = assertIs<RequestResult.Success<StartMfaVerificationResponse>>(actual).result
+              assertEquals(expected._0, response)
+            }
+            StartMfaVerificationOut.Malformed -> {
+              assertIs<UnexpectedResponseException>(
+                assertIs<RequestResult.ApplicationError>(actual).cause,
+              )
+            }
+          }
+        },
+      )
+    }
+
+  @Test
+  fun testFinishMfaVerification() =
+    runTest {
+      GrpcTestCase.runTests(
+        NativeTestingNice.TESTING_FinishMfaVerificationTests(),
+        AuthenticatedChatConnection::fakeConnect,
+        ::AuthAccountsService,
+        invoke = { chat, req ->
+          chat.finishMfaVerification(req)
+        },
+        check = { expected, actual ->
+          when (expected) {
+            FinishMfaVerificationOut.Success -> {
+              assertIs<RequestResult.Success<Unit>>(actual)
+            }
+            FinishMfaVerificationOut.FailedToVerify -> {
+              actual.assertNonSuccess<_, _, MfaNotVerifiedException>()
+            }
           }
         },
       )

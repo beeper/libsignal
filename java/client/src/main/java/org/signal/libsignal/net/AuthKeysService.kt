@@ -8,6 +8,12 @@ package org.signal.libsignal.net
 import org.signal.libsignal.internal.CompletableFuture
 import org.signal.libsignal.internal.NativeNice
 import org.signal.libsignal.internal.mapWithCancellation
+import org.signal.libsignal.protocol.ServiceId
+import org.signal.libsignal.protocol.ecc.ECPublicKey
+import org.signal.libsignal.protocol.kem.KEMPublicKey
+import org.signal.libsignal.protocol.state.KyberPreKeyRecord
+import org.signal.libsignal.protocol.state.PreKeyRecord
+import org.signal.libsignal.protocol.state.SignedPreKeyRecord
 
 public data class PreKeyCounts(
   /**
@@ -31,6 +37,77 @@ public data class PreKeyCounts(
    */
   val pniKemPreKeyCount: Int,
 )
+
+/**
+ * A one-time elliptic-curve pre-key, as uploaded to the server.
+ *
+ * This is only the public half of the key; the private half never leaves the device.
+ */
+public data class PublicEcPreKey(
+  /**
+   * A locally-unique identifier for this key, which peers using this key to encrypt messages will
+   * provide so the private key can be looked up.
+   *
+   * Must not be negative.
+   */
+  public val keyId: Int,
+  /**
+   * The public key.
+   */
+  public val publicKey: ECPublicKey,
+) {
+  public constructor(record: PreKeyRecord) : this(record.id, record.keyPair.publicKey)
+}
+
+/**
+ * A signed elliptic-curve pre-key, as uploaded to the server.
+ *
+ * This is only the public half of the key; the private half never leaves the device.
+ */
+public data class PublicSignedEcPreKey(
+  /**
+   * A locally-unique identifier for this key, which peers using this key to encrypt messages will
+   * provide so the private key can be looked up.
+   *
+   * Must not be negative.
+   */
+  public val keyId: Int,
+  /**
+   * The public key.
+   */
+  public val publicKey: ECPublicKey,
+  /**
+   * The signature of the public key by the appropriate identity key.
+   */
+  public val signature: ByteArray,
+) {
+  public constructor(record: SignedPreKeyRecord) : this(record.id, record.keyPair.publicKey, record.signature)
+}
+
+/**
+ * A KEM pre-key, as uploaded to the server.
+ *
+ * This is only the public half of the key; the private half never leaves the device.
+ */
+public data class PublicKemPreKey(
+  /**
+   * A locally-unique identifier for this key, which peers using this key to encrypt messages will
+   * provide so the private key can be looked up.
+   *
+   * Must not be negative.
+   */
+  public val keyId: Int,
+  /**
+   * The public key.
+   */
+  public val publicKey: KEMPublicKey,
+  /**
+   * The signature of the public key by the appropriate identity key.
+   */
+  public val signature: ByteArray,
+) {
+  public constructor(record: KyberPreKeyRecord) : this(record.id, record.keyPair.publicKey, record.signature)
+}
 
 public class AuthKeysService(
   private val connection: AuthenticatedChatConnection,
@@ -56,6 +133,137 @@ public class AuthKeysService(
           chat = connection,
         ).mapWithCancellation(
           onSuccess = { RequestResult.Success(it) },
+          onError = { err -> err.toRequestResult() },
+        )
+    } catch (e: Throwable) {
+      CompletableFuture.completedFuture(RequestResult.ApplicationError(e))
+    }
+
+  /**
+   * Uploads a new set of one-time EC pre-keys for the authenticated device, clearing any
+   * previously-stored one-time EC pre-keys for [identity].
+   *
+   * @param preKeys Must contain between 1 and 100 keys
+   *
+   * All exceptions are mapped into [RequestResult]; unexpected ones will be treated as
+   * [RequestResult.ApplicationError].
+   */
+  public fun setOneTimeEcPreKeys(
+    identity: ServiceId.Kind,
+    preKeys: List<PublicEcPreKey>,
+  ): CompletableFuture<RequestResult<Unit, Nothing>> {
+    val ids = IntArray(preKeys.size)
+    val keys = ArrayList<ECPublicKey>(preKeys.size)
+    preKeys.forEachIndexed { i, next ->
+      ids[i] = next.keyId
+      keys.add(next.publicKey)
+    }
+    return try {
+      NativeNice
+        .AuthenticatedChatConnection_set_one_time_ec_pre_keys(
+          asyncCtx = connection.tokioAsyncContext,
+          chat = connection,
+          identityType = identity,
+          preKeyIds = ids,
+          preKeyData = keys,
+        ).mapWithCancellation(
+          onSuccess = { RequestResult.Success(Unit) },
+          onError = { err -> err.toRequestResult() },
+        )
+    } catch (e: Throwable) {
+      CompletableFuture.completedFuture(RequestResult.ApplicationError(e))
+    }
+  }
+
+  /**
+   * Uploads a new set of one-time KEM pre-keys for the authenticated device, clearing any
+   * previously-stored one-time KEM pre-keys for [identity].
+   *
+   * @param preKeys Must contain between 1 and 100 keys
+   *
+   * All exceptions are mapped into [RequestResult]; unexpected ones will be treated as
+   * [RequestResult.ApplicationError].
+   */
+  public fun setOneTimeKemPreKeys(
+    identity: ServiceId.Kind,
+    preKeys: List<PublicKemPreKey>,
+  ): CompletableFuture<RequestResult<Unit, Nothing>> {
+    val ids = IntArray(preKeys.size)
+    val keys = ArrayList<KEMPublicKey>(preKeys.size)
+    val signatures = ArrayList<ByteArray>(preKeys.size)
+    preKeys.forEachIndexed { i, next ->
+      ids[i] = next.keyId
+      keys.add(next.publicKey)
+      signatures.add(next.signature)
+    }
+    return try {
+      NativeNice
+        .AuthenticatedChatConnection_set_one_time_kem_pre_keys(
+          asyncCtx = connection.tokioAsyncContext,
+          chat = connection,
+          identityType = identity,
+          preKeyIds = ids,
+          preKeyData = keys,
+          preKeySignatures = signatures,
+        ).mapWithCancellation(
+          onSuccess = { RequestResult.Success(Unit) },
+          onError = { err -> err.toRequestResult() },
+        )
+    } catch (e: Throwable) {
+      CompletableFuture.completedFuture(RequestResult.ApplicationError(e))
+    }
+  }
+
+  /**
+   * Uploads a new signed EC pre-key for the authenticated device, clearing the
+   * previously-stored signed EC pre-key for [identity].
+   *
+   * All exceptions are mapped into [RequestResult]; unexpected ones will be treated as
+   * [RequestResult.ApplicationError].
+   */
+  public fun setSignedEcPreKey(
+    identity: ServiceId.Kind,
+    preKey: PublicSignedEcPreKey,
+  ): CompletableFuture<RequestResult<Unit, Nothing>> =
+    try {
+      NativeNice
+        .AuthenticatedChatConnection_set_signed_ec_pre_key(
+          asyncCtx = connection.tokioAsyncContext,
+          chat = connection,
+          identityType = identity,
+          id = preKey.keyId,
+          key = preKey.publicKey,
+          signature = preKey.signature,
+        ).mapWithCancellation(
+          onSuccess = { RequestResult.Success(Unit) },
+          onError = { err -> err.toRequestResult() },
+        )
+    } catch (e: Throwable) {
+      CompletableFuture.completedFuture(RequestResult.ApplicationError(e))
+    }
+
+  /**
+   * Uploads a new last-resort KEM pre-key for the authenticated device, clearing the
+   * previously-stored last-resort KEM pre-key for [identity].
+   *
+   * All exceptions are mapped into [RequestResult]; unexpected ones will be treated as
+   * [RequestResult.ApplicationError].
+   */
+  public fun setLastResortKemPreKey(
+    identity: ServiceId.Kind,
+    preKey: PublicKemPreKey,
+  ): CompletableFuture<RequestResult<Unit, Nothing>> =
+    try {
+      NativeNice
+        .AuthenticatedChatConnection_set_last_resort_kem_pre_key(
+          asyncCtx = connection.tokioAsyncContext,
+          chat = connection,
+          identityType = identity,
+          id = preKey.keyId,
+          key = preKey.publicKey,
+          signature = preKey.signature,
+        ).mapWithCancellation(
+          onSuccess = { RequestResult.Success(Unit) },
           onError = { err -> err.toRequestResult() },
         )
     } catch (e: Throwable) {

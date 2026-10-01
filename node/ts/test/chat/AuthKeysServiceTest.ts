@@ -9,6 +9,7 @@ import * as NativeNice from '../../NativeNice.js';
 import * as util from '../util.js';
 import { AuthKeysService } from '../../net.js';
 import { connectAuth, defineTestGrpcCases } from './ServiceTestUtils.js';
+import { KEMPublicKey, PublicKey } from '../../index.js';
 
 util.initLogger();
 config.truncateThreshold = 0;
@@ -25,6 +26,95 @@ describe('AuthKeysService', () => {
       ) => {
         const out = await chat.getPreKeyCount();
         expect(out).to.deep.equal(resp);
+      }
+    );
+  });
+
+  describe('setOneTimeEcPreKeys', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_SetOneTimeEcPreKeysTests(),
+      connectAuth<AuthKeysService>,
+      async (
+        chat: AuthKeysService,
+        { identity, preKeys }: NativeNice.SetOneTimeEcPreKeysArgs,
+        _resp: void
+      ) => {
+        await chat.setOneTimeEcPreKeys({
+          identity,
+          preKeys: preKeys.map(([keyId, publicKey]) => ({
+            keyId: keyId,
+            publicKey: PublicKey.deserialize(publicKey),
+          })),
+        });
+      }
+    );
+  });
+
+  describe('setOneTimeKemPreKeys', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_SetOneTimeKemPreKeysTests(),
+      connectAuth<AuthKeysService>,
+      async (
+        chat: AuthKeysService,
+        { identity, preKeys }: NativeNice.SetOneTimeKemPreKeysArgs,
+        _resp: void
+      ) => {
+        await chat.setOneTimeKemPreKeys({
+          identity,
+          preKeys: preKeys.map((next) => ({
+            keyId: next.id,
+            publicKey: KEMPublicKey.deserialize(next.key),
+            signature: next.sig,
+          })),
+        });
+      }
+    );
+  });
+
+  describe('setSignedEcPreKey', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_SetSignedEcPreKeyTests(),
+      connectAuth<AuthKeysService>,
+      async (
+        chat: AuthKeysService,
+        {
+          identity,
+          preKey: { id, key, sig },
+        }: NativeNice.SetSignedEcPreKeyArgs,
+        _resp: void
+      ) => {
+        await chat.setSignedEcPreKey({
+          identity,
+          preKey: {
+            keyId: id,
+            publicKey: PublicKey.deserialize(key),
+            signature: sig,
+          },
+        });
+      }
+    );
+  });
+
+  describe('setLastResortKemPreKey', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_SetLastResortKemPreKeyTests(),
+      connectAuth<AuthKeysService>,
+      async (
+        chat: AuthKeysService,
+        {
+          identity,
+          preKey: { id, key, sig },
+        }: NativeNice.SetLastResortKemPreKeyArgs,
+        _resp: void
+      ) => {
+        await chat.setLastResortKemPreKey({
+          identity,
+          preKey: {
+            keyId: id,
+            publicKey: KEMPublicKey.deserialize(key),
+            signature: sig,
+          },
+        });
       }
     );
   });
