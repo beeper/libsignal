@@ -508,10 +508,11 @@ mod remote_derives {
         BridgeMediaBackupInfo, BridgeMessageBackupInfo, BridgeMfaMetadata, BridgePendingTotpKey,
         BridgeWebAuthnCreateParameters,
     };
+    use libsignal_core::Aci;
+    use libsignal_net_chat::api::purchase::{ChargeFailure, PaymentProvider};
     use libsignal_net_chat::grpc::devices::{DeviceCapability, LinkedDevice};
-    use libsignal_net_chat::grpc::login_purchase::{
-        ChargeFailure, PaymentProvider, ReceiptCredentialError as ReceiptCredentialErrorReal,
-    };
+    use libsignal_net_chat::grpc::login_purchase::LoginReceiptLevel;
+    use libsignal_net_chat::grpc::{login_purchase, subscriptions};
     use libsignal_protocol::Timestamp;
     use uuid::Uuid;
 
@@ -539,10 +540,11 @@ mod remote_derives {
         pub receipt_credential_request_context: ReceiptCredentialRequestContext,
         pub server_params: ServerPublicParamsSerialized,
         pub purchase_time: Timestamp,
+        pub expected_level: LoginReceiptLevel,
     }
 
     #[derive(BridgedAsValue)]
-    #[bridge(swift_equatable = true)]
+    #[bridge(arg = false, swift_equatable = true)]
     pub enum ReceiptCredentialError {
         /// The purchase is still pending with the payment provider. The client may retry later.
         PaymentStillProcessing,
@@ -558,26 +560,71 @@ mod remote_derives {
         /// credential request
         ReceiptAlreadyIssued,
     }
-    impl From<ReceiptCredentialErrorReal> for ReceiptCredentialError {
-        fn from(value: ReceiptCredentialErrorReal) -> Self {
+    impl From<login_purchase::ReceiptCredentialError> for ReceiptCredentialError {
+        fn from(value: login_purchase::ReceiptCredentialError) -> Self {
             match value {
-                ReceiptCredentialErrorReal::PaymentStillProcessing => Self::PaymentStillProcessing,
-                ReceiptCredentialErrorReal::PaymentRequired { charge_failure } => {
+                login_purchase::ReceiptCredentialError::PaymentStillProcessing => {
+                    Self::PaymentStillProcessing
+                }
+                login_purchase::ReceiptCredentialError::PaymentRequired { charge_failure } => {
                     Self::PaymentRequired {
                         charge_failure: BridgeVec(charge_failure.map(|x| *x).into_iter().collect()),
                     }
                 }
-                ReceiptCredentialErrorReal::PaymentNotFound => Self::PaymentNotFound,
-                ReceiptCredentialErrorReal::ReceiptAlreadyIssued => Self::ReceiptAlreadyIssued,
+                login_purchase::ReceiptCredentialError::PaymentNotFound => Self::PaymentNotFound,
+                login_purchase::ReceiptCredentialError::ReceiptAlreadyIssued => {
+                    Self::ReceiptAlreadyIssued
+                }
             }
         }
     }
+    // These don't map exactly, but we reuse the errors on the app language side too.
+    impl From<subscriptions::ReceiptCredentialError> for ReceiptCredentialError {
+        fn from(value: subscriptions::ReceiptCredentialError) -> Self {
+            match value {
+                subscriptions::ReceiptCredentialError::NoPaidInvoice => {
+                    Self::PaymentStillProcessing
+                }
+                subscriptions::ReceiptCredentialError::PaymentRequired { charge_failure } => {
+                    Self::PaymentRequired {
+                        charge_failure: BridgeVec(charge_failure.map(|x| *x).into_iter().collect()),
+                    }
+                }
+                subscriptions::ReceiptCredentialError::SubscriberNotFound => Self::PaymentNotFound,
+                subscriptions::ReceiptCredentialError::ReceiptAlreadyIssued => {
+                    Self::ReceiptAlreadyIssued
+                }
+            }
+        }
+    }
+
     #[allow(clippy::large_enum_variant)]
     #[derive(BridgedAsValue, StructuralFrom)]
     #[structural_from(
         libsignal_net_chat::grpc::login_purchase::test_cases::CreateLoginReceiptCredentialOut
     )]
+    #[bridge(arg = false)]
     pub enum CreateLoginReceiptCredentialOut {
+        Success(ReceiptCredential),
+        UnexpectedError { contains: String },
+        ExplicitError(ReceiptCredentialError),
+    }
+
+    #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(
+        libsignal_net_chat::grpc::subscriptions::test_cases::GetReceiptCredentialArgs
+    )]
+    pub struct GetSubscriptionReceiptCredentialArgs {
+        pub subscriber_id: Vec<u8>,
+        pub receipt_credential_request_context: ReceiptCredentialRequestContext,
+        pub server_params: ServerPublicParamsSerialized,
+    }
+
+    #[allow(clippy::large_enum_variant)]
+    #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(libsignal_net_chat::grpc::subscriptions::test_cases::GetReceiptCredentialOut)]
+    #[bridge(arg = false)]
+    pub enum GetSubscriptionReceiptCredentialOut {
         Success(ReceiptCredential),
         UnexpectedError { contains: String },
         ExplicitError(ReceiptCredentialError),
@@ -1123,6 +1170,40 @@ mod remote_derives {
         Success,
         FailedToVerify,
     }
+
+    #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(libsignal_net_chat::grpc::profiles::test_cases::GetProfileKeyCredentialArgs)]
+    #[bridge(arg = false)]
+    pub struct GetProfileKeyCredentialArgs {
+        profile_key_request_context:
+            Serialized<::zkgroup::profiles::ProfileKeyCredentialRequestContext>,
+        server_params: ServerPublicParamsSerialized,
+    }
+
+    #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(libsignal_net_chat::api::profiles::ProfileKeyCredentialRequestError)]
+    #[bridge(arg = false, swift_equatable = true)]
+    pub enum ProfileKeyCredentialRequestError {
+        AuthFailed,
+        ProfileNotFound,
+    }
+    #[allow(clippy::large_enum_variant)]
+    #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(libsignal_net_chat::grpc::profiles::test_cases::GetProfileKeyCredentialOut)]
+    #[bridge(arg = false)]
+    pub enum GetProfileKeyCredentialOut {
+        Success(Serialized<::zkgroup::profiles::ExpiringProfileKeyCredential>),
+        UnexpectedError { contains: String },
+        ExplicitError(ProfileKeyCredentialRequestError),
+    }
+
+    #[derive(BridgedAsValue, StructuralFrom)]
+    #[structural_from(libsignal_net_chat::grpc::messages::test_cases::ReportMessageArgs)]
+    pub(super) struct ReportMessageArgs {
+        source: Aci,
+        message_guid: Uuid,
+        report_spam_token: Vec<u8>,
+    }
 }
 
 #[bridge_fn(nice = true)]
@@ -1415,4 +1496,25 @@ fn TESTING_StartMfaVerificationTests() -> GrpcTestCases<(), remote_derives::Star
 fn TESTING_FinishMfaVerificationTests()
 -> GrpcTestCases<BridgeMfaVerificationCredential, remote_derives::FinishMfaVerificationOut> {
     libsignal_net_chat::grpc::accounts::test_cases::finish_mfa_verification_test_cases().into()
+}
+
+#[bridge_fn(nice = true)]
+fn TESTING_GetProfileKeyCredentialTests() -> GrpcTestCases<
+    remote_derives::GetProfileKeyCredentialArgs,
+    remote_derives::GetProfileKeyCredentialOut,
+> {
+    libsignal_net_chat::grpc::profiles::test_cases::get_profile_key_credential_test_cases().into()
+}
+
+#[bridge_fn(nice = true)]
+fn TESTING_ReportMessageTests() -> GrpcTestCases<remote_derives::ReportMessageArgs, ()> {
+    libsignal_net_chat::grpc::messages::test_cases::report_message_test_cases().into()
+}
+
+#[bridge_fn(nice = true)]
+fn TESTING_GetSubscriptionReceiptCredentialTests() -> GrpcTestCases<
+    remote_derives::GetSubscriptionReceiptCredentialArgs,
+    remote_derives::GetSubscriptionReceiptCredentialOut,
+> {
+    libsignal_net_chat::grpc::subscriptions::test_cases::get_receipt_credential_test_cases().into()
 }

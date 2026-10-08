@@ -7,10 +7,13 @@ import { config, expect, use } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 
 import * as Native from '../../Native.js';
+import * as NativeNice from '../../NativeNice.js';
 import * as util from '../util.js';
 import { TokioAsyncContext, UnauthProfilesService } from '../../net.js';
-import { connectUnauth } from './ServiceTestUtils.js';
+import { connectUnauth, defineTestGrpcCases } from './ServiceTestUtils.js';
 import { Aci, Pni } from '../../Address.js';
+import { ServerPublicParams } from '../../zkgroup/index.js';
+import { ErrorCode, LibSignalErrorBase } from '../../Errors.js';
 
 use(chaiAsPromised);
 
@@ -52,5 +55,49 @@ describe('UnauthProfilesService', () => {
         expect(await responseFuture).to.eq(testCase.found);
       }
     });
+  });
+
+  describe('getProfileKeyCredential', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_GetProfileKeyCredentialTests(),
+      connectUnauth<UnauthProfilesService>,
+      async (
+        chat: UnauthProfilesService,
+        {
+          profileKeyRequestContext,
+          serverParams,
+        }: NativeNice.GetProfileKeyCredentialArgs,
+        resp: NativeNice.GetProfileKeyCredentialOut
+      ) => {
+        const out = chat.getProfileKeyCredential({
+          requestContext: profileKeyRequestContext,
+          serverParams: new ServerPublicParams(serverParams.bytes),
+        });
+        if ('success' in resp) {
+          expect(await out).to.deep.equal(resp.success);
+        } else if ('unexpectedError' in resp) {
+          await expect(out).to.eventually.be.rejectedWith(resp.unexpectedError);
+        } else if ('explicitError' in resp) {
+          let code: ErrorCode;
+          switch (resp.explicitError) {
+            case 'authFailed':
+              code = ErrorCode.RequestUnauthorized;
+              break;
+            case 'profileNotFound':
+              code = ErrorCode.ProfileNotFound;
+              break;
+            default:
+              resp.explicitError satisfies never;
+              throw new Error('Unreachable!');
+          }
+          await expect(out)
+            .to.eventually.be.rejectedWith(LibSignalErrorBase)
+            .and.deep.include({ code });
+        } else {
+          resp satisfies never;
+          throw new Error('Unreachable!');
+        }
+      }
+    );
   });
 });

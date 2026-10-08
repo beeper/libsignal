@@ -145,7 +145,7 @@ mod test {
         const TEST_ID_BYTES: [u8; 16] = [0x22; 16];
         const TEST_KEY: [u8; 32] = [0x11; 32];
 
-        fn test_data() -> Self {
+        pub(crate) fn test_data() -> Self {
             Self {
                 packId: Self::TEST_ID_BYTES.into(),
                 packKey: Self::TEST_KEY.into(),

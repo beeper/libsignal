@@ -8,9 +8,10 @@ import chaiAsPromised from 'chai-as-promised';
 import { Buffer } from 'node:buffer';
 
 import * as Native from '../../Native.js';
+import * as NativeNice from '../../NativeNice.js';
 import * as util from '../util.js';
 import { AuthMessagesService, TokioAsyncContext } from '../../net.js';
-import { connectAuth } from './ServiceTestUtils.js';
+import { connectAuth, defineTestGrpcCases } from './ServiceTestUtils.js';
 import { ErrorCode, LibSignalErrorBase } from '../../Errors.js';
 import { FakeChatRemote, InternalRequest } from '../../net/FakeChat.js';
 import { Aci } from '../../Address.js';
@@ -320,5 +321,19 @@ describe('AuthMessagesService', () => {
           options: new Set(['captcha']),
         });
     });
+  });
+
+  describe('reportMessage', () => {
+    defineTestGrpcCases(
+      NativeNice.TESTING_ReportMessageTests(),
+      connectAuth<AuthMessagesService>,
+      async (
+        chat: AuthMessagesService,
+        { source, messageGuid, reportSpamToken }: NativeNice.ReportMessageArgs,
+        _resp: void
+      ) => {
+        await chat.reportMessage({ source, messageGuid, reportSpamToken });
+      }
+    );
   });
 });

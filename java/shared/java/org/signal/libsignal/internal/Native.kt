@@ -393,6 +393,9 @@ internal object Native {
   ): CompletableFuture<Object>
 
   @JvmStatic
+  public external fun AuthenticatedChatConnection_info(chat: ObjectHandle): ObjectHandle
+
+  @JvmStatic
   public external fun AuthenticatedChatConnection_init_listener(
     chat: ObjectHandle,
     listener: BridgeChatListener,
@@ -430,6 +433,15 @@ internal object Native {
     asyncRuntime: ObjectHandle,
     chat: SimpleOwner,
     keyId: Int,
+  ): CompletableFuture<Void?>
+
+  @JvmStatic
+  public external fun AuthenticatedChatConnection_report_message(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    source: ByteArray,
+    messageGuid: UUID,
+    reportSpamToken: ByteArray,
   ): CompletableFuture<Void?>
 
   @JvmStatic
@@ -950,6 +962,21 @@ internal object Native {
 
   @JvmStatic
   public external fun CdsiLookup_token(lookup: ObjectHandle): ByteArray
+
+  @JvmStatic
+  public external fun ChatConnectionInfo_Destroy(handle: ObjectHandle): Unit
+
+  @JvmStatic
+  public external fun ChatConnectionInfo_description(connectionInfo: ObjectHandle): String
+
+  @JvmStatic
+  public external fun ChatConnectionInfo_ip_version(connectionInfo: ObjectHandle): Int
+
+  @JvmStatic
+  public external fun ChatConnectionInfo_is_direct(connectionInfo: ObjectHandle): Boolean
+
+  @JvmStatic
+  public external fun ChatConnectionInfo_local_port(connectionInfo: ObjectHandle): Int
 
   @JvmStatic
   public external fun ConnectionManager_Destroy(handle: ObjectHandle): Unit
@@ -3377,6 +3404,7 @@ internal object Native {
     receiptCredentialRequestContext: ByteArray,
     serverParams: SimpleOwner,
     purchaseTime: Long,
+    expectedLevel: Object,
   ): CompletableFuture<ByteArray>
 
   @JvmStatic
@@ -3410,6 +3438,23 @@ internal object Native {
     target: ByteArray,
     device: Int,
   ): CompletableFuture<Object>
+
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_get_profile_key_credential(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    profileKeyRequestContext: ByteArray,
+    serverParams: SimpleOwner,
+  ): CompletableFuture<ByteArray>
+
+  @JvmStatic
+  public external fun UnauthenticatedChatConnection_get_subscription_receipt_credential(
+    asyncRuntime: ObjectHandle,
+    chat: SimpleOwner,
+    subscriberId: ByteArray,
+    receiptCredentialRequestContext: ByteArray,
+    serverParams: SimpleOwner,
+  ): CompletableFuture<ByteArray>
 
   @JvmStatic
   public external fun UnauthenticatedChatConnection_info(chat: ObjectHandle): ObjectHandle

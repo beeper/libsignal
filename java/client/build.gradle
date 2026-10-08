@@ -146,8 +146,8 @@ publishing {
     }
 }
 
-setUpSigningKey(signing)
+rootProject.ext.setUpSigningKey(signing)
 signing {
-    required = { isReleaseBuild() && gradle.taskGraph.hasTask(":client:publish") }
+    required = { rootProject.ext.isReleaseBuild() && gradle.taskGraph.hasTask(":client:publish") }
     sign publishing.publications.mavenJava
 }

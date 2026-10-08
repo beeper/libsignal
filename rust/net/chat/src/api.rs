@@ -18,6 +18,7 @@ pub mod keys;
 pub mod keytrans;
 pub mod messages;
 pub mod profiles;
+pub mod purchase;
 pub mod registration;
 pub mod usernames;
 

@@ -244,50 +244,22 @@ fn set_up_rustls_platform_verifier(
     env: &mut jni::Env<'_>,
     class: JClass<'_>,
 ) -> Result<(), SignalJniError> {
-    // The "easy" way of setting up rustls-platform-verifier requires an Android Context object.
-    // However, at the time of this writing, the Context was only used to extract a ClassLoader that
+    // At the time of this writing, the Context argument is only used to extract a ClassLoader that
     // can find the rustls-platform-verifier Kotlin classes. We can do that with the Native class's
     // loader just as well, so we provide `null` for the Context without worrying about it.
-    struct CachedRuntime {
-        vm: jni21::JavaVM,
-        context: jni21::objects::GlobalRef,
-        class_loader: jni21::objects::GlobalRef,
-    }
-    impl rustls_platform_verifier::android::Runtime for CachedRuntime {
-        fn java_vm(&self) -> &jni21::JavaVM {
-            &self.vm
-        }
-        fn context(&self) -> &jni21::objects::GlobalRef {
-            &self.context
-        }
-        fn class_loader(&self) -> &jni21::objects::GlobalRef {
-            &self.class_loader
-        }
-    }
+    let class_loader = assert_matches::assert_matches!(
+        loader_context().expect("set up class loader first"),
+        jni::refs::LoaderContext::Loader(loader) => loader,
+        "should be using a specific ClassLoader instance"
+    );
 
-    let class_loader = call_method_checked(
-        env,
-        class,
-        "getClassLoader",
-        jni_args!(() -> java.lang.ClassLoader),
-    )?;
-
-    let jni21_env = unsafe {
-        jni21::JNIEnv::from_raw(env.get_raw().cast()).expect("same underlying representation")
-    };
-
-    // This is expected to be one-time setup, so it's okay that we're leaking a bit of configuration info.
-    rustls_platform_verifier::android::init_external(Box::leak(Box::new(CachedRuntime {
-        vm: jni21_env.get_java_vm().expect("can get VM"),
-        context: jni21_env
-            .new_global_ref(jni21::objects::JObject::null())
+    rustls_platform_verifier::android::init_with_refs(
+        env.get_java_vm().expect("can get VM"),
+        env.new_global_ref(JObject::null())
             .expect("can create global ref to null"),
-        class_loader: jni21_env
-            .new_global_ref(unsafe {
-                jni21::objects::JObject::from_raw(class_loader.as_raw().cast())
-            })
-            .expect("can create global ref to class loader"),
-    })));
+        env.new_global_ref(class_loader)
+            .expect("can create additional global ref to class loader"),
+    );
 
     Ok(())
 }

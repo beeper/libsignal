@@ -3781,7 +3781,7 @@ DEALINGS IN THE SOFTWARE.
 
 ```
 
-## jni-sys-macros 0.4.1, jni-sys 0.3.1, jni-sys 0.4.1
+## jni-sys-macros 0.4.1, jni-sys 0.4.1
 
 ```
 Copyright (c) 2015 The rust-jni-sys Developers
@@ -6689,7 +6689,7 @@ SOFTWARE.
 
 ```
 
-## rustls-platform-verifier-android 0.1.1, rustls-platform-verifier 0.5.3
+## rustls-platform-verifier-android 0.2.0, rustls-platform-verifier 0.7.1
 
 ```
 MIT License
@@ -6743,7 +6743,7 @@ SOFTWARE.
 
 ```
 
-## cesu8 1.1.0, libm 0.2.16
+## libm 0.2.16
 
 ```
 MIT License
@@ -7254,7 +7254,7 @@ SOFTWARE.
 
 ```
 
-## jni-macros 0.22.4, jni 0.21.1, jni 0.22.4
+## jni-macros 0.22.4, jni 0.22.4
 
 ```
 The MIT License (MIT)

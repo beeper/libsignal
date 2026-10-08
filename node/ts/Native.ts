@@ -5,6 +5,8 @@
 
 // WARNING: this file was automatically generated
 
+import type { ChargeFailure } from './Errors.js';
+
 export type Uuid = Uint8Array<ArrayBuffer>;
 
 /// A Native.Timestamp may be measured in seconds or in milliseconds;
@@ -305,15 +307,6 @@ export type ReturnFfiCallQualitySurveyInternal = {
   call_id_hash: Uint8Array<ArrayBuffer> | null;
 };
 
-export type ReturnFfiChargeFailure = {
-  processor: ReturnFfiPaymentProvider;
-  code: string;
-  message: string;
-  outcome_network_status: string | null;
-  outcome_reason: string | null;
-  outcome_type: string | null;
-};
-
 export type ReturnFfiCheckSvrCredentialsArgs = {
   number: string;
   passwords: Array<string>;
@@ -381,6 +374,7 @@ export type ReturnFfiCreateLoginReceiptCredentialArgs = {
   receipt_credential_request_context: Uint8Array<ArrayBuffer>;
   server_params: ReturnFfiServerPublicParamsSerialized;
   purchase_time: Timestamp;
+  expected_level: ReturnFfiLoginReceiptLevel;
 };
 
 export type ReturnFfiCreateLoginReceiptCredentialOut =
@@ -530,6 +524,25 @@ export type ReturnFfiGetMessageBackupInfoOut =
       __type: 2;
     };
 
+export type ReturnFfiGetProfileKeyCredentialArgs = {
+  profile_key_request_context: Uint8Array<ArrayBuffer>;
+  server_params: ReturnFfiServerPublicParamsSerialized;
+};
+
+export type ReturnFfiGetProfileKeyCredentialOut =
+  | {
+      __type: 0;
+      _0: Uint8Array<ArrayBuffer>;
+    }
+  | {
+      __type: 1;
+      contains: string;
+    }
+  | {
+      __type: 2;
+      _0: ReturnFfiProfileKeyCredentialRequestError;
+    };
+
 export type ReturnFfiGetStickerUploadFormsOut =
   | {
       __type: 0;
@@ -544,6 +557,26 @@ export type ReturnFfiGetStickerUploadFormsResponse = {
   manifest_upload_form: ReturnFfiS3UploadFormInternal;
   sticker_upload_forms: Array<ReturnFfiS3UploadFormInternal>;
 };
+
+export type ReturnFfiGetSubscriptionReceiptCredentialArgs = {
+  subscriber_id: Uint8Array<ArrayBuffer>;
+  receipt_credential_request_context: Uint8Array<ArrayBuffer>;
+  server_params: ReturnFfiServerPublicParamsSerialized;
+};
+
+export type ReturnFfiGetSubscriptionReceiptCredentialOut =
+  | {
+      __type: 0;
+      _0: Uint8Array<ArrayBuffer>;
+    }
+  | {
+      __type: 1;
+      contains: string;
+    }
+  | {
+      __type: 2;
+      _0: ReturnFfiReceiptCredentialError;
+    };
 
 export type ReturnFfiGetSvrBCredentialsOut =
   | {
@@ -607,6 +640,14 @@ export type ReturnFfiListMfaKeysOut = {
   __type: 0;
   _0: Array<ReturnFfiBridgeConfirmedMfaKey>;
 };
+
+export type ReturnFfiLoginReceiptLevel =
+  | {
+      __type: 0;
+    }
+  | {
+      __type: 1;
+    };
 
 export type ReturnFfiLookUpUsernameLinkArgs = {
   uuid: Uint8Array<ArrayBuffer>;
@@ -705,13 +746,21 @@ export type ReturnFfiPaymentProvider =
       __type: 3;
     };
 
+export type ReturnFfiProfileKeyCredentialRequestError =
+  | {
+      __type: 0;
+    }
+  | {
+      __type: 1;
+    };
+
 export type ReturnFfiReceiptCredentialError =
   | {
       __type: 0;
     }
   | {
       __type: 1;
-      charge_failure: Array<ReturnFfiChargeFailure>;
+      charge_failure: Array<ChargeFailure>;
     }
   | {
       __type: 2;
@@ -748,6 +797,12 @@ export type ReturnFfiRemoveMfaKeyArgs = {
 
 export type ReturnFfiRemoveMfaKeyOut = {
   __type: 0;
+};
+
+export type ReturnFfiReportMessageArgs = {
+  source: Uint8Array<ArrayBuffer>;
+  message_guid: Uint8Array<ArrayBuffer>;
+  report_spam_token: Uint8Array<ArrayBuffer>;
 };
 
 export type ReturnFfiReserveUsernameHashArgs = {
@@ -957,6 +1012,14 @@ export type ArgFfiDeviceCapabilityInternal =
     }
   | {
       __type: 6;
+    };
+
+export type ArgFfiLoginReceiptLevel =
+  | {
+      __type: 0;
+    }
+  | {
+      __type: 1;
     };
 
 export type ArgFfiMyRemoteDeriveEnum =
@@ -1221,6 +1284,13 @@ type NativeFunctions = {
     asyncRuntime: Wrapper<TokioAsyncContext>,
     chat: Wrapper<AuthenticatedChatConnection>,
     key_id: number
+  ) => CancellablePromise<void>;
+  AuthenticatedChatConnection_report_message: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    chat: Wrapper<AuthenticatedChatConnection>,
+    source: Uint8Array<ArrayBuffer>,
+    message_guid: Uuid,
+    report_spam_token: Uint8Array<ArrayBuffer>
   ) => CancellablePromise<void>;
   AuthenticatedChatConnection_reserve_username_hash: (
     asyncRuntime: Wrapper<TokioAsyncContext>,
@@ -1595,6 +1665,9 @@ type NativeFunctions = {
   ChatConnectionInfo_ip_version: (
     connection_info: Wrapper<ChatConnectionInfo>
   ) => number;
+  ChatConnectionInfo_is_direct: (
+    connection_info: Wrapper<ChatConnectionInfo>
+  ) => boolean;
   ChatConnectionInfo_local_port: (
     connection_info: Wrapper<ChatConnectionInfo>
   ) => number;
@@ -3349,8 +3422,20 @@ type NativeFunctions = {
   TESTING_GetPreKeyCountTests: () => Array<
     GrpcTestCaseFfi<void, ReturnFfiBridgePreKeyCounts>
   >;
+  TESTING_GetProfileKeyCredentialTests: () => Array<
+    GrpcTestCaseFfi<
+      ReturnFfiGetProfileKeyCredentialArgs,
+      ReturnFfiGetProfileKeyCredentialOut
+    >
+  >;
   TESTING_GetStickerUploadFormTests: () => Array<
     GrpcTestCaseFfi<number, ReturnFfiGetStickerUploadFormsOut>
+  >;
+  TESTING_GetSubscriptionReceiptCredentialTests: () => Array<
+    GrpcTestCaseFfi<
+      ReturnFfiGetSubscriptionReceiptCredentialArgs,
+      ReturnFfiGetSubscriptionReceiptCredentialOut
+    >
   >;
   TESTING_InputStreamReadIntoZeroLengthSlice: (
     caps_alphabet_input: InputStream
@@ -3481,6 +3566,9 @@ type NativeFunctions = {
   >;
   TESTING_RemoveMfaKeyTests: () => Array<
     GrpcTestCaseFfi<ReturnFfiRemoveMfaKeyArgs, ReturnFfiRemoveMfaKeyOut>
+  >;
+  TESTING_ReportMessageTests: () => Array<
+    GrpcTestCaseFfi<ReturnFfiReportMessageArgs, void>
   >;
   TESTING_ReserveUsernameHashTests: () => Array<
     GrpcTestCaseFfi<
@@ -3826,7 +3914,8 @@ type NativeFunctions = {
     purchase_identifier: string,
     receipt_credential_request_context: Uint8Array<ArrayBuffer>,
     server_params: Wrapper<ServerPublicParams>,
-    purchase_time: Timestamp
+    purchase_time: Timestamp,
+    expected_level: ArgFfiLoginReceiptLevel
   ) => CancellablePromise<Uint8Array<ArrayBuffer>>;
   UnauthenticatedChatConnection_disconnect: (
     asyncRuntime: Wrapper<TokioAsyncContext>,
@@ -3852,6 +3941,19 @@ type NativeFunctions = {
     target: Uint8Array<ArrayBuffer>,
     device: number
   ) => CancellablePromise<PreKeysResponse>;
+  UnauthenticatedChatConnection_get_profile_key_credential: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    chat: Wrapper<UnauthenticatedChatConnection>,
+    profile_key_request_context: Serialized<ProfileKeyCredentialRequestContext>,
+    server_params: Wrapper<ServerPublicParams>
+  ) => CancellablePromise<Serialized<ExpiringProfileKeyCredential>>;
+  UnauthenticatedChatConnection_get_subscription_receipt_credential: (
+    asyncRuntime: Wrapper<TokioAsyncContext>,
+    chat: Wrapper<UnauthenticatedChatConnection>,
+    subscriber_id: Uint8Array<ArrayBuffer>,
+    receipt_credential_request_context: Uint8Array<ArrayBuffer>,
+    server_params: Wrapper<ServerPublicParams>
+  ) => CancellablePromise<Uint8Array<ArrayBuffer>>;
   UnauthenticatedChatConnection_info: (
     chat: Wrapper<UnauthenticatedChatConnection>
   ) => ChatConnectionInfo;
@@ -4031,6 +4133,7 @@ const {
   AuthenticatedChatConnection_redeem_backup_receipt,
   AuthenticatedChatConnection_remove_device,
   AuthenticatedChatConnection_remove_mfa_key,
+  AuthenticatedChatConnection_report_message,
   AuthenticatedChatConnection_reserve_username_hash,
   AuthenticatedChatConnection_send,
   AuthenticatedChatConnection_send_message,
@@ -4117,6 +4220,7 @@ const {
   CdsiLookup_token,
   ChatConnectionInfo_description,
   ChatConnectionInfo_ip_version,
+  ChatConnectionInfo_is_direct,
   ChatConnectionInfo_local_port,
   CiphertextMessage_FromPlaintextContent,
   CiphertextMessage_Serialize,
@@ -4597,7 +4701,9 @@ const {
   TESTING_GetMediaBackupInfoTests,
   TESTING_GetMessageBackupInfoTests,
   TESTING_GetPreKeyCountTests,
+  TESTING_GetProfileKeyCredentialTests,
   TESTING_GetStickerUploadFormTests,
+  TESTING_GetSubscriptionReceiptCredentialTests,
   TESTING_InputStreamReadIntoZeroLengthSlice,
   TESTING_JoinStringArray,
   TESTING_KeyTransChatSendError,
@@ -4652,6 +4758,7 @@ const {
   TESTING_RegistrationSessionInfoConvert,
   TESTING_RemoveDeviceTests,
   TESTING_RemoveMfaKeyTests,
+  TESTING_ReportMessageTests,
   TESTING_ReserveUsernameHashTests,
   TESTING_ReturnIoError,
   TESTING_ReturnPair,
@@ -4762,6 +4869,8 @@ const {
   UnauthenticatedChatConnection_get_pre_keys_access_key_auth,
   UnauthenticatedChatConnection_get_pre_keys_group_auth,
   UnauthenticatedChatConnection_get_pre_keys_unrestricted_auth,
+  UnauthenticatedChatConnection_get_profile_key_credential,
+  UnauthenticatedChatConnection_get_subscription_receipt_credential,
   UnauthenticatedChatConnection_info,
   UnauthenticatedChatConnection_init_listener,
   UnauthenticatedChatConnection_look_up_username_hash,
@@ -4840,6 +4949,7 @@ export {
   AuthenticatedChatConnection_redeem_backup_receipt,
   AuthenticatedChatConnection_remove_device,
   AuthenticatedChatConnection_remove_mfa_key,
+  AuthenticatedChatConnection_report_message,
   AuthenticatedChatConnection_reserve_username_hash,
   AuthenticatedChatConnection_send,
   AuthenticatedChatConnection_send_message,
@@ -4926,6 +5036,7 @@ export {
   CdsiLookup_token,
   ChatConnectionInfo_description,
   ChatConnectionInfo_ip_version,
+  ChatConnectionInfo_is_direct,
   ChatConnectionInfo_local_port,
   CiphertextMessage_FromPlaintextContent,
   CiphertextMessage_Serialize,
@@ -5406,7 +5517,9 @@ export {
   TESTING_GetMediaBackupInfoTests,
   TESTING_GetMessageBackupInfoTests,
   TESTING_GetPreKeyCountTests,
+  TESTING_GetProfileKeyCredentialTests,
   TESTING_GetStickerUploadFormTests,
+  TESTING_GetSubscriptionReceiptCredentialTests,
   TESTING_InputStreamReadIntoZeroLengthSlice,
   TESTING_JoinStringArray,
   TESTING_KeyTransChatSendError,
@@ -5461,6 +5574,7 @@ export {
   TESTING_RegistrationSessionInfoConvert,
   TESTING_RemoveDeviceTests,
   TESTING_RemoveMfaKeyTests,
+  TESTING_ReportMessageTests,
   TESTING_ReserveUsernameHashTests,
   TESTING_ReturnIoError,
   TESTING_ReturnPair,
@@ -5571,6 +5685,8 @@ export {
   UnauthenticatedChatConnection_get_pre_keys_access_key_auth,
   UnauthenticatedChatConnection_get_pre_keys_group_auth,
   UnauthenticatedChatConnection_get_pre_keys_unrestricted_auth,
+  UnauthenticatedChatConnection_get_profile_key_credential,
+  UnauthenticatedChatConnection_get_subscription_receipt_credential,
   UnauthenticatedChatConnection_info,
   UnauthenticatedChatConnection_init_listener,
   UnauthenticatedChatConnection_look_up_username_hash,

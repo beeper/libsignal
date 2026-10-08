@@ -1291,6 +1291,18 @@ pub mod remote_derives {
 
     #[derive(BridgedAsValue)]
     #[bridge(
+        remote = libsignal_net_chat::grpc::login_purchase::LoginReceiptLevel,
+        ffi_nice_type = "LoginReceiptLevel",
+        jni_nice_type = "org.signal.libsignal.net.LoginReceiptLevel",
+    )]
+    #[allow(unused)]
+    enum LoginReceiptLevel {
+        Normal,
+        Sandbox,
+    }
+
+    #[derive(BridgedAsValue)]
+    #[bridge(
         remote = libsignal_net_chat::grpc::credentials::AuthCheckResult,
         ffi_nice_type = "AuthCheckResult",
         jni_nice_type = "org.signal.libsignal.net.AuthCheckResult",
@@ -1310,7 +1322,7 @@ pub mod remote_derives {
 
     #[derive(BridgedAsValue)]
     #[bridge(
-        remote = libsignal_net_chat::grpc::login_purchase::PaymentProvider,
+        remote = libsignal_net_chat::api::purchase::PaymentProvider,
         ffi_nice_type = "PaymentProvider",
         jni_nice_type = "org.signal.libsignal.net.PaymentProvider",
     )]
@@ -1324,13 +1336,14 @@ pub mod remote_derives {
 
     #[derive(BridgedAsValue)]
     #[bridge(
-        remote = libsignal_net_chat::grpc::login_purchase::ChargeFailure,
+        remote = libsignal_net_chat::api::purchase::ChargeFailure,
         ffi_nice_type = "ChargeFailure",
         jni_nice_type = "org.signal.libsignal.net.ChargeFailure",
+        node = false,
     )]
     #[allow(unused)]
     pub struct ChargeFailure {
-        pub processor: libsignal_net_chat::grpc::login_purchase::PaymentProvider,
+        pub processor: libsignal_net_chat::api::purchase::PaymentProvider,
         pub code: String,
         pub message: String,
         pub outcome_network_status: Option<String>,

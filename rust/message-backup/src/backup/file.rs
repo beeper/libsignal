@@ -229,6 +229,9 @@ pub struct FilePointer {
     pub height: Option<u32>,
     pub caption: Option<String>,
     pub blur_hash: Option<String>,
+    #[serde_as(as = "Option<Hex>")]
+    pub audio_waveform: Option<Vec<u8>>,
+    pub audio_duration_seconds: Option<f32>,
     #[serde(skip)]
     _limit_construction_to_module: (),
 }
@@ -244,7 +247,16 @@ pub enum FilePointerError {
     MissingIncrementalMac,
     /// Found exactly one of incrementalMac and incrementalMacChunkSize
     IncrementalMacMismatch,
+    /// audioWaveform was present but empty
+    EmptyAudioWaveform,
+    /// audioWaveform was {0} bytes (too long)
+    AudioWaveformTooLong(usize),
+    /// audioDurationSeconds was {0} (not a non-negative finite number)
+    InvalidAudioDuration(f32),
 }
+
+/// Each byte is one bar of the waveform, so this bounds its resolution.
+const MAX_AUDIO_WAVEFORM_LEN: usize = 100;
 
 impl<C: ReportUnusualTimestamp + ?Sized> TryIntoWith<FilePointer, C> for proto::FilePointer {
     type Error = FilePointerError;
@@ -260,6 +272,8 @@ impl<C: ReportUnusualTimestamp + ?Sized> TryIntoWith<FilePointer, C> for proto::
             caption,
             blurHash,
             locatorInfo,
+            audioWaveform,
+            audioDurationSeconds,
             special_fields: _,
         } = self;
 
@@ -276,6 +290,22 @@ impl<C: ReportUnusualTimestamp + ?Sized> TryIntoWith<FilePointer, C> for proto::
             return Err(FilePointerError::MissingIncrementalMac);
         }
 
+        if let Some(waveform) = &audioWaveform {
+            match waveform.len() {
+                0 => return Err(FilePointerError::EmptyAudioWaveform),
+                len if len > MAX_AUDIO_WAVEFORM_LEN => {
+                    return Err(FilePointerError::AudioWaveformTooLong(len));
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(duration) = audioDurationSeconds
+            && (!duration.is_finite() || duration < 0.0)
+        {
+            return Err(FilePointerError::InvalidAudioDuration(duration));
+        }
+
         Ok(FilePointer {
             locator_info,
             content_type: contentType,
@@ -286,6 +316,8 @@ impl<C: ReportUnusualTimestamp + ?Sized> TryIntoWith<FilePointer, C> for proto::
             height,
             caption,
             blur_hash: blurHash,
+            audio_waveform: audioWaveform,
+            audio_duration_seconds: audioDurationSeconds,
             _limit_construction_to_module: (),
         })
     }
@@ -520,6 +552,8 @@ mod test {
                 height: Some(480),
                 caption: Some("test caption".into()),
                 blurHash: Some("abcd".into()),
+                audioWaveform: Some(vec![0, 128, 255]),
+                audioDurationSeconds: Some(12.5),
                 special_fields: Default::default(),
             }
         }
@@ -556,6 +590,21 @@ mod test {
     #[test_case(|x| x.caption = Some("".into()) => Ok(()); "empty caption")]
     #[test_case(|x| x.blurHash = None => Ok(()); "no blurHash")]
     #[test_case(|x| x.blurHash = Some("".into()) => Ok(()); "empty blurHash")]
+    #[test_case(|x| x.audioWaveform = None => Ok(()); "no audioWaveform")]
+    #[test_case(|x| x.audioWaveform = Some(vec![])
+        => Err(FilePointerError::EmptyAudioWaveform); "empty audioWaveform")]
+    #[test_case(|x| x.audioWaveform = Some(vec![0; MAX_AUDIO_WAVEFORM_LEN])
+        => Ok(()); "longest audioWaveform")]
+    #[test_case(|x| x.audioWaveform = Some(vec![0; MAX_AUDIO_WAVEFORM_LEN + 1])
+        => Err(FilePointerError::AudioWaveformTooLong(MAX_AUDIO_WAVEFORM_LEN + 1)); "too long audioWaveform")]
+    #[test_case(|x| x.audioDurationSeconds = None => Ok(()); "no audioDurationSeconds")]
+    #[test_case(|x| x.audioDurationSeconds = Some(0.0) => Ok(()); "zero audioDurationSeconds")]
+    #[test_case(|x| x.audioDurationSeconds = Some(-1.0)
+        => Err(FilePointerError::InvalidAudioDuration(-1.0)); "negative audioDurationSeconds")]
+    #[test_case(|x| x.audioDurationSeconds = Some(f32::INFINITY)
+        => Err(FilePointerError::InvalidAudioDuration(f32::INFINITY)); "infinite audioDurationSeconds")]
+    #[test_case(|x| x.audioDurationSeconds = Some(f32::NAN)
+        => matches Err(FilePointerError::InvalidAudioDuration(_)); "NaN audioDurationSeconds")]
     fn file_pointer(
         modifier: impl FnOnce(&mut proto::FilePointer),
     ) -> Result<(), FilePointerError> {

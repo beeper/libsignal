@@ -1,4 +1,5 @@
-// Forked from https://github.com/rustls/rustls-platform-verifier/blob/v/0.5.1/android/rustls-platform-verifier/src/main/java/org/rustls/platformverifier/CertificateVerifier.kt.
+// Forked from https://github.com/rustls/rustls-platform-verifier/blob/v/0.5.1/android/rustls-platform-verifier/src/main/java/org/rustls/platformverifier/CertificateVerifier.kt
+// and last updated to match https://github.com/rustls/rustls-platform-verifier/blob/v/0.7.1/android/rustls-platform-verifier/src/main/java/org/rustls/platformverifier/CertificateVerifier.kt
 // under the MIT License:
 //
 //     Copyright (c) 2022 1Password
@@ -68,7 +69,7 @@ private enum class StatusCode(val value: Int) {
 // Marked private as this is not meant to be used in Android code.
 private class VerificationResult(
     status: StatusCode,
-    @Suppress("unused") val message: String? = null
+    @Suppress("unused") val message: String? = null,
 ) {
     @Suppress("unused")
     private val code: Int = status.value
@@ -222,7 +223,7 @@ public object CertificateVerifier {
         allowedEkus: Array<String>,
         ocspResponse: ByteArray?,
         time: Long,
-        certChain: Array<ByteArray>
+        certChain: Array<ByteArray>,
     ): VerificationResult {
         // Convert the array of (supposedly) DER bytes into certificates.
         val certificateChain = mutableListOf<X509Certificate>()
@@ -304,7 +305,7 @@ public object CertificateVerifier {
                 return when (rootCause) {
                     is CertificateExpiredException, is CertificateNotYetValidException -> VerificationResult(
                         StatusCode.Expired,
-                        rootCause.toString()
+                        rootCause.toString(),
                     )
 
                     else -> VerificationResult(StatusCode.UnknownCert, rootCause.toString())
@@ -368,7 +369,7 @@ public object CertificateVerifier {
 
             revocationChecker.options = EnumSet.of(
                 PKIXRevocationChecker.Option.SOFT_FAIL,
-                PKIXRevocationChecker.Option.ONLY_END_ENTITY
+                PKIXRevocationChecker.Option.ONLY_END_ENTITY,
             )
 
             // Use the OCSP data `rustls` provided, if present.
@@ -465,6 +466,7 @@ public object CertificateVerifier {
                 var i = 0
                 while (true) {
                     val alias = "$hash.$i"
+                    i += 1
 
                     if (!File(loadedSystemCertificateDirectory, alias).exists()) {
                         break
@@ -491,8 +493,6 @@ public object CertificateVerifier {
                             return true
                         }
                     }
-
-                    i += 1
                 }
             }
         }

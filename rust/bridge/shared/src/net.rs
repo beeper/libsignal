@@ -26,7 +26,7 @@ mod svr2;
 mod svrb;
 mod tokio;
 
-bridge_handle_fns!(ChatConnectionInfo, clone = false, jni = false);
+bridge_handle_fns!(ChatConnectionInfo, clone = false);
 
 bridge_handle_fns!(ConnectionProxyConfig);
 

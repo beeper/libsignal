@@ -9,8 +9,10 @@ import {
   UploadForm,
 } from '../Chat.js';
 import * as Native from '../../Native.js';
+import * as NativeNice from '../../NativeNice.js';
 import { LibSignalErrorBase } from '../../Errors.js';
-import { ServiceId } from '../../Address.js';
+import { Aci, ServiceId } from '../../Address.js';
+import type { Uuid } from '../../uuid.js';
 import type { SingleOutboundUnsealedMessage } from './SingleOutboundMessage.js';
 import type { CiphertextMessage } from '../../CiphertextMessage.js';
 
@@ -23,6 +25,7 @@ import type {
   RateLimitedError,
   RateLimitChallengeError,
   ServiceIdNotFound,
+  StandardNetworkError,
   UploadTooLarge,
 } from '../../Errors.js';
 
@@ -45,6 +48,13 @@ export type SendSyncMessageRequest = Readonly<{
   timestamp: number;
   contents: Readonly<SingleOutboundUnsealedMessage[]>;
   urgent: boolean;
+}>;
+
+/** See {@link AuthMessagesService#reportMessage}. */
+export type ReportMessageRequest = Readonly<{
+  source: Aci;
+  messageGuid: Uuid;
+  reportSpamToken: Uint8Array<ArrayBuffer> | null;
 }>;
 
 export interface AuthMessagesService {
@@ -94,6 +104,20 @@ export interface AuthMessagesService {
    */
   sendSyncMessage: (
     request: SendSyncMessageRequest,
+    options?: RequestOptions
+  ) => Promise<void>;
+
+  /**
+   * Reports a message as spam.
+   *
+   * @param source The sender of the offending message.
+   * @param messageGuid The offending message's `serverGuid`.
+   * @param reportSpamToken The offending message's `reportSpamToken`. Pass `null` for a
+   * message that arrived without one.
+   * @throws {StandardNetworkError}
+   */
+  reportMessage: (
+    request: ReportMessageRequest,
     options?: RequestOptions
   ) => Promise<void>;
 }
@@ -183,4 +207,18 @@ AuthenticatedChatConnection.prototype.sendSyncMessage = async function (
       urgent
     )
   );
+};
+
+AuthenticatedChatConnection.prototype.reportMessage = async function (
+  { source, messageGuid, reportSpamToken }: ReportMessageRequest,
+  options?: RequestOptions
+): Promise<void> {
+  return await NativeNice.AuthenticatedChatConnection_report_message({
+    asyncContext: this.asyncContext,
+    abortSignal: options?.abortSignal,
+    chat: this.chatService,
+    source,
+    messageGuid,
+    reportSpamToken: reportSpamToken ?? new Uint8Array(),
+  });
 };

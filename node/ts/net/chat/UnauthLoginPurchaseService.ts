@@ -14,34 +14,32 @@ import type {
   StandardNetworkError,
 } from '../../Errors.js';
 import type { Timestamp } from '../../NiceConverters.js';
+import type { PaymentProvider } from './PurchaseTypes.js';
 
 declare module '../Chat' {
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type
   interface UnauthenticatedChatConnection extends UnauthLoginPurchaseService {}
 }
 
-export type PaymentProvider =
-  | 'googlePlayBilling'
-  | 'appleAppStore'
-  | 'stripe'
-  | 'braintree';
-
-export type ReceiptCredentialError =
-  | ReceiptCredentialErrorPaymentNotFound
-  | ReceiptCredentialErrorPaymentRequired
-  | ReceiptCredentialErrorPaymentStillProcessing
-  | ReceiptCredentialErrorReceiptAlreadyIssued;
+export type LoginReceiptLevel = 'normal' | 'sandbox';
 
 export interface UnauthLoginPurchaseService {
   /**
    * Obtain a ZK receipt credential for a completed one-time login payment.
    * The receipt credential can then be presented at registration.
    *
-   * Subsequent retries to create a login credential for the same purchaseIdentifier must use
-   * an identical receiptCredentialRequestContext.
+   * Subsequent retries to create a login credential for the same `purchaseIdentifier` must use
+   * an identical `receiptCredentialRequestContext`.
    *
    * @throws {StandardNetworkError}
-   * @throws {ReceiptCredentialError}
+   * @throws {ReceiptCredentialErrorPaymentRequired} if the purchase did not complete successfully.
+   * @throws {ReceiptCredentialErrorPaymentStillProcessing} Should be rare if payment has already
+   * been confirmed locally, but the client may retry the request.
+   * @throws {ReceiptCredentialErrorPaymentNotFound} indicates that the server has no record of
+   * `purchaseIdentifier`, which may be a client issue, a server issue, or a problem with the
+   * payment processor; it is not worth retrying.
+   * @throws {ReceiptCredentialErrorReceiptAlreadyIssued} if the purchase was already redeemed for a
+   * receipt credential, but with a different receipt credential request.
    */
   createLoginReceiptCredential: (
     request: {
@@ -50,6 +48,7 @@ export interface UnauthLoginPurchaseService {
       receiptCredentialRequestContext: zkgroup.ReceiptCredentialRequestContext;
       serverParams: zkgroup.ServerPublicParams;
       purchaseTime: Timestamp;
+      expectedLevel: LoginReceiptLevel;
     },
     options?: RequestOptions
   ) => Promise<zkgroup.ReceiptCredential>;
@@ -62,6 +61,7 @@ UnauthenticatedChatConnection.prototype.createLoginReceiptCredential =
       receiptCredentialRequestContext,
       serverParams,
       purchaseTime,
+      expectedLevel,
     },
     options?: RequestOptions
   ): Promise<zkgroup.ReceiptCredential> {
@@ -75,6 +75,7 @@ UnauthenticatedChatConnection.prototype.createLoginReceiptCredential =
         receiptCredentialRequestContext,
         serverParams,
         purchaseTime,
+        expectedLevel,
       }
     );
   };

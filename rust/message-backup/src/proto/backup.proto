@@ -25,7 +25,7 @@ message BackupInfo {
 //    LTR locales), but can appear anywhere relative to other frames respecting
 //    rule 2 (after Recipients and Chats).
 //
-// Recipients, Chats, StickerPacks, AdHocCalls, and NotificationProfiles
+// Recipients, Chats, StickerPacks, AdHocCalls, NotificationProfiles, and FavoriteStickerList
 // can be in any order. (But must respect rule 2.)
 //
 // For example, Chats may all be together at the beginning,
@@ -37,10 +37,12 @@ message Frame {
     Recipient recipient = 2;
     Chat chat = 3;
     ChatItem chatItem = 4;
-    StickerPack stickerPack = 5;
+    StickerPack installedStickerPack = 5;
     AdHocCall adHocCall = 6;
     NotificationProfile notificationProfile = 7;
     ChatFolder chatFolder = 8;
+    StickerPack hiddenStickerPack = 9; // Only applies to available/uninstalled sticker packs.
+    FavoriteStickerList favoriteStickerList = 10;
   }
 }
 
@@ -866,6 +868,11 @@ message FilePointer {
   optional string caption = 10;
   optional string blurHash = 11;
   LocatorInfo locatorInfo = 13;
+  // Waveform for audio attachments. Each byte represents a "bar" in the
+  // waveform, with 0 as silence 255 as loudest. At most 100 bytes/bars.
+  optional bytes audioWaveform = 14;
+  // Duration of an audio attachment, in seconds.
+  optional float audioDurationSeconds = 15;
 }
 
 message Quote {
@@ -1349,6 +1356,15 @@ message PinMessageUpdate {
 message StickerPack {
   bytes packId = 1;
   bytes packKey = 2;
+}
+
+message FavoriteStickerList {
+  message FavoriteSticker {
+    Sticker sticker = 1;
+    uint64 favoritedAtTimestamp = 2;
+  }
+
+  repeated FavoriteSticker favoriteSticker = 1;  // At most 500 stickers
 }
 
 message ChatStyle {

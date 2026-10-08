@@ -40,14 +40,17 @@ pub mod proto {
                 pub mod keys {
                     tonic::include_proto!("org.signal.chat.keys");
                 }
-                pub mod login_purchase {
-                    tonic::include_proto!("org.signal.chat.purchase");
-                }
                 pub mod messages {
                     tonic::include_proto!("org.signal.chat.messages");
                 }
                 pub mod payments {
                     tonic::include_proto!("org.signal.chat.payments");
+                }
+                pub mod profile {
+                    tonic::include_proto!("org.signal.chat.profile");
+                }
+                pub mod purchase {
+                    tonic::include_proto!("org.signal.chat.purchase");
                 }
 
                 // Not actually a proto, we just make sure to generate our helper file in the same place.

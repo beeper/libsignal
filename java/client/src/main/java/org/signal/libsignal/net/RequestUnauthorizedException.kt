@@ -19,7 +19,8 @@ public class RequestUnauthorizedException :
   GetPreKeysError,
   GetUploadFormError,
   MultiRecipientSendFailure,
-  SealedSendFailure {
+  SealedSendFailure,
+  GetProfileKeyCredentialFailure {
   @CalledFromNative
   public constructor(message: String) : super(message) {
   }

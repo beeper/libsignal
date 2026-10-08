@@ -9,7 +9,7 @@
     "strict": true,
     "skipLibCheck": true,
     "sourceMap": true,
-    "types": ["mocha"]
+    "types": ["mocha", "node"]
   },
   "include": ["ts/**/*.ts"]
 }

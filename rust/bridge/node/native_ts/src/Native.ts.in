@@ -5,6 +5,8 @@
 
 // WARNING: this file was automatically generated
 
+import type { ChargeFailure } from './Errors.js';
+
 export type Uuid = Uint8Array<ArrayBuffer>;
 
 /// A Native.Timestamp may be measured in seconds or in milliseconds;

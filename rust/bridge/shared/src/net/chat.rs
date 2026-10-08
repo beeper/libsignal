@@ -26,7 +26,7 @@ use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
 use libsignal_bridge_types::protocol::StrictPreKeyId;
 use libsignal_bridge_types::support::AsType;
 use libsignal_core::curve::{PrivateKey, PublicKey};
-use libsignal_core::{DeviceId, ServiceId, ServiceIdKind};
+use libsignal_core::{Aci, DeviceId, ServiceId, ServiceIdKind};
 use libsignal_net::chat::{self, ConnectError, LanguageList, Response as ChatResponse, SendError};
 use libsignal_net_chat::api;
 use libsignal_net_chat::api::backups::{
@@ -39,7 +39,10 @@ use libsignal_net_chat::api::messages::{
     SingleOutboundUnsealedMessage, UnauthenticatedChatApi as _, UnsealedSendFailure,
     UploadTooLarge, UserBasedSendAuthorization,
 };
-use libsignal_net_chat::api::profiles::UnauthenticatedAccountExistenceApi;
+use libsignal_net_chat::api::profiles::{
+    ProfileKeyCredentialRequestError, UnauthenticatedAccountExistenceApi,
+};
+use libsignal_net_chat::api::purchase::PaymentProvider;
 use libsignal_net_chat::api::usernames::UnauthenticatedChatApi as _;
 use libsignal_net_chat::api::{RequestError, UploadForm, UserBasedAuthorization};
 use libsignal_net_chat::grpc::accounts::{
@@ -52,8 +55,8 @@ use libsignal_net_chat::grpc::devices::{
     DeviceCapability, DeviceIdNotFoundInAccount, LinkedDevice,
 };
 use libsignal_net_chat::grpc::keys::{PublicEcPreKey, PublicKemPreKey, PublicSignedEcPreKey};
-use libsignal_net_chat::grpc::login_purchase::{PaymentProvider, ReceiptCredentialError};
 use libsignal_net_chat::grpc::usernames::{ConfirmUsernameError, UsernameNotAvailable};
+use libsignal_net_chat::grpc::{login_purchase, subscriptions};
 use libsignal_net_chat::stream_util::{BulkPolledStreamChunk, BulkPolledStreamTerminationReason};
 use libsignal_net_chat::ws::OverWs;
 use libsignal_protocol::{
@@ -106,17 +109,24 @@ fn HttpRequest_add_header(
     request.add_header(name.into_inner(), value.into_inner())
 }
 
-#[bridge_fn(jni = false)]
+#[bridge_fn]
 fn ChatConnectionInfo_local_port(connection_info: &ChatConnectionInfo) -> u16 {
     connection_info.transport_info.local_addr.port()
 }
 
-#[bridge_fn(jni = false)]
+#[bridge_fn]
 fn ChatConnectionInfo_ip_version(connection_info: &ChatConnectionInfo) -> u8 {
     connection_info.transport_info.ip_version() as u8
 }
 
-#[bridge_fn(jni = false)]
+/// Whether the connection was made directly to the Signal service, as opposed to through a
+/// reflector or a user-configured proxy.
+#[bridge_fn]
+fn ChatConnectionInfo_is_direct(connection_info: &ChatConnectionInfo) -> bool {
+    connection_info.route_info.unresolved.proxy.is_none()
+}
+
+#[bridge_fn]
 fn ChatConnectionInfo_description(connection_info: &ChatConnectionInfo) -> String {
     connection_info.to_string()
 }
@@ -340,7 +350,7 @@ async fn AuthenticatedChatConnection_disconnect(chat: &AuthenticatedChatConnecti
     chat.disconnect().await
 }
 
-#[bridge_fn(jni = false)]
+#[bridge_fn]
 fn AuthenticatedChatConnection_info(chat: &AuthenticatedChatConnection) -> ChatConnectionInfo {
     chat.info()
 }
@@ -1299,7 +1309,8 @@ async fn UnauthenticatedChatConnection_create_login_receipt_credential(
     receipt_credential_request_context: ReceiptCredentialRequestContext,
     server_params: BridgeHandleRef<'_, ServerPublicParams>,
     purchase_time: Timestamp,
-) -> Result<ReceiptCredential, RequestError<ReceiptCredentialError>> {
+    expected_level: login_purchase::LoginReceiptLevel,
+) -> Result<ReceiptCredential, RequestError<login_purchase::ReceiptCredentialError>> {
     chat.require_grpc()
         .await
         .create_login_receipt_credential(
@@ -1308,6 +1319,7 @@ async fn UnauthenticatedChatConnection_create_login_receipt_credential(
             &receipt_credential_request_context,
             &server_params,
             purchase_time,
+            expected_level,
         )
         .await
 }
@@ -1440,6 +1452,54 @@ async fn AuthenticatedChatConnection_finish_mfa_verification(
     chat.require_grpc()
         .await
         .finish_mfa_verification(credential.into())
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_get_profile_key_credential(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    profile_key_request_context: Serialized<
+        ::zkgroup::profiles::ProfileKeyCredentialRequestContext,
+    >,
+    server_params: BridgeHandleRef<'_, ::zkgroup::ServerPublicParams>,
+) -> Result<
+    Serialized<::zkgroup::profiles::ExpiringProfileKeyCredential>,
+    RequestError<ProfileKeyCredentialRequestError>,
+> {
+    chat.require_grpc()
+        .await
+        .get_profile_key_credential(profile_key_request_context.into_inner(), &server_params)
+        .await
+        .map(Into::into)
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn AuthenticatedChatConnection_report_message(
+    chat: BridgeHandleRef<'_, AuthenticatedChatConnection>,
+    source: Aci,
+    message_guid: Uuid,
+    report_spam_token: Vec<u8>,
+) -> Result<(), RequestError<Infallible>> {
+    chat.require_grpc()
+        .await
+        .report_message(source, message_guid, &report_spam_token)
+        .await
+}
+
+#[bridge_io(TokioAsyncContext, nice = true)]
+async fn UnauthenticatedChatConnection_get_subscription_receipt_credential(
+    chat: BridgeHandleRef<'_, UnauthenticatedChatConnection>,
+    subscriber_id: subscriptions::SubscriberId,
+    receipt_credential_request_context: ReceiptCredentialRequestContext,
+    server_params: BridgeHandleRef<'_, ServerPublicParams>,
+) -> Result<ReceiptCredential, RequestError<subscriptions::ReceiptCredentialError>> {
+    chat.require_grpc()
+        .await
+        .get_subscription_receipt_credential(
+            subscriber_id,
+            &receipt_credential_request_context,
+            &server_params,
+        )
         .await
 }
 

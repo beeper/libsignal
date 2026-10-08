@@ -10,6 +10,9 @@ import {
   convertNativeRegistrationSessionState,
   RegistrationSessionState,
 } from './net/RegistrationSession.js';
+import type { PaymentProvider } from './net/chat/PurchaseTypes.js';
+// Re-export this for compatibility.
+export type { PaymentProvider } from './net/chat/PurchaseTypes.js';
 
 export enum ErrorCode {
   Generic,
@@ -116,6 +119,8 @@ export enum ErrorCode {
   OneTimePasswordNotVerified = MfaNotVerified,
   MfaKeyNotFound,
   WebAuthnRegistrationUnsuccessful,
+
+  ProfileNotFound,
 }
 
 /** Called out as a separate type so it's not confused with a normal ServiceIdBinary. */
@@ -158,11 +163,6 @@ export class MismatchedDevicesEntry {
   }
 }
 
-export type PaymentProvider =
-  | 'googlePlayBilling'
-  | 'appleAppStore'
-  | 'stripe'
-  | 'braintree';
 export type ChargeFailure = {
   processor: PaymentProvider;
   code: string;
@@ -625,6 +625,10 @@ export type WebAuthnRegistrationUnsuccessful = LibSignalErrorCommon & {
   code: ErrorCode.WebAuthnRegistrationUnsuccessful;
 };
 
+export type ProfileNotFound = LibSignalErrorCommon & {
+  code: ErrorCode.ProfileNotFound;
+};
+
 export type LibSignalError =
   | GenericError
   | DuplicatedMessageError
@@ -708,4 +712,5 @@ export type LibSignalError =
   | TooManyMfaKeys
   | MfaNotVerified
   | MfaKeyNotFound
-  | WebAuthnRegistrationUnsuccessful;
+  | WebAuthnRegistrationUnsuccessful
+  | ProfileNotFound;

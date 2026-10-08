@@ -14,6 +14,7 @@ import type {
   ArgFfiBridgeMfaVerificationCredential,
   ArgFfiCallQualitySurveyInternal,
   ArgFfiDeviceCapabilityInternal,
+  ArgFfiLoginReceiptLevel,
   ArgFfiMyRemoteDeriveEnum,
   ArgFfiMyRemoteDeriveStruct,
   ArgFfiMySimpleTestEnum,
@@ -39,7 +40,6 @@ import type {
   ReturnFfiBridgeWebAuthnAuthenticationParameters,
   ReturnFfiBridgeWebAuthnCreateParameters,
   ReturnFfiCallQualitySurveyInternal,
-  ReturnFfiChargeFailure,
   ReturnFfiCheckSvrCredentialsArgs,
   ReturnFfiConfirmTotpKeyArgs,
   ReturnFfiConfirmTotpKeyOut,
@@ -62,8 +62,12 @@ import type {
   ReturnFfiGetDevicesOut,
   ReturnFfiGetMediaBackupInfoOut,
   ReturnFfiGetMessageBackupInfoOut,
+  ReturnFfiGetProfileKeyCredentialArgs,
+  ReturnFfiGetProfileKeyCredentialOut,
   ReturnFfiGetStickerUploadFormsOut,
   ReturnFfiGetStickerUploadFormsResponse,
+  ReturnFfiGetSubscriptionReceiptCredentialArgs,
+  ReturnFfiGetSubscriptionReceiptCredentialOut,
   ReturnFfiGetSvrBCredentialsOut,
   ReturnFfiLinkedDeviceInternal,
   ReturnFfiListMediaArgs,
@@ -72,6 +76,7 @@ import type {
   ReturnFfiListMediaResponse,
   ReturnFfiListMfaKeysArgs,
   ReturnFfiListMfaKeysOut,
+  ReturnFfiLoginReceiptLevel,
   ReturnFfiLookUpUsernameLinkArgs,
   ReturnFfiLookUpUsernameLinkOut,
   ReturnFfiMyRemoteDeriveEnum,
@@ -81,12 +86,14 @@ import type {
   ReturnFfiMyTestPoint,
   ReturnFfiMyTestStruct,
   ReturnFfiPaymentProvider,
+  ReturnFfiProfileKeyCredentialRequestError,
   ReturnFfiReceiptCredentialError,
   ReturnFfiRedeemBackupReceiptOut,
   ReturnFfiRemoveDeviceArgs,
   ReturnFfiRemoveDeviceOut,
   ReturnFfiRemoveMfaKeyArgs,
   ReturnFfiRemoveMfaKeyOut,
+  ReturnFfiReportMessageArgs,
   ReturnFfiReserveUsernameHashArgs,
   ReturnFfiReserveUsernameHashOut,
   ReturnFfiS3UploadFormInternal,
@@ -111,7 +118,7 @@ import type {
   /* eslint-enable @typescript-eslint/no-unused-vars */
 } from './Native.js';
 
-import { ServiceId, ServiceIdKind } from './Address.js';
+import { Aci, ServiceId, ServiceIdKind } from './Address.js';
 import * as zkgroup from './zkgroup/index.js';
 import * as uuid from './uuid.js';
 import ByteArray from './zkgroup/internal/ByteArray.js';
@@ -129,6 +136,7 @@ import {
   liftNull,
 } from './NiceConverters.js';
 import { Rng } from './RngForTesting.js';
+import type { ChargeFailure } from './Errors.js';
 
 export type AuthCheckResult = 'match' | 'noMatch' | 'invalid';
 
@@ -252,15 +260,6 @@ export type CallQualitySurveyInternal = {
   callIdHash: Uint8Array<ArrayBuffer> | null;
 };
 
-export type ChargeFailure = {
-  processor: PaymentProvider;
-  code: string;
-  message: string;
-  outcomeNetworkStatus: string | null;
-  outcomeReason: string | null;
-  outcomeType: string | null;
-};
-
 export type CheckSvrCredentialsArgs = {
   number: string;
   passwords: Array<string>;
@@ -311,6 +310,7 @@ export type CreateLoginReceiptCredentialArgs = {
   receiptCredentialRequestContext: zkgroup.ReceiptCredentialRequestContext;
   serverParams: ServerPublicParamsSerialized;
   purchaseTime: Timestamp;
+  expectedLevel: LoginReceiptLevel;
 };
 
 export type CreateLoginReceiptCredentialOut =
@@ -405,6 +405,22 @@ export type GetMessageBackupInfoOut =
   | 'credentialRejected'
   | 'missingResponse';
 
+export type GetProfileKeyCredentialArgs = {
+  profileKeyRequestContext: zkgroup.ProfileKeyCredentialRequestContext;
+  serverParams: ServerPublicParamsSerialized;
+};
+
+export type GetProfileKeyCredentialOut =
+  | {
+      success: zkgroup.ExpiringProfileKeyCredential;
+    }
+  | {
+      unexpectedError: string;
+    }
+  | {
+      explicitError: ProfileKeyCredentialRequestError;
+    };
+
 export type GetStickerUploadFormsOut =
   | {
       success: GetStickerUploadFormsResponse;
@@ -416,6 +432,23 @@ export type GetStickerUploadFormsResponse = {
   manifestUploadForm: S3UploadFormInternal;
   stickerUploadForms: Array<S3UploadFormInternal>;
 };
+
+export type GetSubscriptionReceiptCredentialArgs = {
+  subscriberId: Uint8Array<ArrayBuffer>;
+  receiptCredentialRequestContext: zkgroup.ReceiptCredentialRequestContext;
+  serverParams: ServerPublicParamsSerialized;
+};
+
+export type GetSubscriptionReceiptCredentialOut =
+  | {
+      success: zkgroup.ReceiptCredential;
+    }
+  | {
+      unexpectedError: string;
+    }
+  | {
+      explicitError: ReceiptCredentialError;
+    };
 
 export type GetSvrBCredentialsOut =
   | {
@@ -468,6 +501,8 @@ export type ListMfaKeysArgs = {
 export type ListMfaKeysOut = {
   success: Array<BridgeConfirmedMfaKey>;
 };
+
+export type LoginReceiptLevel = 'normal' | 'sandbox';
 
 export type LookUpUsernameLinkArgs = {
   uuid: uuid.Uuid;
@@ -534,6 +569,8 @@ export type PaymentProvider =
   | 'stripe'
   | 'braintree';
 
+export type ProfileKeyCredentialRequestError = 'authFailed' | 'profileNotFound';
+
 export type ReceiptCredentialError =
   | 'paymentStillProcessing'
   | {
@@ -559,6 +596,12 @@ export type RemoveMfaKeyArgs = {
 };
 
 export type RemoveMfaKeyOut = 'success';
+
+export type ReportMessageArgs = {
+  source: Aci;
+  messageGuid: uuid.Uuid;
+  reportSpamToken: Uint8Array<ArrayBuffer>;
+};
 
 export type ReserveUsernameHashArgs = {
   usernames: Array<Uint8Array<ArrayBuffer>>;
@@ -936,19 +979,6 @@ export function returnConverterCallQualitySurveyInternal(
   };
 }
 
-export function returnConverterChargeFailure(
-  ffiInput: Native.ReturnFfiChargeFailure
-): ChargeFailure {
-  return {
-    processor: returnConverterPaymentProvider(ffiInput.processor),
-    code: identity(ffiInput.code),
-    message: identity(ffiInput.message),
-    outcomeNetworkStatus: liftNull(identity)(ffiInput.outcome_network_status),
-    outcomeReason: liftNull(identity)(ffiInput.outcome_reason),
-    outcomeType: liftNull(identity)(ffiInput.outcome_type),
-  };
-}
-
 export function returnConverterCheckSvrCredentialsArgs(
   ffiInput: Native.ReturnFfiCheckSvrCredentialsArgs
 ): CheckSvrCredentialsArgs {
@@ -1063,6 +1093,7 @@ export function returnConverterCreateLoginReceiptCredentialArgs(
       ffiInput.server_params
     ),
     purchaseTime: identity(ffiInput.purchase_time),
+    expectedLevel: returnConverterLoginReceiptLevel(ffiInput.expected_level),
   };
 }
 
@@ -1308,6 +1339,48 @@ export function returnConverterGetMessageBackupInfoOut(
   }
 }
 
+export function returnConverterGetProfileKeyCredentialArgs(
+  ffiInput: Native.ReturnFfiGetProfileKeyCredentialArgs
+): GetProfileKeyCredentialArgs {
+  return {
+    profileKeyRequestContext: ((x) =>
+      new zkgroup.ProfileKeyCredentialRequestContext(x))(
+      ffiInput.profile_key_request_context
+    ),
+    serverParams: returnConverterServerPublicParamsSerialized(
+      ffiInput.server_params
+    ),
+  };
+}
+
+export function returnConverterGetProfileKeyCredentialOut(
+  ffiInput: Native.ReturnFfiGetProfileKeyCredentialOut
+): GetProfileKeyCredentialOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return {
+        success: ((x) => new zkgroup.ExpiringProfileKeyCredential(x))(
+          ffiInput._0
+        ),
+      };
+    case 1:
+      return {
+        unexpectedError: identity(ffiInput.contains),
+      };
+    case 2:
+      return {
+        explicitError: returnConverterProfileKeyCredentialRequestError(
+          ffiInput._0
+        ),
+      };
+    default:
+      ffiInput satisfies never;
+      throw new Error(
+        'Unknown FFI return enum type for GetProfileKeyCredentialOut'
+      );
+  }
+}
+
 export function returnConverterGetStickerUploadFormsOut(
   ffiInput: Native.ReturnFfiGetStickerUploadFormsOut
 ): GetStickerUploadFormsOut {
@@ -1340,6 +1413,45 @@ export function returnConverterGetStickerUploadFormsResponse(
       ffiInput.sticker_upload_forms
     ),
   };
+}
+
+export function returnConverterGetSubscriptionReceiptCredentialArgs(
+  ffiInput: Native.ReturnFfiGetSubscriptionReceiptCredentialArgs
+): GetSubscriptionReceiptCredentialArgs {
+  return {
+    subscriberId: identity(ffiInput.subscriber_id),
+    receiptCredentialRequestContext: ((x) =>
+      new zkgroup.ReceiptCredentialRequestContext(x))(
+      ffiInput.receipt_credential_request_context
+    ),
+    serverParams: returnConverterServerPublicParamsSerialized(
+      ffiInput.server_params
+    ),
+  };
+}
+
+export function returnConverterGetSubscriptionReceiptCredentialOut(
+  ffiInput: Native.ReturnFfiGetSubscriptionReceiptCredentialOut
+): GetSubscriptionReceiptCredentialOut {
+  switch (ffiInput.__type) {
+    case 0:
+      return {
+        success: ((x) => new zkgroup.ReceiptCredential(x))(ffiInput._0),
+      };
+    case 1:
+      return {
+        unexpectedError: identity(ffiInput.contains),
+      };
+    case 2:
+      return {
+        explicitError: returnConverterReceiptCredentialError(ffiInput._0),
+      };
+    default:
+      ffiInput satisfies never;
+      throw new Error(
+        'Unknown FFI return enum type for GetSubscriptionReceiptCredentialOut'
+      );
+  }
 }
 
 export function returnConverterGetSvrBCredentialsOut(
@@ -1448,6 +1560,21 @@ export function returnConverterListMfaKeysOut(
     default:
       ffiInput.__type satisfies never;
       throw new Error('Unknown FFI return enum type for ListMfaKeysOut');
+  }
+}
+
+export function returnConverterLoginReceiptLevel(
+  ffiInput: Native.ReturnFfiLoginReceiptLevel
+): LoginReceiptLevel {
+  switch (ffiInput.__type) {
+    case 0:
+      return 'normal';
+    case 1:
+      return 'sandbox';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error('Unknown FFI return enum type for LoginReceiptLevel');
   }
 }
 
@@ -1595,6 +1722,23 @@ export function returnConverterPaymentProvider(
   }
 }
 
+export function returnConverterProfileKeyCredentialRequestError(
+  ffiInput: Native.ReturnFfiProfileKeyCredentialRequestError
+): ProfileKeyCredentialRequestError {
+  switch (ffiInput.__type) {
+    case 0:
+      return 'authFailed';
+    case 1:
+      return 'profileNotFound';
+
+    default:
+      ffiInput satisfies never;
+      throw new Error(
+        'Unknown FFI return enum type for ProfileKeyCredentialRequestError'
+      );
+  }
+}
+
 export function returnConverterReceiptCredentialError(
   ffiInput: Native.ReturnFfiReceiptCredentialError
 ): ReceiptCredentialError {
@@ -1603,8 +1747,9 @@ export function returnConverterReceiptCredentialError(
       return 'paymentStillProcessing';
     case 1:
       return {
-        paymentRequired: ((arr: Array<ReturnFfiChargeFailure>) =>
-          arr.map(returnConverterChargeFailure))(ffiInput.charge_failure),
+        paymentRequired: ((arr: Array<ChargeFailure>) => arr.map(identity))(
+          ffiInput.charge_failure
+        ),
       };
     case 2:
       return 'paymentNotFound';
@@ -1680,6 +1825,16 @@ export function returnConverterRemoveMfaKeyOut(
       ffiInput.__type satisfies never;
       throw new Error('Unknown FFI return enum type for RemoveMfaKeyOut');
   }
+}
+
+export function returnConverterReportMessageArgs(
+  ffiInput: Native.ReturnFfiReportMessageArgs
+): ReportMessageArgs {
+  return {
+    source: Aci.parseFromServiceIdFixedWidthBinary(ffiInput.source),
+    messageGuid: uuid.stringify(ffiInput.message_guid),
+    reportSpamToken: identity(ffiInput.report_spam_token),
+  };
 }
 
 export function returnConverterReserveUsernameHashArgs(
@@ -2091,6 +2246,21 @@ export function argConverterDeviceCapabilityInternal(
 
   niceInput satisfies never;
   throw new Error('Cannot match on DeviceCapabilityInternal argument');
+}
+
+export function argConverterLoginReceiptLevel(
+  niceInput: LoginReceiptLevel
+): Native.ArgFfiLoginReceiptLevel {
+  if (niceInput === 'normal') {
+    return { __type: 0 };
+  }
+
+  if (niceInput === 'sandbox') {
+    return { __type: 1 };
+  }
+
+  niceInput satisfies never;
+  throw new Error('Cannot match on LoginReceiptLevel argument');
 }
 
 export function argConverterMyRemoteDeriveEnum(
@@ -2635,6 +2805,34 @@ export async function AuthenticatedChatConnection_remove_mfa_key({
         asyncContext,
         identity(chat),
         identity(key_id)
+      )
+    )
+  );
+}
+export async function AuthenticatedChatConnection_report_message({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+  source: source,
+  messageGuid: message_guid,
+  reportSpamToken: report_spam_token,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.AuthenticatedChatConnection>;
+  source: Aci;
+  messageGuid: uuid.Uuid;
+  reportSpamToken: Uint8Array<ArrayBuffer>;
+}): Promise<void> {
+  return identity(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.AuthenticatedChatConnection_report_message(
+        asyncContext,
+        identity(chat),
+        serviceIdArgConverter(source),
+        uuid.parse(message_guid),
+        identity(report_spam_token)
       )
     )
   );
@@ -3301,6 +3499,15 @@ export function TESTING_GetPreKeyCountTests(): Array<
   )(Native.TESTING_GetPreKeyCountTests());
 }
 
+export function TESTING_GetProfileKeyCredentialTests(): Array<
+  GrpcTestCase<GetProfileKeyCredentialArgs, GetProfileKeyCredentialOut>
+> {
+  return grpcTestCaseConverter(
+    returnConverterGetProfileKeyCredentialArgs,
+    returnConverterGetProfileKeyCredentialOut
+  )(Native.TESTING_GetProfileKeyCredentialTests());
+}
+
 export function TESTING_GetStickerUploadFormTests(): Array<
   GrpcTestCase<number, GetStickerUploadFormsOut>
 > {
@@ -3308,6 +3515,18 @@ export function TESTING_GetStickerUploadFormTests(): Array<
     identity,
     returnConverterGetStickerUploadFormsOut
   )(Native.TESTING_GetStickerUploadFormTests());
+}
+
+export function TESTING_GetSubscriptionReceiptCredentialTests(): Array<
+  GrpcTestCase<
+    GetSubscriptionReceiptCredentialArgs,
+    GetSubscriptionReceiptCredentialOut
+  >
+> {
+  return grpcTestCaseConverter(
+    returnConverterGetSubscriptionReceiptCredentialArgs,
+    returnConverterGetSubscriptionReceiptCredentialOut
+  )(Native.TESTING_GetSubscriptionReceiptCredentialTests());
 }
 
 export function TESTING_ListMfaKeysTests(): Array<
@@ -3583,6 +3802,15 @@ export function TESTING_RemoveMfaKeyTests(): Array<
     returnConverterRemoveMfaKeyArgs,
     returnConverterRemoveMfaKeyOut
   )(Native.TESTING_RemoveMfaKeyTests());
+}
+
+export function TESTING_ReportMessageTests(): Array<
+  GrpcTestCase<ReportMessageArgs, void>
+> {
+  return grpcTestCaseConverter(
+    returnConverterReportMessageArgs,
+    identity
+  )(Native.TESTING_ReportMessageTests());
 }
 
 export function TESTING_ReserveUsernameHashTests(): Array<
@@ -4740,6 +4968,7 @@ export async function UnauthenticatedChatConnection_create_login_receipt_credent
   receiptCredentialRequestContext: receipt_credential_request_context,
   serverParams: server_params,
   purchaseTime: purchase_time,
+  expectedLevel: expected_level,
 }: {
   asyncContext: TokioAsyncContext;
   abortSignal?: AbortSignal;
@@ -4749,6 +4978,7 @@ export async function UnauthenticatedChatConnection_create_login_receipt_credent
   receiptCredentialRequestContext: zkgroup.ReceiptCredentialRequestContext;
   serverParams: Native.Wrapper<Native.ServerPublicParams>;
   purchaseTime: Timestamp;
+  expectedLevel: LoginReceiptLevel;
 }): Promise<zkgroup.ReceiptCredential> {
   return ((x) => new zkgroup.ReceiptCredential(x))(
     await asyncContext.makeCancellable(
@@ -4762,7 +4992,63 @@ export async function UnauthenticatedChatConnection_create_login_receipt_credent
           receipt_credential_request_context
         ),
         identity(server_params),
-        identity(purchase_time)
+        identity(purchase_time),
+        argConverterLoginReceiptLevel(expected_level)
+      )
+    )
+  );
+}
+export async function UnauthenticatedChatConnection_get_profile_key_credential({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+  profileKeyRequestContext: profile_key_request_context,
+  serverParams: server_params,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.UnauthenticatedChatConnection>;
+  profileKeyRequestContext: zkgroup.ProfileKeyCredentialRequestContext;
+  serverParams: Native.Wrapper<Native.ServerPublicParams>;
+}): Promise<zkgroup.ExpiringProfileKeyCredential> {
+  return ((x) => new zkgroup.ExpiringProfileKeyCredential(x))(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.UnauthenticatedChatConnection_get_profile_key_credential(
+        asyncContext,
+        identity(chat),
+        ByteArray.prototype.getContents.call(profile_key_request_context),
+        identity(server_params)
+      )
+    )
+  );
+}
+export async function UnauthenticatedChatConnection_get_subscription_receipt_credential({
+  asyncContext,
+  abortSignal,
+  chat: chat,
+  subscriberId: subscriber_id,
+  receiptCredentialRequestContext: receipt_credential_request_context,
+  serverParams: server_params,
+}: {
+  asyncContext: TokioAsyncContext;
+  abortSignal?: AbortSignal;
+  chat: Native.Wrapper<Native.UnauthenticatedChatConnection>;
+  subscriberId: Uint8Array<ArrayBuffer>;
+  receiptCredentialRequestContext: zkgroup.ReceiptCredentialRequestContext;
+  serverParams: Native.Wrapper<Native.ServerPublicParams>;
+}): Promise<zkgroup.ReceiptCredential> {
+  return ((x) => new zkgroup.ReceiptCredential(x))(
+    await asyncContext.makeCancellable(
+      abortSignal,
+      Native.UnauthenticatedChatConnection_get_subscription_receipt_credential(
+        asyncContext,
+        identity(chat),
+        identity(subscriber_id),
+        ByteArray.prototype.getContents.call(
+          receipt_credential_request_context
+        ),
+        identity(server_params)
       )
     )
   );

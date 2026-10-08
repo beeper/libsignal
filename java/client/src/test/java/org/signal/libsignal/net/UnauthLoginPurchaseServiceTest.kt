@@ -34,6 +34,7 @@ class UnauthLoginPurchaseServiceTest {
             receiptCredentialRequestContext = req.receiptCredentialRequestContext,
             serverParams = ServerPublicParams(req.serverParams.bytes),
             purchaseTime = req.purchaseTime,
+            expectedLevel = req.expectedLevel,
           )
         },
         check = { expected, actual ->
@@ -42,20 +43,20 @@ class UnauthLoginPurchaseServiceTest {
               when (expected._0) {
                 ReceiptCredentialError.PaymentNotFound ->
                   actual
-                    .assertNonSuccess<_, _, CreateLoginReceiptCredentialException.PaymentNotFound>()
+                    .assertNonSuccess<_, _, ReceiptCredentialException.PaymentNotFound>()
                 is ReceiptCredentialError.PaymentRequired ->
                   assertEquals(
                     expected._0.chargeFailure.firstOrNull(),
                     actual
-                      .assertNonSuccess<_, _, CreateLoginReceiptCredentialException.PaymentRequired>()
+                      .assertNonSuccess<_, _, ReceiptCredentialException.PaymentRequired>()
                       .chargeFailure,
                   )
                 ReceiptCredentialError.PaymentStillProcessing ->
                   actual
-                    .assertNonSuccess<_, _, CreateLoginReceiptCredentialException.PaymentStillProcessing>()
+                    .assertNonSuccess<_, _, ReceiptCredentialException.PaymentStillProcessing>()
                 ReceiptCredentialError.ReceiptAlreadyIssued ->
                   actual
-                    .assertNonSuccess<_, _, CreateLoginReceiptCredentialException.ReceiptAlreadyIssued>()
+                    .assertNonSuccess<_, _, ReceiptCredentialException.ReceiptAlreadyIssued>()
               }
             is CreateLoginReceiptCredentialOut.Success ->
               assertEquals(

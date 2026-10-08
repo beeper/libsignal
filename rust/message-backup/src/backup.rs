@@ -21,6 +21,7 @@ use crate::backup::call::{AdHocCall, CallError};
 use crate::backup::chat::chat_style::{CustomChatColor, CustomColorId};
 use crate::backup::chat::{ChatData, ChatError, ChatItemData, ChatItemError, PinOrder};
 use crate::backup::chat_folder::{ChatFolder, ChatFolderError};
+use crate::backup::favorite_sticker::{FavoriteStickerList, FavoriteStickerListError};
 use crate::backup::frame::{ChatId, RecipientId};
 use crate::backup::hashutil::{AssumedRandomInputHasher, HashBytesAllAtOnce};
 use crate::backup::method::{Lookup, LookupPair, Method};
@@ -41,6 +42,7 @@ mod account_data;
 mod call;
 mod chat;
 mod chat_folder;
+mod favorite_sticker;
 mod file;
 mod frame;
 mod hashutil;
@@ -92,6 +94,8 @@ pub struct PartialBackup<M: Method + ReferencedTypes> {
     chats: ChatsData<M>,
     ad_hoc_calls: M::List<AdHocCall<M::RecipientReference>>,
     sticker_packs: HashMap<StickerPackId, StickerPack<M>>,
+    hidden_sticker_packs: HashMap<StickerPackId, StickerPack<M>>,
+    favorite_stickers: Option<M::Value<FavoriteStickerList>>,
     notification_profiles: UnorderedList<NotificationProfile<M::RecipientReference>>,
     chat_folders: Vec<ChatFolder<M::RecipientReference>>,
     /// Stored here so PartialBackup can be the only context necessary for processing backup frames.
@@ -106,6 +110,8 @@ pub struct CompletedBackup<M: Method + ReferencedTypes> {
     chats: ChatsData<M>,
     ad_hoc_calls: M::List<AdHocCall<M::RecipientReference>>,
     sticker_packs: HashMap<StickerPackId, StickerPack<M>>,
+    hidden_sticker_packs: HashMap<StickerPackId, StickerPack<M>>,
+    favorite_stickers: Option<M::Value<FavoriteStickerList>>,
     notification_profiles: UnorderedList<NotificationProfile<M::RecipientReference>>,
     chat_folders: Vec<ChatFolder<M::RecipientReference>>,
 }
@@ -223,6 +229,8 @@ impl<M: Method + ReferencedTypes> TryFrom<PartialBackup<M>> for CompletedBackup<
             chats,
             ad_hoc_calls,
             sticker_packs,
+            hidden_sticker_packs,
+            favorite_stickers,
             notification_profiles,
             chat_folders,
             unusual_timestamp_tracker: _,
@@ -251,6 +259,8 @@ impl<M: Method + ReferencedTypes> TryFrom<PartialBackup<M>> for CompletedBackup<
             chats,
             ad_hoc_calls,
             sticker_packs,
+            hidden_sticker_packs,
+            favorite_stickers,
             notification_profiles,
             chat_folders,
         })
@@ -488,6 +498,10 @@ pub enum ValidationError {
     CallError(#[from] CallFrameError),
     /// {0}
     StickerError(#[from] StickerError),
+    /// multiple FavoriteStickerList frames found
+    MultipleFavoriteStickerLists,
+    /// {0}
+    FavoriteStickerList(#[from] FavoriteStickerListError),
     /// {0}
     NotificationProfileError(#[from] NotificationProfileError),
     /// {0}
@@ -525,8 +539,17 @@ pub enum StickerError {
     InvalidId,
     /// multiple sticker packs for ID {0:?}
     DuplicateId(StickerPackId),
+    /// pack {0:?} is both installed and hidden
+    InstalledAndHidden(StickerPackId),
     /// for pack {0:?}: {1}
     PackError(StickerPackId, StickerPackError),
+}
+
+/// Which [`proto::Frame`] item a sticker pack came from.
+#[derive(Copy, Clone, Debug)]
+enum StickerPackKind {
+    Installed,
+    Hidden,
 }
 
 trait WithId {
@@ -665,6 +688,8 @@ impl<M: Method + ReferencedTypes> PartialBackup<M> {
             chats: Default::default(),
             ad_hoc_calls: Default::default(),
             sticker_packs: Default::default(),
+            hidden_sticker_packs: Default::default(),
+            favorite_stickers: None,
             notification_profiles: Default::default(),
             chat_folders: Default::default(),
             unusual_timestamp_tracker,
@@ -683,9 +708,13 @@ impl<M: Method + ReferencedTypes> PartialBackup<M> {
             FrameItem::Recipient(recipient) => self.add_recipient(recipient).map_err(Into::into),
             FrameItem::Chat(chat) => self.add_chat(chat).map_err(Into::into),
             FrameItem::ChatItem(chat_item) => self.add_chat_item(chat_item),
-            FrameItem::StickerPack(sticker_pack) => {
-                self.add_sticker_pack(sticker_pack).map_err(Into::into)
-            }
+            FrameItem::InstalledStickerPack(sticker_pack) => self
+                .add_sticker_pack(sticker_pack, StickerPackKind::Installed)
+                .map_err(Into::into),
+            FrameItem::HiddenStickerPack(sticker_pack) => self
+                .add_sticker_pack(sticker_pack, StickerPackKind::Hidden)
+                .map_err(Into::into),
+            FrameItem::FavoriteStickerList(list) => self.add_favorite_sticker_list(list),
             FrameItem::AdHocCall(call) => self.add_ad_hoc_call(call).map_err(Into::into),
             FrameItem::NotificationProfile(notification_profile) => {
                 self.add_notification_profile(notification_profile)
@@ -767,22 +796,47 @@ impl<M: Method + ReferencedTypes> PartialBackup<M> {
         Ok(self.chats.add_chat_item(chat_id, chat_item_data)?)
     }
 
-    fn add_sticker_pack(&mut self, sticker_pack: proto::StickerPack) -> Result<(), StickerError> {
+    fn add_sticker_pack(
+        &mut self,
+        sticker_pack: proto::StickerPack,
+        kind: StickerPackKind,
+    ) -> Result<(), StickerError> {
         let id = sticker_pack
             .packId
             .as_slice()
             .try_into()
             .map_err(|_| StickerError::InvalidId)?;
+
+        let (packs, other_packs) = match kind {
+            StickerPackKind::Installed => (&mut self.sticker_packs, &self.hidden_sticker_packs),
+            StickerPackKind::Hidden => (&mut self.hidden_sticker_packs, &self.sticker_packs),
+        };
+        if other_packs.contains_key(&id) {
+            return Err(StickerError::InstalledAndHidden(id));
+        }
+
         let pack =
             StickerPack::try_from(sticker_pack).map_err(|e| StickerError::PackError(id, e))?;
 
-        match self.sticker_packs.entry(id) {
+        match packs.entry(id) {
             hash_map::Entry::Occupied(_) => Err(StickerError::DuplicateId(id)),
             hash_map::Entry::Vacant(v) => {
                 v.insert(pack);
                 Ok(())
             }
         }
+    }
+
+    fn add_favorite_sticker_list(
+        &mut self,
+        list: proto::FavoriteStickerList,
+    ) -> Result<(), ValidationError> {
+        if self.favorite_stickers.is_some() {
+            return Err(ValidationError::MultipleFavoriteStickerLists);
+        }
+        let list = list.try_into_with(self)?;
+        self.favorite_stickers = Some(M::value(list));
+        Ok(())
     }
 
     fn add_notification_profile(
@@ -1203,6 +1257,111 @@ mod test {
         assert_matches!(
             CompletedBackup::try_from(partial),
             Err(CompletionError::DuplicateAllChatFolder)
+        );
+    }
+
+    fn sticker_pack_frame(kind: StickerPackKind, pack: proto::StickerPack) -> FrameItem {
+        match kind {
+            StickerPackKind::Installed => FrameItem::InstalledStickerPack(pack),
+            StickerPackKind::Hidden => FrameItem::HiddenStickerPack(pack),
+        }
+    }
+
+    #[test_case(StickerPackKind::Installed, StickerPackKind::Installed
+        => matches Err(StickerError::DuplicateId(_));
+        "installed twice")]
+    #[test_case(StickerPackKind::Hidden, StickerPackKind::Hidden
+        => matches Err(StickerError::DuplicateId(_));
+        "hidden twice")]
+    #[test_case(StickerPackKind::Installed, StickerPackKind::Hidden
+        => matches Err(StickerError::InstalledAndHidden(_));
+        "installed then hidden")]
+    #[test_case(StickerPackKind::Hidden, StickerPackKind::Installed
+        => matches Err(StickerError::InstalledAndHidden(_));
+        "hidden then installed")]
+    fn sticker_pack_same_id(
+        first: StickerPackKind,
+        second: StickerPackKind,
+    ) -> Result<(), StickerError> {
+        let mut partial = ValidateOnly::empty();
+        partial
+            .add_frame_item(sticker_pack_frame(first, proto::StickerPack::test_data()))
+            .expect("accepts first");
+        match partial.add_frame_item(sticker_pack_frame(second, proto::StickerPack::test_data())) {
+            Ok(()) => Ok(()),
+            Err(ValidationError::StickerError(e)) => Err(e),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test_case(StickerPackKind::Installed, StickerPackKind::Hidden; "installed then hidden")]
+    #[test_case(StickerPackKind::Hidden, StickerPackKind::Installed; "hidden then installed")]
+    fn sticker_pack_installed_and_hidden_checked_before_key(
+        first: StickerPackKind,
+        second: StickerPackKind,
+    ) {
+        let mut partial = ValidateOnly::empty();
+        partial
+            .add_frame_item(sticker_pack_frame(first, proto::StickerPack::test_data()))
+            .expect("accepts first");
+        assert_matches!(
+            partial.add_frame_item(sticker_pack_frame(
+                second,
+                proto::StickerPack {
+                    packKey: vec![],
+                    ..proto::StickerPack::test_data()
+                },
+            )),
+            Err(ValidationError::StickerError(StickerError::InstalledAndHidden(id)))
+                if id == proto::StickerPack::TEST_ID
+        );
+    }
+
+    #[test]
+    fn accepts_distinct_installed_and_hidden_sticker_packs() {
+        const HIDDEN_ID_BYTES: [u8; 16] = [0x33; 16];
+        let mut partial = ValidateOnly::empty();
+        let installed_id = proto::StickerPack::TEST_ID;
+        let hidden_id = StickerPackId::try_from(HIDDEN_ID_BYTES.as_slice()).expect("valid");
+
+        partial
+            .add_frame_item(FrameItem::InstalledStickerPack(
+                proto::StickerPack::test_data(),
+            ))
+            .expect("accepts installed pack");
+        partial
+            .add_frame_item(FrameItem::HiddenStickerPack(proto::StickerPack {
+                packId: HIDDEN_ID_BYTES.into(),
+                ..proto::StickerPack::test_data()
+            }))
+            .expect("accepts hidden pack with a different ID");
+
+        assert_eq!(
+            partial.sticker_packs.keys().collect::<Vec<_>>(),
+            [&installed_id]
+        );
+        assert_eq!(
+            partial.hidden_sticker_packs.keys().collect::<Vec<_>>(),
+            [&hidden_id]
+        );
+    }
+
+    #[test_case(ValidateOnly::empty())]
+    #[test_case(Store::empty())]
+    fn rejects_multiple_favorite_sticker_lists<M: Method + ReferencedTypes>(
+        mut partial: PartialBackup<M>,
+    ) {
+        partial
+            .add_frame_item(FrameItem::FavoriteStickerList(
+                proto::FavoriteStickerList::test_data(),
+            ))
+            .expect("accepts first list");
+
+        assert_matches!(
+            partial.add_frame_item(FrameItem::FavoriteStickerList(
+                proto::FavoriteStickerList::default()
+            )),
+            Err(ValidationError::MultipleFavoriteStickerLists)
         );
     }
 

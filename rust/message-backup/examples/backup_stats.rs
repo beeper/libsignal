@@ -188,7 +188,9 @@ fn main() {
                 }
                 proto::backup::frame::Item::Account(_) => "Account",
                 proto::backup::frame::Item::Chat(_) => "Chat",
-                proto::backup::frame::Item::StickerPack(_) => "StickerPack",
+                proto::backup::frame::Item::InstalledStickerPack(_) => "InstalledStickerPack",
+                proto::backup::frame::Item::HiddenStickerPack(_) => "HiddenStickerPack",
+                proto::backup::frame::Item::FavoriteStickerList(_) => "FavoriteStickerList",
                 proto::backup::frame::Item::AdHocCall(_) => "AdHocCall",
                 proto::backup::frame::Item::NotificationProfile(_) => "NotificationProfile",
                 proto::backup::frame::Item::ChatFolder(_) => "ChatFolder",

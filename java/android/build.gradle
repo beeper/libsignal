@@ -112,7 +112,7 @@ void checkRustlsPlatformVerifierVersion() {
 
     def dependencyJson = new JsonSlurper().parseText(dependencyText)
     def dependencyVersion = dependencyJson.packages.find { it.name == "rustls-platform-verifier-android" }.version
-    assert dependencyVersion == "0.1.1"
+    assert dependencyVersion == "0.2.0"
 }
 
 dependencies {
@@ -200,9 +200,9 @@ afterEvaluate {
         }
     }
 
-    setUpSigningKey(signing)
+    rootProject.ext.setUpSigningKey(signing)
     signing {
-        required = { isReleaseBuild() && gradle.taskGraph.hasTask(":android:publish") }
+        required = { rootProject.ext.isReleaseBuild() && gradle.taskGraph.hasTask(":android:publish") }
         sign publishing.publications.mavenJava
     }
 }

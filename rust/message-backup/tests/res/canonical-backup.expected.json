@@ -107,6 +107,8 @@
   "ad_hoc_calls": [],
   "pinned_chats": [],
   "sticker_packs": [],
+  "hidden_sticker_packs": [],
+  "favorite_stickers": [],
   "notification_profiles": [],
   "chat_folders": []
 }

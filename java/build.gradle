@@ -12,7 +12,7 @@ plugins {
     id "org.jetbrains.dokka-javadoc" version "2.1.0" apply false
 
     // Declared here so the Android subprojects can apply it without a version.
-    id 'com.android.library' version "9.2.1" apply false
+    id 'com.android.library' version "9.4.0" apply false
 }
 
 repositories {
@@ -22,7 +22,7 @@ repositories {
 }
 
 allprojects {
-    version = "0.103.1"
+    version = "0.105.0"
     group   = "org.signal"
 
     tasks.withType(JavaCompile) {
@@ -134,7 +134,7 @@ subprojects { subproject ->
     }
 }
 
-def isReleaseBuild() {
+ext.isReleaseBuild = { ->
     return version.contains("SNAPSHOT") == false
 }
 

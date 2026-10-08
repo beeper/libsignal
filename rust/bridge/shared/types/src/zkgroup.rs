@@ -95,7 +95,10 @@ macro_rules! bridge_serializable_handle_fns {
     };
 }
 
-bridge_as_fixed_length_serializable!(ExpiringProfileKeyCredential);
+bridge_as_fixed_length_serializable!(
+    ExpiringProfileKeyCredential,
+    jni_class = "org.signal.libsignal.zkgroup.profiles.ExpiringProfileKeyCredential",
+);
 bridge_as_fixed_length_serializable!(ExpiringProfileKeyCredentialResponse);
 bridge_as_fixed_length_serializable!(GroupMasterKey);
 bridge_as_fixed_length_serializable!(GroupPublicParams);
@@ -104,7 +107,10 @@ bridge_as_fixed_length_serializable!(ProfileKey);
 bridge_as_fixed_length_serializable!(ProfileKeyCiphertext);
 bridge_as_fixed_length_serializable!(ProfileKeyCommitment);
 bridge_as_fixed_length_serializable!(ProfileKeyCredentialRequest);
-bridge_as_fixed_length_serializable!(ProfileKeyCredentialRequestContext);
+bridge_as_fixed_length_serializable!(
+    ProfileKeyCredentialRequestContext,
+    jni_class = "org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialRequestContext",
+);
 bridge_as_fixed_length_serializable!(ReceiptCredential);
 bridge_as_fixed_length_serializable!(
     ReceiptCredentialPresentation,

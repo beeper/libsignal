@@ -5,13 +5,20 @@
 
 package org.signal.libsignal.net
 
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.signal.libsignal.internal.GetProfileKeyCredentialOut
+import org.signal.libsignal.internal.NativeTestingNice
+import org.signal.libsignal.internal.ProfileKeyCredentialRequestError
 import org.signal.libsignal.internal.TokioAsyncContext
 import org.signal.libsignal.protocol.ServiceId
+import org.signal.libsignal.zkgroup.ServerPublicParams
+import org.signal.libsignal.zkgroup.profiles.ExpiringProfileKeyCredential
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.arrayOf
+import kotlin.test.assertContains
 import kotlin.test.assertIs
 
 class UnauthProfilesServiceTest {
@@ -58,4 +65,40 @@ class UnauthProfilesServiceTest {
       assertEquals(testCase.found, successResult.result)
     }
   }
+
+  @Test
+  fun testGetProfileKeyCredential() =
+    runTest {
+      GrpcTestCase.runTests(
+        NativeTestingNice.TESTING_GetProfileKeyCredentialTests(),
+        { tokio, listener ->
+          UnauthenticatedChatConnection.fakeConnect(tokio, listener, Network.Environment.STAGING)
+        },
+        ::UnauthProfilesService,
+        invoke = { chat, req ->
+          chat.getProfileKeyCredential(
+            requestContext = req.profileKeyRequestContext,
+            serverParams = ServerPublicParams(req.serverParams.bytes),
+          )
+        },
+        check = { expected, actual ->
+          when (expected) {
+            is GetProfileKeyCredentialOut.Success ->
+              assertEquals(
+                expected._0,
+                assertIs<RequestResult.Success<ExpiringProfileKeyCredential>>(actual).result,
+              )
+            is GetProfileKeyCredentialOut.ExplicitError ->
+              when (expected._0) {
+                ProfileKeyCredentialRequestError.AuthFailed ->
+                  actual.assertNonSuccess<_, _, RequestUnauthorizedException>()
+                ProfileKeyCredentialRequestError.ProfileNotFound ->
+                  actual.assertNonSuccess<_, _, ProfileNotFoundException>()
+              }
+            is GetProfileKeyCredentialOut.UnexpectedError ->
+              assertContains(assertIs<RequestResult.ApplicationError>(actual).toString(), expected.contains)
+          }
+        },
+      )
+    }
 }

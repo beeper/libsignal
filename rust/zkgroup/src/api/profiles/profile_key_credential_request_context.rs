@@ -32,4 +32,12 @@ impl ProfileKeyCredentialRequestContext {
             proof: self.proof.clone(),
         }
     }
+
+    pub fn aci(&self) -> libsignal_core::Aci {
+        libsignal_core::Aci::from_uuid_bytes(self.aci_bytes)
+    }
+
+    pub fn profile_key(&self) -> api::profiles::ProfileKey {
+        api::profiles::ProfileKey::create(self.profile_key_bytes)
+    }
 }

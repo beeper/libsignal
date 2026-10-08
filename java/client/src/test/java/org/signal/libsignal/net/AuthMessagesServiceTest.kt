@@ -5,8 +5,10 @@
 
 package org.signal.libsignal.net
 
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Test
+import org.signal.libsignal.internal.NativeTestingNice
 import org.signal.libsignal.internal.TokioAsyncContext
 import org.signal.libsignal.protocol.ServiceId.Aci
 import org.signal.libsignal.protocol.message.PlaintextContent
@@ -351,4 +353,24 @@ class AuthMessagesServiceTest {
     assertEquals("zzz", challengeException.token)
     assertEquals(setOf(ChallengeOption.CAPTCHA), challengeException.options)
   }
+
+  @Test
+  fun testReportMessage() =
+    runTest {
+      GrpcTestCase.runTests(
+        NativeTestingNice.TESTING_ReportMessageTests(),
+        AuthenticatedChatConnection::fakeConnect,
+        ::AuthMessagesService,
+        invoke = { chat, req ->
+          chat.reportMessage(
+            source = req.source,
+            messageGuid = req.messageGuid,
+            reportSpamToken = req.reportSpamToken,
+          )
+        },
+        check = { _, actual ->
+          assertIs<RequestResult.Success<Unit>>(actual)
+        },
+      )
+    }
 }

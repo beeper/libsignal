@@ -140,6 +140,11 @@ public class UnauthenticatedChatConnection extends ChatConnection {
   }
 
   @Override
+  protected long infoWrapper(long nativeChatConnectionHandle) {
+    return Native.UnauthenticatedChatConnection_info(nativeChatConnectionHandle);
+  }
+
+  @Override
   protected void release(long nativeChatConnectionHandle) {
     Native.UnauthenticatedChatConnection_Destroy(nativeChatConnectionHandle);
   }

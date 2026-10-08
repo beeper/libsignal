@@ -23,6 +23,7 @@ class UnauthLoginPurchaseServiceTests: UnauthChatServiceTestBase<any UnauthLogin
                     receiptCredentialRequestContext: args.receiptCredentialRequestContext,
                     serverParams: ServerPublicParams(contents: args.serverParams.bytes),
                     purchaseTime: args.purchaseTime,
+                    expectedLevel: args.expectedLevel,
                 )
             },
             check: { (expected, actual: Result<ReceiptCredential, any Error>) in
@@ -41,7 +42,7 @@ class UnauthLoginPurchaseServiceTests: UnauthChatServiceTestBase<any UnauthLogin
                     do {
                         _ = try actual.get()
                         XCTFail("Expected exception")
-                    } catch SignalError.ReceiptCredentialErrorPaymentRequired(
+                    } catch SignalError.receiptCredentialErrorPaymentRequired(
                         chargeFailure: let chargeFailure,
                         message: _,
                     ) {
@@ -50,11 +51,11 @@ class UnauthLoginPurchaseServiceTests: UnauthChatServiceTestBase<any UnauthLogin
                         } else {
                             XCTAssertEqual(expected, .paymentRequired(chargeFailure: []))
                         }
-                    } catch SignalError.ReceiptCredentialErrorPaymentNotFound(_) {
+                    } catch SignalError.receiptCredentialErrorPaymentNotFound(_) {
                         XCTAssertEqual(expected, .paymentNotFound)
-                    } catch SignalError.ReceiptCredentialErrorPaymentStillProcessing(_) {
+                    } catch SignalError.receiptCredentialErrorPaymentStillProcessing(_) {
                         XCTAssertEqual(expected, .paymentStillProcessing)
-                    } catch SignalError.ReceiptCredentialErrorReceiptAlreadyIssued(_) {
+                    } catch SignalError.receiptCredentialErrorReceiptAlreadyIssued(_) {
                         XCTAssertEqual(expected, .receiptAlreadyIssued)
                     }
                 }

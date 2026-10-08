@@ -14,7 +14,7 @@ use libsignal_core::ProtocolAddress;
 use libsignal_net::infra::errors::RetryLater;
 use libsignal_net_chat::api::ChallengeOption;
 use libsignal_net_chat::api::messages::MismatchedDeviceError;
-use libsignal_net_chat::grpc::login_purchase::ChargeFailure;
+use libsignal_net_chat::api::purchase::ChargeFailure;
 use uuid::Uuid;
 
 // Not using bridge_fn because it also handles `NULL`.

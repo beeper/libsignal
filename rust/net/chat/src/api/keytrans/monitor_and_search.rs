@@ -22,7 +22,7 @@ use crate::impl_debug_from_display;
 use crate::logging::{DebugByCalling, Redact, RedactBytesAsHex};
 
 const MAX_DISTINGUISHED_TREE_AGE: Duration =
-    Duration::from_secs(7 * 24 * 60 * 60 /* one week */);
+    Duration::from_secs(14 * 24 * 60 * 60 /* two weeks */);
 
 /// The main entry point to the module.
 pub async fn check(

@@ -15,6 +15,7 @@ use crate::backup::chat::group::Invitee;
 use crate::backup::chat::text::{TextEffect, TextRange};
 use crate::backup::chat::{ChatData, OutgoingSend};
 use crate::backup::chat_folder::ChatFolder;
+use crate::backup::favorite_sticker::FavoriteSticker;
 use crate::backup::frame::RecipientId;
 use crate::backup::method::Store;
 use crate::backup::notification_profile::NotificationProfile;
@@ -36,6 +37,8 @@ pub struct Backup {
     ad_hoc_calls: UnorderedList<AdHocCall<FullRecipientData>>,
     pinned_chats: Vec<FullRecipientData>,
     sticker_packs: UnorderedList<(StickerPackId, StickerPack<Store>)>,
+    hidden_sticker_packs: UnorderedList<(StickerPackId, StickerPack<Store>)>,
+    favorite_stickers: UnorderedList<FavoriteSticker>,
     notification_profiles: UnorderedList<NotificationProfile<FullRecipientData>>,
     chat_folders: Vec<ChatFolder<FullRecipientData>>,
 }
@@ -61,6 +64,8 @@ impl From<CompletedBackup<Store>> for Backup {
                 },
             ad_hoc_calls,
             sticker_packs,
+            hidden_sticker_packs,
+            favorite_stickers,
             notification_profiles,
             chat_folders,
         } = value;
@@ -72,6 +77,10 @@ impl From<CompletedBackup<Store>> for Backup {
             ad_hoc_calls: ad_hoc_calls.into_iter().collect(),
             pinned_chats: pinned.into_iter().map(|(_, data)| data).collect(),
             sticker_packs: sticker_packs.into_iter().collect(),
+            hidden_sticker_packs: hidden_sticker_packs.into_iter().collect(),
+            favorite_stickers: favorite_stickers
+                .map(|list| list.stickers)
+                .unwrap_or_default(),
             notification_profiles,
             chat_folders,
         }
@@ -456,6 +465,8 @@ mod test {
             ad_hoc_calls: UnorderedList::default(),
             pinned_chats: Vec::default(),
             sticker_packs: UnorderedList::default(),
+            hidden_sticker_packs: UnorderedList::default(),
+            favorite_stickers: UnorderedList::default(),
             notification_profiles: UnorderedList::default(),
             chat_folders: Vec::default(),
         };
@@ -715,6 +726,79 @@ mod test {
         assert_ne!(
             with_unshuffled_frames.to_string_pretty(),
             with_shuffled_frames.to_string_pretty()
+        );
+    }
+
+    #[test]
+    fn favorite_stickers_are_serialized_in_canonical_order() {
+        let base = [
+            proto::Frame {
+                item: Some(proto::AccountData::test_data().into()),
+                special_fields: Default::default(),
+            },
+            make_recipient(
+                SELF_ID,
+                &proto::recipient::Destination::Self_(Default::default()),
+            ),
+        ];
+        let canonical = |list: Option<proto::FavoriteStickerList>| {
+            let list_frame = list.map(|list| proto::Frame {
+                item: Some(proto::frame::Item::FavoriteStickerList(list)),
+                special_fields: Default::default(),
+            });
+            super::Backup::from(backup_from_frames(base.iter().cloned().chain(list_frame)))
+                .to_string_pretty()
+        };
+        let reversed = |list: &proto::FavoriteStickerList| {
+            let mut list = list.clone();
+            list.favoriteSticker.reverse();
+            list
+        };
+        let serialized_sticker_ids = |json: &str| {
+            let json: serde_json::Value = serde_json::from_str(json).expect("valid JSON");
+            json["favorite_stickers"]
+                .as_array()
+                .expect("array")
+                .iter()
+                .map(|favorite| favorite["sticker"]["sticker_id"].as_u64().expect("u64"))
+                .collect::<Vec<_>>()
+        };
+
+        // Sticker 1 was favorited later, so it sorts after sticker 2.
+        let mut by_time = proto::FavoriteStickerList::test_data();
+        by_time.favoriteSticker[0].favoritedAtTimestamp += 1000;
+        let by_time_json = canonical(Some(by_time.clone()));
+        assert_eq!(serialized_sticker_ids(&by_time_json), [2, 1]);
+        assert_eq!(by_time_json, canonical(Some(reversed(&by_time))));
+
+        // With equal timestamps, the sticker ID breaks the tie.
+        let same_time = proto::FavoriteStickerList::test_data();
+        let same_time_json = canonical(Some(same_time.clone()));
+        assert_eq!(serialized_sticker_ids(&same_time_json), [1, 2]);
+        assert_eq!(same_time_json, canonical(Some(reversed(&same_time))));
+
+        // With equal timestamps and sticker IDs, the pack ID breaks the tie.
+        let mut different_packs = proto::FavoriteStickerList::test_data();
+        let sticker = different_packs.favoriteSticker[1]
+            .sticker
+            .as_mut()
+            .expect("present");
+        sticker.packId = vec![0x33; 16];
+        sticker.stickerId = 1;
+        assert_eq!(
+            canonical(Some(different_packs.clone())),
+            canonical(Some(reversed(&different_packs)))
+        );
+
+        let absent = canonical(None);
+        assert_ne!(
+            same_time_json, absent,
+            "favorites are part of the canonical form"
+        );
+        assert_eq!(
+            absent,
+            canonical(Some(proto::FavoriteStickerList::default())),
+            "an absent list and an empty list are the same"
         );
     }
 }

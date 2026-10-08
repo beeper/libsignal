@@ -7,8 +7,10 @@ package org.signal.libsignal.net
 
 import org.signal.libsignal.internal.CompletableFuture
 import org.signal.libsignal.internal.Native
+import org.signal.libsignal.internal.NativeNice
 import org.signal.libsignal.internal.mapWithCancellation
 import org.signal.libsignal.protocol.ServiceId
+import java.util.UUID
 
 public class AuthMessagesService(
   private val connection: AuthenticatedChatConnection,
@@ -126,6 +128,38 @@ public class AuthMessagesService(
         }.mapWithCancellation(
           onSuccess = { _ -> RequestResult.Success(Unit) },
           onError = { err -> err.toRequestResult<SyncSendFailure>() },
+        )
+    } catch (e: Throwable) {
+      CompletableFuture.completedFuture(RequestResult.ApplicationError(e))
+    }
+
+  /**
+   * Report a message as spam.
+   *
+   * @param source the sender of the offending message.
+   * @param messageGuid the offending message's `serverGuid`.
+   * @param reportSpamToken the offending message's `reportSpamToken`. Pass `null` for a
+   *   message that arrived without one.
+   *
+   * All exceptions are mapped into [RequestResult]; unexpected ones will be treated as
+   * [RequestResult.ApplicationError].
+   */
+  public fun reportMessage(
+    source: ServiceId.Aci,
+    messageGuid: UUID,
+    reportSpamToken: ByteArray?,
+  ): CompletableFuture<RequestResult<Unit, Nothing>> =
+    try {
+      NativeNice
+        .AuthenticatedChatConnection_report_message(
+          asyncCtx = connection.tokioAsyncContext,
+          chat = connection,
+          source = source,
+          messageGuid = messageGuid,
+          reportSpamToken = reportSpamToken ?: byteArrayOf(),
+        ).mapWithCancellation(
+          onSuccess = { RequestResult.Success(Unit) },
+          onError = { err -> err.toRequestResult() },
         )
     } catch (e: Throwable) {
       CompletableFuture.completedFuture(RequestResult.ApplicationError(e))

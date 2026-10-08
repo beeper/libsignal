@@ -1,0 +1,35 @@
+[
+  {
+    "version": "1",
+    "backupTimeMs": "1705692409729",
+    "mediaRootBackupKey": "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s=",
+  },
+  {
+    "favoriteStickerList": {
+      "favoriteSticker": [
+        {
+          "sticker": {
+            "packId": "IiIiIiIiIiIiIiIiIiIiIg==",
+            "packKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+            "stickerId": 7,
+            "data": {
+              "locatorInfo": {}
+            }
+          },
+          "favoritedAtTimestamp": "1705692409000"
+        },
+        {
+          "sticker": {
+            "packId": "IiIiIiIiIiIiIiIiIiIiIg==",
+            "packKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+            "stickerId": 7,
+            "data": {
+              "locatorInfo": {}
+            }
+          },
+          "favoritedAtTimestamp": "1705692408000"
+        }
+      ]
+    }
+  }
+]

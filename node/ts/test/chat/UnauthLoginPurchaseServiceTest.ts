@@ -31,6 +31,7 @@ describe('UnauthLoginPurchaseService', () => {
           receiptCredentialRequestContext,
           serverParams,
           purchaseTime,
+          expectedLevel,
         }: NativeNice.CreateLoginReceiptCredentialArgs,
         resp: NativeNice.CreateLoginReceiptCredentialOut
       ) => {
@@ -40,6 +41,7 @@ describe('UnauthLoginPurchaseService', () => {
           receiptCredentialRequestContext,
           serverParams: new ServerPublicParams(serverParams.bytes),
           purchaseTime,
+          expectedLevel,
         });
         if ('success' in resp) {
           expect(await out).to.deep.equal(resp.success);

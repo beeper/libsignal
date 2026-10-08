@@ -2341,6 +2341,38 @@ impl<'a, A: ResultTypeInfo<'a>, B: ResultTypeInfo<'a>> ResultTypeInfo<'a> for Ve
     }
 }
 
+/// Implements the nice converters for `ServiceId` and its narrower forms, which all cross the
+/// bridge as Service-Id-FixedWidthBinary. `$kt` is the Kotlin class the app sees.
+macro_rules! nice_service_id_arg_converter {
+    ($typ:ty, $kt:expr) => {
+        #[cfg(feature = "metadata")]
+        impl NiceArgConverter for $typ {
+            fn register_kt_arg_converter(_ctx: &mut KtMetadataContext) -> KtArgConverter {
+                KtArgConverter {
+                    nice_type: $kt.into(),
+                    ffi_type: "ByteArray".to_string(),
+                    ffi_field_type_erased: ffi_field_type_erased::<Self>(),
+                    converter_function: format!("({}::toServiceIdFixedWidthBinary)", $kt),
+                }
+            }
+        }
+    };
+}
+macro_rules! nice_service_id_result_converter {
+    ($typ:ty, $kt:expr) => {
+        #[cfg(feature = "metadata")]
+        impl NiceResultConverter for $typ {
+            fn register_kt_result_converter(_ctx: &mut KtMetadataContext) -> KtReturnConverter {
+                KtReturnConverter {
+                    nice_type: $kt.into(),
+                    ffi_type: "ByteArray".to_string(),
+                    converter_function: format!("{}.parseFromFixedWidthBinary", $kt),
+                }
+            }
+        }
+    };
+}
+
 impl<'a> ResultTypeInfo<'a> for ServiceId {
     type ResultType = JByteArray<'a>;
     fn convert_into(self, env: &mut jni::Env<'a>) -> Result<Self::ResultType, BridgeLayerError> {
@@ -2348,17 +2380,7 @@ impl<'a> ResultTypeInfo<'a> for ServiceId {
             .check_exceptions(env, "ServiceId::convert_into")
     }
 }
-#[cfg(feature = "metadata")]
-impl NiceResultConverter for ServiceId {
-    fn register_kt_result_converter(_ctx: &mut KtMetadataContext) -> KtReturnConverter {
-        KtReturnConverter {
-            nice_type: "org.signal.libsignal.protocol.ServiceId".to_string(),
-            ffi_type: "ByteArray".to_string(),
-            converter_function: "org.signal.libsignal.protocol.ServiceId.parseFromFixedWidthBinary"
-                .to_string(),
-        }
-    }
-}
+nice_service_id_result_converter!(ServiceId, "org.signal.libsignal.protocol.ServiceId");
 
 impl<'a> ResultTypeInfo<'a> for Aci {
     type ResultType = JByteArray<'a>;
@@ -2366,6 +2388,7 @@ impl<'a> ResultTypeInfo<'a> for Aci {
         ServiceId::from(self).convert_into(env)
     }
 }
+nice_service_id_result_converter!(Aci, "org.signal.libsignal.protocol.ServiceId.Aci");
 
 impl<'a> ResultTypeInfo<'a> for Pni {
     type ResultType = JByteArray<'a>;
@@ -2494,18 +2517,7 @@ impl<'a> SimpleArgTypeInfo<'a> for ServiceId {
             })
     }
 }
-#[cfg(feature = "metadata")]
-impl NiceArgConverter for ServiceId {
-    fn register_kt_arg_converter(_: &mut KtMetadataContext) -> KtArgConverter {
-        KtArgConverter {
-            nice_type: "org.signal.libsignal.protocol.ServiceId".to_string(),
-            ffi_type: "ByteArray".to_string(),
-            ffi_field_type_erased: ffi_field_type_erased::<Self>(),
-            converter_function:
-                "(org.signal.libsignal.protocol.ServiceId::toServiceIdFixedWidthBinary)".to_string(),
-        }
-    }
-}
+nice_service_id_arg_converter!(ServiceId, "org.signal.libsignal.protocol.ServiceId");
 
 impl<'a> SimpleArgTypeInfo<'a> for Aci {
     type ArgType = JByteArray<'a>;
@@ -2518,6 +2530,7 @@ impl<'a> SimpleArgTypeInfo<'a> for Aci {
             .map_err(|_| BridgeLayerError::bad_argument("not an ACI".to_string()))
     }
 }
+nice_service_id_arg_converter!(Aci, "org.signal.libsignal.protocol.ServiceId.Aci");
 
 impl<'a> SimpleArgTypeInfo<'a> for Pni {
     type ArgType = JByteArray<'a>;
@@ -2730,6 +2743,24 @@ where
     fn convert_into(self, env: &mut jni::Env<'a>) -> Result<Self::ResultType, BridgeLayerError> {
         let result = zkgroup::serialize(self.deref());
         result.convert_into(env)
+    }
+}
+#[cfg(feature = "metadata")]
+impl<T> NiceResultConverter for Serialized<T>
+where
+    T: FixedLengthBincodeSerializable,
+{
+    fn register_kt_result_converter(_ctx: &mut KtMetadataContext) -> KtReturnConverter {
+        assert!(
+            !T::JNI_CLASS.is_empty(),
+            "need to specify JNI_CLASS for {} to use it with nice bridging",
+            std::any::type_name::<T>()
+        );
+        KtReturnConverter {
+            nice_type: T::JNI_CLASS.to_owned(),
+            ffi_type: "ByteArray".to_owned(),
+            converter_function: T::JNI_CLASS.to_owned(),
+        }
     }
 }
 

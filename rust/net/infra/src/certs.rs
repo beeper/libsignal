@@ -59,29 +59,30 @@ impl RootCertificates {
                 static VERIFIER: OnceLock<Box<dyn LimitedServerCertVerifier>> = OnceLock::new();
 
                 let verifier = VERIFIER.get_or_init(|| {
-                    let mut verifier = rustls_platform_verifier::Verifier::new();
-                    if cfg!(target_os = "linux")
-                        && rustls::crypto::CryptoProvider::get_default().is_none()
-                    {
+                    let crypto_provider = if cfg!(target_os = "linux") {
                         // On Linux rustls-platform-verifier uses the webpki crate, which requires a
                         // rustls CryptoProvider. On the other platforms, rustls-platform-verifier ought
                         // to work even with no provider set, so we omit this to avoid taking a
                         // dependency on ring.
-                        verifier.set_provider(rustls::crypto::ring::default_provider().into())
-                    }
-
-                    if cfg!(target_os = "android") {
-                        // rustls-platform-verifier's Android code permanently
-                        // attaches the thread that makes the verification calls
-                        // to the JVM. Use an implementation that calls into
-                        // verification code on a background thread to prevent
-                        // the current thread from being attached to the JVM.
-                        //
-                        // See https://github.com/rustls/rustls-platform-verifier/issues/184
-                        Box::new(BackgroundThreadVerifier::new(verifier))
+                        rustls::crypto::ring::default_provider()
                     } else {
-                        Box::new(TokioBlockingThreadVerifier::new(verifier))
-                    }
+                        rustls::crypto::CryptoProvider {
+                            cipher_suites: vec![],
+                            kx_groups: vec![],
+                            signature_verification_algorithms:
+                                rustls::crypto::WebPkiSupportedAlgorithms {
+                                    all: &[],
+                                    mapping: &[],
+                                },
+                            secure_random: &UnimplementedRustlsSecureRandom,
+                            key_provider: &UnimplementedRustlsKeyProvider,
+                        }
+                    };
+                    let verifier =
+                        rustls_platform_verifier::Verifier::new(Arc::new(crypto_provider))
+                            .expect("can create verifier");
+
+                    Box::new(TokioBlockingThreadVerifier::new(verifier))
                 });
                 return set_up_platform_verifier(connector, host, &**verifier);
             }
@@ -107,6 +108,28 @@ impl std::fmt::Debug for RootCertificates {
                 .finish(),
             Self::FromDer(_) => f.debug_tuple("FromDer").field(&"_").finish(),
         }
+    }
+}
+
+#[derive(Debug)]
+struct UnimplementedRustlsSecureRandom;
+impl rustls::crypto::SecureRandom for UnimplementedRustlsSecureRandom {
+    fn fill(&self, _buf: &mut [u8]) -> Result<(), rustls::crypto::GetRandomFailed> {
+        unimplemented!(
+            "should not need cryptography for rustls-platform-verifier to only verify TLS certs"
+        );
+    }
+}
+#[derive(Debug)]
+struct UnimplementedRustlsKeyProvider;
+impl rustls::crypto::KeyProvider for UnimplementedRustlsKeyProvider {
+    fn load_private_key(
+        &self,
+        _key_der: rustls::pki_types::PrivateKeyDer<'static>,
+    ) -> Result<Arc<dyn rustls::sign::SigningKey>, rustls::Error> {
+        unimplemented!(
+            "should not need cryptography for rustls-platform-verifier to only verify TLS certs"
+        );
     }
 }
 
@@ -246,79 +269,6 @@ fn set_up_platform_verifier(
     Ok(())
 }
 
-/// [`LimitedServerCertVerifier`] that runs verification on a background thread.
-struct BackgroundThreadVerifier {
-    sender: tokio::sync::mpsc::Sender<(VerifyContext, BackgroundResultSender)>,
-}
-
-type BackgroundResultSender =
-    tokio::sync::oneshot::Sender<Result<ServerCertVerified, rustls::Error>>;
-
-impl BackgroundThreadVerifier {
-    fn new(verifier: impl ServerCertVerifier + 'static) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(VerifyContext, BackgroundResultSender)>(1);
-        let _thread = std::thread::spawn(move || {
-            while let Some((context, result_sender)) = rx.blocking_recv() {
-                let VerifyContext {
-                    end_entity,
-                    intermediates,
-                    server_name,
-                } = context;
-
-                // We don't do our own OCSP. Either the platform will do its own checks, or it won't.
-                let ocsp_response = [];
-                let result = verifier.verify_server_cert(
-                    &end_entity,
-                    &intermediates,
-                    &server_name,
-                    &ocsp_response,
-                    rustls::pki_types::UnixTime::now(),
-                );
-
-                let _ignore_failed_send = result_sender.send(result);
-            }
-        });
-
-        Self { sender: tx }
-    }
-}
-
-/// [`Send`]able package of values that [BackgroundThreadVerifier] pushes to its worker thread
-struct VerifyContext {
-    end_entity: CertificateDer<'static>,
-    intermediates: Vec<CertificateDer<'static>>,
-    server_name: Arc<ServerName<'static>>,
-}
-
-impl LimitedServerCertVerifier for BackgroundThreadVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: CertificateDer<'static>,
-        intermediates: Vec<CertificateDer<'static>>,
-        server_name: &Arc<ServerName<'static>>,
-    ) -> BoxFuture<'static, Result<ServerCertVerified, rustls::Error>> {
-        let Self { sender } = self;
-        let sender = sender.clone();
-
-        let context = VerifyContext {
-            end_entity,
-            intermediates,
-            server_name: server_name.clone(),
-        };
-
-        Box::pin(async move {
-            let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-            sender
-                .send((context, result_tx))
-                .await
-                .expect("Verifier thread is unexpectedly no longer available");
-            result_rx.await.unwrap_or_else(|_recv| {
-                Err(rustls::Error::General("worker thread failed".to_owned()))
-            })
-        })
-    }
-}
-
 /// [`LimitedServerCertVerifier`] that runs verification by spawning onto the current tokio blocking
 /// thread pool.
 struct TokioBlockingThreadVerifier<T> {
@@ -400,7 +350,6 @@ mod test {
     }
 
     #[test_case::test_case(AllowSync)]
-    #[test_case::test_case(BackgroundThreadVerifier::new)]
     #[test_case::test_case(TokioBlockingThreadVerifier::new)]
     #[tokio::test]
     async fn verify_certificate_via_rustls<V: LimitedServerCertVerifier + 'static>(
@@ -437,7 +386,6 @@ mod test {
     }
 
     #[test_case::test_case(AllowSync)]
-    #[test_case::test_case(BackgroundThreadVerifier::new)]
     #[test_case::test_case(TokioBlockingThreadVerifier::new)]
     #[tokio::test]
     async fn verify_certificate_failure_via_rustls<V: LimitedServerCertVerifier + 'static>(

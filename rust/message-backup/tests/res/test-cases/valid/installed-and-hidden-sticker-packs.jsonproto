@@ -1,0 +1,41 @@
+// Installed and hidden sticker packs with distinct IDs.
+[
+  {
+    "version": "1",
+    "backupTimeMs": "1715636551000",
+    "mediaRootBackupKey": "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s=",
+  },
+  {
+    "account": {
+      "profileKey": "YQKRq+3DQklInaOaMcmlzZnN0m/1hzLiaONX7gB12dg=",
+      "givenName": "Boba",
+      "familyName": "Fett",
+      "avatarUrlPath": "",
+      "accountSettings": {
+        "phoneNumberSharingMode": "NOBODY",
+        "defaultSentMediaQuality": "STANDARD",
+        "appTheme": "SYSTEM",
+        "callsUseLessDataSetting": "MOBILE_DATA_ONLY",
+        "unreadBadgeType": "UNREAD_MESSAGES"
+      }
+    }
+  },
+  {
+    "recipient": {
+      "id": "1",
+      "self": {}
+    }
+  },
+  {
+    "installedStickerPack": {
+      "packId": "IiIiIiIiIiIiIiIiIiIiIg==",
+      "packKey": "ERERERERERERERERERERERERERERERERERERERERERE="
+    }
+  },
+  {
+    "hiddenStickerPack": {
+      "packId": "MzMzMzMzMzMzMzMzMzMzMw==",
+      "packKey": "REREREREREREREREREREREREREREREREREREREREREQ="
+    }
+  }
+]

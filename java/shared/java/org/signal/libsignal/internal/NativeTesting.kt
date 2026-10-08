@@ -408,7 +408,13 @@ public object NativeTesting {
   public external fun TESTING_GetPreKeyCountTests(): Array<Object>
 
   @JvmStatic
+  public external fun TESTING_GetProfileKeyCredentialTests(): Array<Object>
+
+  @JvmStatic
   public external fun TESTING_GetStickerUploadFormTests(): Array<Object>
+
+  @JvmStatic
+  public external fun TESTING_GetSubscriptionReceiptCredentialTests(): Array<Object>
 
   @JvmStatic
   public external fun TESTING_InputStreamReadIntoZeroLengthSlice(capsAlphabetInput: InputStream): ByteArray
@@ -603,6 +609,9 @@ public object NativeTesting {
 
   @JvmStatic
   public external fun TESTING_RemoveMfaKeyTests(): Array<Object>
+
+  @JvmStatic
+  public external fun TESTING_ReportMessageTests(): Array<Object>
 
   @JvmStatic
   public external fun TESTING_ReserveUsernameHashTests(): Array<Object>

@@ -309,6 +309,17 @@ public data class ListMediaResponse(
 */
 
 /*
+// org.signal.libsignal.net.LoginReceiptLevel
+
+public sealed class LoginReceiptLevel {
+  public data object Normal : LoginReceiptLevel()
+
+  public data object Sandbox : LoginReceiptLevel()
+}
+
+*/
+
+/*
 // org.signal.libsignal.net.PaymentProvider
 
 public sealed class PaymentProvider {
@@ -1228,6 +1239,28 @@ public fun DeviceCapabilityInternal.toFfiArgTypeObject(): Object =
     },
   )
 
+public sealed class LoginReceiptLevel_FfiArgType
+
+@CalledFromNative
+public object LoginReceiptLevel_Normal_FfiArgType : LoginReceiptLevel_FfiArgType()
+
+public fun org.signal.libsignal.net.LoginReceiptLevel.Normal.toFfiArgType(): LoginReceiptLevel_Normal_FfiArgType =
+  LoginReceiptLevel_Normal_FfiArgType
+
+@CalledFromNative
+public object LoginReceiptLevel_Sandbox_FfiArgType : LoginReceiptLevel_FfiArgType()
+
+public fun org.signal.libsignal.net.LoginReceiptLevel.Sandbox.toFfiArgType(): LoginReceiptLevel_Sandbox_FfiArgType =
+  LoginReceiptLevel_Sandbox_FfiArgType
+
+public fun org.signal.libsignal.net.LoginReceiptLevel.toFfiArgTypeObject(): Object =
+  convertToObject(
+    when (this) {
+      is org.signal.libsignal.net.LoginReceiptLevel.Normal -> this.toFfiArgType()
+      is org.signal.libsignal.net.LoginReceiptLevel.Sandbox -> this.toFfiArgType()
+    },
+  )
+
 public sealed class PaymentProvider_FfiArgType
 
 @CalledFromNative
@@ -1628,6 +1661,31 @@ public object NativeNice {
           asyncCtxHandle.nativeHandle(),
           ffi_chat,
           ffi_key_id,
+        )
+      }
+    return ffiOut
+      .makeCancelable(asyncCtx)
+  }
+
+  public fun AuthenticatedChatConnection_report_message(
+    asyncCtx: TokioAsyncContext,
+    chat: org.signal.libsignal.net.AuthenticatedChatConnection,
+    source: org.signal.libsignal.protocol.ServiceId.Aci,
+    messageGuid: java.util.UUID,
+    reportSpamToken: ByteArray,
+  ): CompletableFuture<Void?> {
+    val ffi_chat = identity(chat)
+    val ffi_source = (org.signal.libsignal.protocol.ServiceId.Aci::toServiceIdFixedWidthBinary)(source)
+    val ffi_message_guid = identity(messageGuid)
+    val ffi_report_spam_token = identity(reportSpamToken)
+    val ffiOut =
+      NativeHandleGuard(asyncCtx).use { asyncCtxHandle ->
+        Native.AuthenticatedChatConnection_report_message(
+          asyncCtxHandle.nativeHandle(),
+          ffi_chat,
+          ffi_source,
+          ffi_message_guid,
+          ffi_report_spam_token,
         )
       }
     return ffiOut
@@ -2450,6 +2508,7 @@ public object NativeNice {
     receiptCredentialRequestContext: org.signal.libsignal.zkgroup.receipts.ReceiptCredentialRequestContext,
     serverParams: org.signal.libsignal.zkgroup.ServerPublicParams,
     purchaseTime: java.time.Instant,
+    expectedLevel: org.signal.libsignal.net.LoginReceiptLevel,
   ): CompletableFuture<org.signal.libsignal.zkgroup.receipts.ReceiptCredential> {
     val ffi_chat = identity(chat)
     val ffi_payment_processor = (org.signal.libsignal.net.PaymentProvider::toFfiArgTypeObject)(paymentProcessor)
@@ -2460,6 +2519,7 @@ public object NativeNice {
       )
     val ffi_server_params = identity(serverParams)
     val ffi_purchase_time = (java.time.Instant::toEpochMilli)(purchaseTime)
+    val ffi_expected_level = (org.signal.libsignal.net.LoginReceiptLevel::toFfiArgTypeObject)(expectedLevel)
     val ffiOut =
       NativeHandleGuard(asyncCtx).use { asyncCtxHandle ->
         Native.UnauthenticatedChatConnection_create_login_receipt_credential(
@@ -2470,6 +2530,70 @@ public object NativeNice {
           ffi_receipt_credential_request_context,
           ffi_server_params,
           ffi_purchase_time,
+          ffi_expected_level,
+        )
+      }
+    return ffiOut
+      .makeCancelable(asyncCtx)
+      .thenApply {
+        (
+          { x: ByteArray ->
+            org.signal.libsignal.zkgroup.receipts
+              .ReceiptCredential(x)
+          }
+        )(it)
+      }
+  }
+
+  public fun UnauthenticatedChatConnection_get_profile_key_credential(
+    asyncCtx: TokioAsyncContext,
+    chat: org.signal.libsignal.net.UnauthenticatedChatConnection,
+    profileKeyRequestContext: org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialRequestContext,
+    serverParams: org.signal.libsignal.zkgroup.ServerPublicParams,
+  ): CompletableFuture<org.signal.libsignal.zkgroup.profiles.ExpiringProfileKeyCredential> {
+    val ffi_chat = identity(chat)
+    val ffi_profile_key_request_context =
+      (org.signal.libsignal.zkgroup.internal.ByteArray::getInternalContentsForJNI)(profileKeyRequestContext)
+    val ffi_server_params = identity(serverParams)
+    val ffiOut =
+      NativeHandleGuard(asyncCtx).use { asyncCtxHandle ->
+        Native.UnauthenticatedChatConnection_get_profile_key_credential(
+          asyncCtxHandle.nativeHandle(),
+          ffi_chat,
+          ffi_profile_key_request_context,
+          ffi_server_params,
+        )
+      }
+    return ffiOut
+      .makeCancelable(asyncCtx)
+      .thenApply {
+        org.signal.libsignal.zkgroup.profiles
+          .ExpiringProfileKeyCredential(it)
+      }
+  }
+
+  public fun UnauthenticatedChatConnection_get_subscription_receipt_credential(
+    asyncCtx: TokioAsyncContext,
+    chat: org.signal.libsignal.net.UnauthenticatedChatConnection,
+    subscriberId: ByteArray,
+    receiptCredentialRequestContext: org.signal.libsignal.zkgroup.receipts.ReceiptCredentialRequestContext,
+    serverParams: org.signal.libsignal.zkgroup.ServerPublicParams,
+  ): CompletableFuture<org.signal.libsignal.zkgroup.receipts.ReceiptCredential> {
+    val ffi_chat = identity(chat)
+    val ffi_subscriber_id = identity(subscriberId)
+    val ffi_receipt_credential_request_context =
+      (org.signal.libsignal.zkgroup.receipts.ReceiptCredentialRequestContext::getInternalContentsForJNI)(
+        receiptCredentialRequestContext,
+      )
+    val ffi_server_params = identity(serverParams)
+    val ffiOut =
+      NativeHandleGuard(asyncCtx).use { asyncCtxHandle ->
+        Native.UnauthenticatedChatConnection_get_subscription_receipt_credential(
+          asyncCtxHandle.nativeHandle(),
+          ffi_chat,
+          ffi_subscriber_id,
+          ffi_receipt_credential_request_context,
+          ffi_server_params,
         )
       }
     return ffiOut

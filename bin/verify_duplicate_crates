@@ -15,7 +15,6 @@
 # cpufeatures: tungstenite's sha1 is unlikely to be updated
 # crypto-common: tungstenite's sha1 is unlikely to be updated, also waiting on argon2/blake2
 # getrandom, rand_core, rand: unfortunately ecosystem updates are slow
-# jni, jni-sys: used directly by us but also by rustls-platform-verifier on Android (update available)
 # sha1: tungstenite's sha1 is unlikely to be updated
 # thiserror: minimal and highly inlinable, most of the code is synthesized at the use site
 EXPECTED="
@@ -30,10 +29,6 @@ digest v0.11.3
 getrandom v0.2.17
 getrandom v0.3.4
 getrandom v0.4.3
-jni v0.21.1
-jni v0.22.4
-jni-sys v0.3.1
-jni-sys v0.4.1
 rand v0.9.4
 rand v0.10.2
 rand_core v0.6.4

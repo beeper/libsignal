@@ -176,6 +176,11 @@ export type ChatConnection = {
 export interface ConnectionInfo {
   localPort: number;
   ipVersion: 'IPv4' | 'IPv6';
+  /**
+   * Whether the connection was made directly to the Signal service, rather than through a
+   * reflector or a user-configured proxy.
+   */
+  isDirect: boolean;
   toString: () => string;
 }
 
@@ -198,6 +203,10 @@ class ConnectionInfoImpl
       default:
         throw new TypeError(`ip type was unexpectedly ${value}`);
     }
+  }
+
+  public get isDirect(): boolean {
+    return Native.ChatConnectionInfo_is_direct(this);
   }
 
   public toString(): string {

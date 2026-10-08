@@ -11,11 +11,12 @@ use libsignal_core::{Aci, ServiceId};
 use super::{AllowRateLimitChallenges, RequestError, UserBasedAuthorization};
 
 #[derive(Debug, displaydoc::Display)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum ProfileKeyCredentialRequestError {
     /// authorization failed
     AuthFailed,
-    /// profile version not found
-    VersionNotFound,
+    /// profile not found
+    ProfileNotFound,
 }
 
 #[async_trait]
