@@ -159,12 +159,16 @@ jobs:
         rustup target add ${{ matrix.target }}
         cargo build --locked --target ${{ matrix.target }} -p libsignal-ffi --profile=release
         mv target/${{ matrix.target }}/release/libsignal_ffi.a libsignal_ffi_${{ matrix.target }}.a
+        cargo build --locked --target ${{ matrix.target }} -p libsignal-ffi --profile=release --features vesta
+        mv target/${{ matrix.target }}/release/libsignal_ffi.a libsignal_vesta_ffi_${{ matrix.target }}.a
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v7
       with:
         name: libsignal_ffi_${{ matrix.target }}
-        path: libsignal_ffi_${{ matrix.target }}.a
+        path: |
+          libsignal_ffi_${{ matrix.target }}.a
+          libsignal_vesta_ffi_${{ matrix.target }}.a
 
   release:
     runs-on: ubuntu-latest
@@ -176,9 +180,11 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v8
     - name: Move artifacts to top level
-      run: mv libsignal_ffi_*/libsignal_ffi_*.a .
+      run: mv libsignal_ffi_*/*.a .
     - name: Create release
       uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
       with:
         body_path: RELEASE_NOTES.md
-        files: libsignal_ffi_*.a
+        files: |
+          libsignal_ffi_*.a
+          libsignal_vesta_ffi_*.a

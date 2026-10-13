@@ -26,11 +26,13 @@ signal-media = ["libsignal-ffi-impl/signal-media"]
 ffi = []
 default = ["ffi"]
 metadata = ["libsignal-ffi-impl/metadata"]
+vesta = ["dep:vesta-opaque"]
 
 libsignal-bridge-testing = ["libsignal-ffi-impl/libsignal-bridge-testing"]
 
 [dependencies]
 libsignal-ffi-impl = { path = "./impl", features = ["ffi"] }
+vesta-opaque = { git = "https://github.com/mautrix/meta", rev = "1dcbfaa3cd6a08323fd44fbf659905ae4479e236", optional = true }
 log = { workspace = true } # Needed for feature selection
 
 [target.aarch64-apple-ios.dependencies]
